@@ -1,0 +1,19 @@
+{
+  "name": "twilio-voice-agent",
+  "version": "1.0.0",
+  "description": "A Twilio ConversationRelay-based voice agent: phone calls in/out, low-latency LLM, optional assistant relay tool.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@fastify/formbody": "^8.0.2",
+    "@fastify/websocket": "^11.2.0",
+    "dotenv": "^17.2.3",
+    "fastify": "^5.7.2",
+    "openai": "^4.80.0",
+    "twilio": "^5.12.0"
+  }
+}
