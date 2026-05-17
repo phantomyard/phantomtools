@@ -15,17 +15,55 @@ const SERVER_DOMAIN = process.env.SERVER_DOMAIN || "localhost";
 const WS_URL = `wss://${SERVER_DOMAIN}/ws`;
 const TWIML_URL = `https://${SERVER_DOMAIN}/twiml`;
 
-// OpenRouter — OpenAI-compatible API for low-latency voice LLM
-const openai = new OpenAI({
+// ─── Conversation LLM providers ─────────────────────────────────────
+// Two OpenAI-compatible upstreams. The primary runs Claude Haiku 4.5 on
+// Anthropic's direct API (lowest latency — no OpenRouter routing hop);
+// the fallback runs Gemini 3 Flash via OpenRouter. A model spec prefixed
+// "anthropic-direct:" routes to Anthropic's API; everything else routes
+// through OpenRouter.
+const openrouter = new OpenAI({
   apiKey: process.env.OPENROUTER_API_KEY,
   baseURL: "https://openrouter.ai/api/v1",
 });
-const MODEL = process.env.VOICE_AGENT_MODEL || "inception/mercury-2";
-// When the primary upstream returns a 5xx / provider_unavailable, retry once
-// with this model before giving up and showing the canned hiccup message.
+const anthropicDirect = process.env.VOICE_AGENT_ANTHROPIC_API_KEY
+  ? new OpenAI({
+      apiKey: process.env.VOICE_AGENT_ANTHROPIC_API_KEY,
+      baseURL: "https://api.anthropic.com/v1/",
+    })
+  : null;
+
+const ANTHROPIC_PREFIX = "anthropic-direct:";
+// Resolve a model spec to a concrete { client, model, label }. If an
+// anthropic-direct spec is requested but the key is missing, degrade
+// gracefully to the same model over OpenRouter rather than crash.
+function resolveModel(spec) {
+  if (spec.startsWith(ANTHROPIC_PREFIX)) {
+    const model = spec.slice(ANTHROPIC_PREFIX.length);
+    if (!anthropicDirect) {
+      fastify.log.warn(
+        { spec },
+        "anthropic-direct requested but VOICE_AGENT_ANTHROPIC_API_KEY unset — routing via OpenRouter",
+      );
+      return { client: openrouter, model: `anthropic/${model}`, label: `OpenRouter anthropic/${model}` };
+    }
+    return { client: anthropicDirect, model, label: `Anthropic-direct ${model}` };
+  }
+  return { client: openrouter, model: spec, label: `OpenRouter ${spec}` };
+}
+
+// Primary: Claude Haiku 4.5 direct. Fallback: Gemini 3 Flash via OpenRouter.
+// When the primary upstream returns a 5xx / provider_unavailable, the
+// handler retries once with the fallback before the canned hiccup line.
 // Set VOICE_AGENT_FALLBACK_MODEL="" to disable the fallback entirely.
-const FALLBACK_MODEL =
-  process.env.VOICE_AGENT_FALLBACK_MODEL ?? "anthropic/claude-haiku-4.5";
+const PRIMARY = resolveModel(
+  process.env.VOICE_AGENT_MODEL || "anthropic-direct:claude-haiku-4-5",
+);
+const FALLBACK_SPEC =
+  process.env.VOICE_AGENT_FALLBACK_MODEL ?? "google/gemini-3-flash-preview";
+const FALLBACK = FALLBACK_SPEC ? resolveModel(FALLBACK_SPEC) : null;
+const FALLBACK_DISTINCT =
+  !!FALLBACK &&
+  !(FALLBACK.client === PRIMARY.client && FALLBACK.model === PRIMARY.model);
 
 // Security: Bearer token for /initiate-call endpoint
 const VOICE_AGENT_API_TOKEN = process.env.VOICE_AGENT_API_TOKEN || "";
@@ -613,8 +651,8 @@ async function handleConversation(userText, session, ws) {
       let toolCalls = [];  // Accumulate tool calls from streaming
 
       try {
-        const stream = await openai.chat.completions.create({
-          model: MODEL,
+        const stream = await PRIMARY.client.chat.completions.create({
+          model: PRIMARY.model,
           max_tokens: 512,
           messages: currentMessages,
           tools: TOOLS,
@@ -688,11 +726,34 @@ async function handleConversation(userText, session, ws) {
         }
 
         if (tc.function.name === "ask_assistant") {
-          if (ws.readyState === 1 && !fillerSent) {
-            const filler = getRandomFiller(callLang);
+          // Keep-alive narration. phantombot can block 15-40s while it
+          // runs its own tools and emits nothing until it finishes, so a
+          // single filler leaves the caller in dead air. Send one filler
+          // now, then a fresh non-repeating filler every 7s until the
+          // first real token (streaming path) or the result (blocking).
+          let askFirstToken = false;
+          let lastAskFiller = "";
+          const sendAskFiller = (tag) => {
+            if (ws.readyState !== 1) return;
+            let filler = getRandomFiller(callLang);
+            for (let i = 0; i < 5 && filler === lastAskFiller; i++) {
+              filler = getRandomFiller(callLang);
+            }
+            lastAskFiller = filler;
             ws.send(JSON.stringify({ type: "text", token: filler, last: true }));
-            fastify.log.info({ filler }, "Sent filler for ask_assistant");
-          }
+            fastify.log.info({ filler, tag }, "Sent filler for ask_assistant");
+          };
+          if (!fillerSent) sendAskFiller("initial");
+          let askFillerCount = 0;
+          const askKeepAlive = setInterval(() => {
+            // Self-terminate past the phantombot ask timeout so a leaked
+            // interval can never outlive the tool call.
+            if (askFirstToken || ws.readyState !== 1 || ++askFillerCount > 10) {
+              clearInterval(askKeepAlive);
+              return;
+            }
+            sendAskFiller("keepalive");
+          }, 7000);
 
           // Streaming path: forward phantombot stdout → ConversationRelay
           // tokens. We buffer until ~12 chars or sentence-ending
@@ -716,6 +777,11 @@ async function handleConversation(userText, session, ws) {
               pending = "";
             };
             const onChunk = (text) => {
+              // First real token from phantombot — stop the filler loop.
+              if (!askFirstToken) {
+                askFirstToken = true;
+                clearInterval(askKeepAlive);
+              }
               pending += text;
               // Flush if we hit a sentence boundary or a comfortable
               // chunk size. Sentence boundary is preferred — Twilio's
@@ -758,6 +824,10 @@ async function handleConversation(userText, session, ws) {
             });
             fastify.log.info({ query: args.message, result: ((result.result || result.error || "").slice(0, 200)) }, "ask_assistant completed");
           }
+          // Definitive cleanup — covers the streaming path that returned
+          // zero chunks (onChunk never fired) and the blocking path.
+          askFirstToken = true;
+          clearInterval(askKeepAlive);
         } else if (tc.function.name === "end_call") {
           endCallRequested = true;
           toolResultMsgs.push({
@@ -827,14 +897,14 @@ async function handleConversation(userText, session, ws) {
     const isUpstream =
       err?.error?.metadata?.error_type === "provider_unavailable" ||
       (typeof status === "number" && status >= 500);
-    if (isUpstream && FALLBACK_MODEL && FALLBACK_MODEL !== MODEL && ws.readyState === 1) {
+    if (isUpstream && FALLBACK_DISTINCT && ws.readyState === 1) {
       fastify.log.warn(
-        { primary: MODEL, fallback: FALLBACK_MODEL, status, errMsg: err?.message },
+        { primary: PRIMARY.label, fallback: FALLBACK.label, status, errMsg: err?.message },
         "Primary LLM upstream failed — retrying with fallback model"
       );
       try {
-        const fbStream = await openai.chat.completions.create({
-          model: FALLBACK_MODEL,
+        const fbStream = await FALLBACK.client.chat.completions.create({
+          model: FALLBACK.model,
           max_tokens: 512,
           messages,
           stream: true,
@@ -855,14 +925,14 @@ async function handleConversation(userText, session, ws) {
           session.openaiMessages.push({ role: "user", content: userText });
           session.openaiMessages.push({ role: "assistant", content: fbText });
           fastify.log.info(
-            { fallback: FALLBACK_MODEL, chars: fbText.length },
+            { fallback: FALLBACK.label, chars: fbText.length },
             "Fallback LLM succeeded"
           );
           return fbText.replace(/\bNO_REPLY\b/g, "").replace(/\bNO_\b/g, "").trim();
         }
       } catch (fbErr) {
         fastify.log.error(
-          { err: fbErr, fallback: FALLBACK_MODEL },
+          { err: fbErr, fallback: FALLBACK.label },
           "Fallback LLM also failed"
         );
       }
@@ -990,7 +1060,7 @@ await fastify.register(fastifyWs);
 fastify.get("/health", async () => ({
   status: "ok",
   activeCalls: sessions.size,
-  voiceLLMEnabled: !!process.env.OPENROUTER_API_KEY,
+  voiceLLMEnabled: !!(process.env.OPENROUTER_API_KEY || process.env.VOICE_AGENT_ANTHROPIC_API_KEY),
   phantombotBin: PHANTOMBOT_BIN,
   phantombotStreamBin: PHANTOMBOT_STREAM_BIN,
   streamingAskEnabled: VOICE_AGENT_STREAM_ASK,
@@ -1370,7 +1440,7 @@ try {
   fastify.log.info(`TwiML endpoint: https://${SERVER_DOMAIN}/twiml`);
   fastify.log.info(`WebSocket endpoint: wss://${SERVER_DOMAIN}/ws`);
   fastify.log.info(`Outbound call endpoint: https://${SERVER_DOMAIN}/initiate-call`);
-  fastify.log.info(`AI backend: OpenRouter ${MODEL}` + (FALLBACK_MODEL && FALLBACK_MODEL !== MODEL ? ` (fallback: ${FALLBACK_MODEL})` : ""));
+  fastify.log.info(`AI backend: ${PRIMARY.label}` + (FALLBACK_DISTINCT ? ` (fallback: ${FALLBACK.label})` : ""));
   fastify.log.info(`Phantombot CLI: ${PHANTOMBOT_BIN}`);
   fastify.log.info(`Phantombot stream CLI: ${PHANTOMBOT_STREAM_BIN}`);
   fastify.log.info(`Streaming ask_assistant: ${VOICE_AGENT_STREAM_ASK ? "enabled (VOICE_AGENT_STREAM_ASK=1)" : "disabled"}`);
