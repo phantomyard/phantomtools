@@ -753,7 +753,7 @@ async function handleConversation(userText, session, ws) {
               return;
             }
             sendAskFiller("keepalive");
-          }, 7000);
+          }, 9000);
 
           // Streaming path: forward phantombot stdout → ConversationRelay
           // tokens. We buffer until ~12 chars or sentence-ending
