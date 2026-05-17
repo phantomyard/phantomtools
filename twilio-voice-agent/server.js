@@ -555,8 +555,19 @@ async function handleConversation(userText, session, ws) {
   }
 
   const now = new Date().toLocaleString("en-GB", { timeZone: MEMORY_TIMEZONE });
-  const direction = session.isOutbound ? "Outbound to" : "Inbound from";
-  const callerInfo = `\n\nCall info — ${direction}: ${session.isOutbound ? session.to : session.from}. Time: ${now} (Europe/Amsterdam).`;
+  let callerInfo;
+  if (session.isOutbound) {
+    callerInfo = `\n\nCall info — Outbound to: ${session.to}. Time: ${now} (Europe/Amsterdam).`;
+  } else {
+    // Inbound calls have already passed the ALLOWED_CALLERS whitelist, so the
+    // caller is a trusted party. We deliberately do NOT put the caller's raw
+    // phone number into the prompt: the call is already gated by the
+    // allowlist, and exposing the number caused the model to forward it into
+    // ask_assistant queries — where the back-end agent rejected it as an
+    // unrecognised identity. The model only needs to know it's a trusted call.
+    callerInfo = `\n\nCall info — Inbound call. Time: ${now} (Europe/Amsterdam).`;
+    callerInfo += ` This inbound call came from a number on ${PRINCIPAL_NAME}'s trusted caller-ID allowlist — treat the caller as ${PRINCIPAL_NAME} (identity verified by the whitelist) unless they explicitly say otherwise.`;
+  }
 
   // Load dynamic context from context.json
   const dynamicContext = await loadContext();
