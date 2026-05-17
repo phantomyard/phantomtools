@@ -1,7 +1,9 @@
 node_modules/
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+*.bak
+*.bak*
 *.log
 .DS_Store
 .vscode/
