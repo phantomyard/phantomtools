@@ -199,13 +199,35 @@ function getLocaleForLanguage(language) {
   return LANGUAGE_LOCALE_MAP[language] || LANGUAGE_LOCALE_MAP.en;
 }
 
-// Build <Language> elements for multi-language support
+// Deepgram speech model per language. English stays on `flux` — it's
+// the lowest-latency model but English-only — so English calls keep the
+// exact snappy behaviour Andrew likes. Every other language uses
+// `nova-3-general`, which is multilingual (flux can't do es/nl/fr), so
+// those are a touch less snappy but actually work instead of garbling
+// into English. Switching back to English via switch_language returns
+// the call to flux because the en-GB <Language> element below is flux too.
+const SPEECH_MODEL_MAP = {
+  en: "flux",
+  nl: "nova-3-general",
+  es: "nova-3-general",
+  fr: "nova-3-general",
+  de: "nova-3-general",
+};
+
+function getSpeechModelForLanguage(language) {
+  return SPEECH_MODEL_MAP[language] || "nova-3-general";
+}
+
+// Build <Language> elements for multi-language support. Each declared
+// language becomes switchable mid-call via the ConversationRelay
+// `language` message (see the switch_language tool handler).
 function buildLanguageElements() {
   return Object.entries(VOICE_MAP)
     .filter(([key]) => key !== "default")
     .map(([lang, voice]) => {
       const locale = getLocaleForLanguage(lang);
-      return `      <Language code="${locale}" ttsProvider="ElevenLabs" voice="${voice}" transcriptionProvider="Deepgram" speechModel="nova-3-general"/>`;
+      const speechModel = getSpeechModelForLanguage(lang);
+      return `      <Language code="${locale}" ttsProvider="ElevenLabs" voice="${voice}" transcriptionProvider="Deepgram" speechModel="${speechModel}"/>`;
     })
     .join("\n");
 }
@@ -241,7 +263,12 @@ TOOLS:
 - Use ask_assistant when you CAN'T answer from injected context alone (older history, web search, home automation, sending messages, calendar lookups, anything requiring real tools).
 - When using ask_assistant, narrate naturally: "Let me check that for you..."
 - For genuinely complex tasks, say: "That's a bigger one — let me look into it and text you what I find."
-- Use end_call when the caller says goodbye or asks to hang up.`;
+- Use end_call when the caller says goodbye or asks to hang up.
+
+LANGUAGE:
+- The call starts in English. If the caller asks to speak in Spanish or Dutch, or simply starts speaking it, call switch_language with the matching code ("es" for Spanish, "nl" for Dutch), then reply naturally in that language.
+- Switch back to "en" the moment the caller returns to English.
+- Don't announce the switch mechanically — just call the tool and keep the conversation flowing in the new language.`;
 
 const VOICE_SYSTEM_PROMPT = (process.env.VOICE_SYSTEM_PROMPT || DEFAULT_VOICE_SYSTEM_PROMPT)
   .replaceAll("${ASSISTANT_NAME}", ASSISTANT_NAME)
@@ -280,6 +307,24 @@ const TOOLS = [
           }
         },
         required: ["reason"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "switch_language",
+      description: "Switch the spoken and transcribed language of the live call. Call this as soon as the caller asks to speak another language, or starts speaking one. After switching, reply to the caller in the new language. English ('en') is the default — switch back to it when the caller returns to English.",
+      parameters: {
+        type: "object",
+        properties: {
+          language: {
+            type: "string",
+            enum: ["en", "es", "nl"],
+            description: "Target language code: 'en' English, 'es' Spanish, 'nl' Dutch."
+          }
+        },
+        required: ["language"]
       }
     }
   }
@@ -580,8 +625,10 @@ async function askAssistant(message) {
 // ─── Anthropic Conversation Handler ─────────────────────────────────
 
 async function handleConversation(userText, session, ws) {
-  // Determine call language for fillers and fallbacks
-  const callLang = session.outboundContext?.language || "en";
+  // Determine call language for fillers and fallbacks. activeLanguage is
+  // updated by the switch_language tool, so mid-call switches carry over
+  // to fillers/fallbacks on subsequent turns.
+  const callLang = session.activeLanguage || session.outboundContext?.language || "en";
 
   // Build context instruction
   let contextInstruction = "";
@@ -836,6 +883,40 @@ async function handleConversation(userText, session, ws) {
             content: "Call ending.",
           });
           fastify.log.info({ reason: args.reason }, "end_call requested");
+        } else if (tc.function.name === "switch_language") {
+          // Flip the live call's TTS + transcription language via the
+          // ConversationRelay `language` control message. The target
+          // locale must be declared as a <Language> element in the TwiML
+          // (buildLanguageElements) — en/es/nl/fr are.
+          const langNames = { en: "English", es: "Spanish", nl: "Dutch" };
+          const target = langNames[args.language] ? args.language : null;
+          if (!target) {
+            toolResultMsgs.push({
+              role: "tool",
+              tool_call_id: tc.id,
+              content: `Unsupported language "${args.language}". Supported: English (en), Spanish (es), Dutch (nl). Staying in the current language.`,
+            });
+            fastify.log.warn({ requested: args.language }, "switch_language: unsupported language");
+          } else {
+            const locale = getLocaleForLanguage(target);
+            if (ws.readyState === 1) {
+              ws.send(JSON.stringify({
+                type: "language",
+                ttsLanguage: locale,
+                transcriptionLanguage: locale,
+              }));
+            }
+            session.activeLanguage = target;
+            toolResultMsgs.push({
+              role: "tool",
+              tool_call_id: tc.id,
+              content: `Language switched to ${langNames[target]} (${locale}). Now reply to the caller in ${langNames[target]}.`,
+            });
+            fastify.log.info(
+              { language: target, locale, callSid: session.callSid },
+              "switch_language: switched call language",
+            );
+          }
         }
       }
 
@@ -1327,6 +1408,10 @@ fastify.register(async function (app) {
             isOutbound,
             outboundContext: pendingCall || null,
             callbackSession: pendingCall?.callbackSession || "main",
+            // Active call language — flipped by the switch_language tool.
+            // Outbound calls may start in a non-English language; inbound
+            // always starts in English (matching the TwiML default).
+            activeLanguage: pendingCall?.language || "en",
           });
 
           if (pendingCall) {
