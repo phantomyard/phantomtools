@@ -15,10 +15,16 @@ and easy to reason about.
   `context` / `greeting` / `language`. The agent calls the recipient
   and conducts the conversation on your behalf.
 
-LLM is whatever you point it at via OpenRouter. The default is
-`inception/mercury-2` — picked for low first-token latency on phone
-calls — with `anthropic/claude-haiku-4.5` as fallback when the primary
-returns a 5xx.
+The conversation LLM runs over two OpenAI-compatible upstreams. By
+default the primary is **Claude Haiku 4.5 on Anthropic's direct API**
+(`anthropic-direct:claude-haiku-4-5`) — picked for low first-token
+latency on phone calls — with **Gemini 3 Flash via OpenRouter**
+(`google/gemini-3-flash-preview`) as the fallback when the primary
+returns a 5xx. Any model spec prefixed `anthropic-direct:` routes to
+Anthropic's API; everything else is routed through OpenRouter. Override
+either via `VOICE_AGENT_MODEL` / `VOICE_AGENT_FALLBACK_MODEL`. If the
+Anthropic key is missing, the primary silently degrades to the same
+model over OpenRouter.
 
 ## Tools the LLM can call
 
@@ -53,7 +59,7 @@ back-end runs.
                                                   ▼
                                   ┌─────────────────────────────┐
                                   │   server.js (Fastify)       │
-                                  │   - LLM:  OpenRouter        │
+                                  │   - LLM:  Anthropic+OR      │
                                   │   - Tool: ask_assistant ─┐  │
                                   │   - Tool: end_call       │  │
                                   └──────────────────────────┼──┘
@@ -74,7 +80,7 @@ git clone https://github.com/phantomyard/phantomtools.git
 cd phantomtools/twilio-voice-agent
 npm install
 cp .env.example .env
-$EDITOR .env             # fill in TWILIO_*, OPENROUTER_API_KEY, ALLOWED_CALLERS, etc.
+$EDITOR .env             # fill in TWILIO_*, VOICE_AGENT_ANTHROPIC_API_KEY, OPENROUTER_API_KEY, ALLOWED_CALLERS, etc.
 node server.js
 ```
 
@@ -109,7 +115,9 @@ See [`.env.example`](./.env.example) for the complete list with
 descriptions. Required:
 
 - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`
-- `OPENROUTER_API_KEY`
+- `VOICE_AGENT_ANTHROPIC_API_KEY` (default primary) and/or
+  `OPENROUTER_API_KEY` (fallback + degraded-primary path) — supply at
+  least one; both recommended so the fallback works
 - `SERVER_DOMAIN` (matches your TLS cert + Twilio webhook hosts)
 - `VOICE_AGENT_API_TOKEN` (bearer for `/initiate-call` — never deploy
   without it; the endpoint will be open if unset)
