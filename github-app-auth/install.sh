@@ -26,21 +26,40 @@ if ! command -v openssl &>/dev/null; then die "openssl is required"; fi
 if ! command -v python3 &>/dev/null; then die "python3 is required"; fi
 if ! command -v curl &>/dev/null; then die "curl is required"; fi
 
-if [[ ! -f "$HOME/.env" ]]; then
-    die "~/.env not found. Please create it with GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH."
-fi
+# Credentials are validated separately — install proceeds without them so
+# binaries + timer can be put in place before ~/.env is filled in.
+CREDS_OK=1
+CREDS_REASON=""
 
-# shellcheck source=/dev/null
-set -a; source "$HOME/.env"; set +a
+check_credentials() {
+    if [[ ! -f "$HOME/.env" ]]; then
+        CREDS_OK=0
+        CREDS_REASON="~/.env not found"
+        return
+    fi
+    # shellcheck source=/dev/null
+    set -a; source "$HOME/.env"; set +a
+    if [[ -z "${GITHUB_APP_ID:-}" ]]; then
+        CREDS_OK=0
+        CREDS_REASON="GITHUB_APP_ID not set in ~/.env"
+        return
+    fi
+    if [[ -z "${GITHUB_APP_PRIVATE_KEY_PATH:-}" ]]; then
+        CREDS_OK=0
+        CREDS_REASON="GITHUB_APP_PRIVATE_KEY_PATH not set in ~/.env"
+        return
+    fi
+    if [[ ! -f "$GITHUB_APP_PRIVATE_KEY_PATH" ]]; then
+        CREDS_OK=0
+        CREDS_REASON="Private key not found at $GITHUB_APP_PRIVATE_KEY_PATH"
+        return
+    fi
+}
 
-if [[ -z "${GITHUB_APP_ID:-}" ]]; then
-    die "GITHUB_APP_ID not set in ~/.env"
-fi
-if [[ -z "${GITHUB_APP_PRIVATE_KEY_PATH:-}" ]]; then
-    die "GITHUB_APP_PRIVATE_KEY_PATH not set in ~/.env"
-fi
-if [[ ! -f "$GITHUB_APP_PRIVATE_KEY_PATH" ]]; then
-    die "Private key not found at $GITHUB_APP_PRIVATE_KEY_PATH"
+check_credentials
+if [[ $CREDS_OK -eq 0 ]]; then
+    warn "Credentials incomplete: $CREDS_REASON"
+    warn "Continuing with binary + timer install; token test will be skipped."
 fi
 
 # --- Symlink binaries ---
@@ -84,9 +103,14 @@ cp "$SYSTEMD_DIR/github-app-auth-refresh.service" "$USER_SYSTEMD/"
 
 systemctl --user daemon-reload
 systemctl --user enable github-app-auth-refresh.timer
-systemctl --user start github-app-auth-refresh.timer
 
-info "  Timer installed: github-app-auth-refresh.timer"
+if [[ $CREDS_OK -eq 1 ]]; then
+    systemctl --user start github-app-auth-refresh.timer
+    info "  Timer installed and started: github-app-auth-refresh.timer"
+else
+    info "  Timer installed and enabled (not started — fill ~/.env first, then:"
+    info "    systemctl --user start github-app-auth-refresh.timer)"
+fi
 
 # --- Configure git ---
 info "Configuring git..."
@@ -94,11 +118,15 @@ git config --global credential.helper "!$LOCAL_BIN/git-credential-github-app"
 info "  git credential.helper set"
 
 # --- Test token generation ---
-info "Testing token generation..."
-if ! "$LOCAL_BIN/refresh-github-env.sh" >/dev/null 2>&1; then
-    die "Token generation failed. Check your App ID, private key, and network."
+if [[ $CREDS_OK -eq 1 ]]; then
+    info "Testing token generation..."
+    if ! "$LOCAL_BIN/refresh-github-env.sh" >/dev/null 2>&1; then
+        die "Token generation failed. Check your App ID, private key, and network."
+    fi
+    info "  Token generation OK"
+else
+    info "Skipping token generation test (credentials incomplete)."
 fi
-info "  Token generation OK"
 
 # --- Summary ---
 echo ""
@@ -108,9 +136,20 @@ echo "Binaries:      $LOCAL_BIN/"
 echo "Systemd timer: github-app-auth-refresh.timer (every 50 min)"
 echo "Token file:    ~/.github_env"
 echo ""
-echo "Next steps:"
-echo "  - Ensure your GitHub App is installed on the repos you need"
-echo "  - Run 'git push', 'git pull', 'git fetch' — the wrapper handles GitHub repos automatically"
+if [[ $CREDS_OK -eq 1 ]]; then
+    echo "Next steps:"
+    echo "  - Ensure your GitHub App is installed on the repos you need"
+    echo "  - Run 'git push', 'git pull', 'git fetch' — the wrapper handles GitHub repos automatically"
+else
+    echo -e "${YELLOW}Next steps (credentials still needed):${NC}"
+    echo "  1. Add to ~/.env:"
+    echo "       GITHUB_APP_ID=<your-app-id>"
+    echo "       GITHUB_APP_PRIVATE_KEY_PATH=<path-to-private-key.pem>"
+    echo "  2. Verify token generation:"
+    echo "       $LOCAL_BIN/refresh-github-env.sh"
+    echo "  3. Start the refresh timer:"
+    echo "       systemctl --user start github-app-auth-refresh.timer"
+fi
 echo ""
 echo "To uninstall:"
 echo "  $SCRIPT_DIR/uninstall.sh"
