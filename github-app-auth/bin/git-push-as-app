@@ -170,24 +170,41 @@ def main():
     commits = []
     parent_for_first = ""
     needs_force = False
+    # When True, each uploaded commit gets the ORIGINAL commit's parents
+    # (translated through sha_map), so merge commits keep both parents.
+    # When False, commits are chained linearly via current_parent — that
+    # squashes structure and is only correct for the single-commit paths
+    # below (force / new branch / divergent rebuild).
+    preserve_parents = False
 
     if force:
         # User asked for force-push: rebuild local HEAD with no parent.
+        # NOTE: this squashes ALL history above local_sha into a single
+        # rootless commit. Preserving full history under --force would be
+        # a useful follow-up but is out of scope here.
         commits = [local_sha]
         parent_for_first = ""
         needs_force = True
     elif is_ancestor:
         # Normal fast-forward: upload only the new commits.
-        rev_list = run([GIT, "rev-list", "--reverse", f"{remote_sha}..{local_sha}"]).stdout.strip()
+        # --topo-order guarantees parents-before-children, which is what
+        # sha_map below relies on. Plain --reverse is date-reverse and
+        # can violate topology when commit dates lie.
+        rev_list = run([GIT, "rev-list", "--topo-order", "--reverse",
+                        f"{remote_sha}..{local_sha}"]).stdout.strip()
         if rev_list:
             commits = rev_list.split("\n")
         parent_for_first = remote_sha
+        preserve_parents = True
     elif branch_exists_remote and not remote_known_locally:
         # Remote ref points to a commit we don't have locally — typically
         # because a previous App-push recreated the SHAs via the API. We
         # can't compute a delta against an unknown object, so push local
         # HEAD as a child of the existing remote tip. The ref update is
         # still a fast-forward (parent → child), no force needed.
+        # NOTE: any history between the branch-off point and local_sha
+        # gets squashed into this one commit. Recovering it would need
+        # tree/message matching against the remote via API.
         commits = [local_sha]
         parent_for_first = remote_sha
     elif branch_exists_remote:
@@ -198,6 +215,8 @@ def main():
         needs_force = True
     else:
         # New branch on the remote.
+        # NOTE: only the tip is uploaded — earlier ancestors are lost
+        # unless they happen to exist on the remote under matching SHAs.
         commits = [local_sha]
         parent_for_first = ""
 
@@ -234,6 +253,17 @@ def main():
         tree_data = api_request("POST", f"{api_base}/git/trees", token, {"tree": entries})
         return tree_data["sha"]
 
+    # sha_map: local-original SHA → uploaded-API SHA.
+    # Seeded with remote_sha → remote_sha so that the oldest commit(s) in
+    # the rev-list — whose parent on the local side IS remote_sha — get
+    # the correct parent on the remote side. Merge commits whose second
+    # parent points OUTSIDE the rev-list (i.e. an ancestor of remote_sha)
+    # fall through to using the original SHA, which exists on the remote
+    # unless prior App-pushes have rewritten that part of the history.
+    sha_map = {}
+    if remote_sha:
+        sha_map[remote_sha] = remote_sha
+
     current_parent = parent_for_first
     for commit_sha in commits:
         tree_sha = run([GIT, "rev-parse", f"{commit_sha}^{{tree}}"]).stdout.strip()
@@ -248,17 +278,26 @@ def main():
         print(f"  Uploading tree for {commit_sha[:7]}...")
         new_tree_sha = upload_tree(tree_sha, api_base, token)
 
+        if preserve_parents:
+            orig_parents = run([GIT, "log", "-1", "--format=%P", commit_sha]).stdout.strip().split()
+            parents = [sha_map.get(p, p) for p in orig_parents]
+        else:
+            parents = [current_parent] if current_parent else []
+
         commit_data = {
             "message": msg,
             "tree": new_tree_sha,
-            "parents": [current_parent] if current_parent else [],
+            "parents": parents,
             "author": {"name": author_name, "email": author_email, "date": author_date},
             "committer": {"name": committer_name, "email": committer_email, "date": committer_date},
         }
 
         commit_resp = api_request("POST", f"{api_base}/git/commits", token, commit_data)
-        current_parent = commit_resp["sha"]
-        print(f"  Created commit {current_parent[:7]}")
+        new_sha = commit_resp["sha"]
+        sha_map[commit_sha] = new_sha
+        current_parent = new_sha
+        print(f"  Created commit {new_sha[:7]}"
+              + (f" (parents: {', '.join(p[:7] for p in parents)})" if len(parents) > 1 else ""))
 
     if branch_exists_remote:
         api_request("PATCH", f"{api_base}/git/refs/heads/{branch}", token,
