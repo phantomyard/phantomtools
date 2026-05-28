@@ -28,11 +28,30 @@ get_remote_from_args() {
     echo "$default_remote"
 }
 
+# Only intercept when a GitHub App installation token (ghs_*) is actually
+# loadable. PATs (ghp_*, github_pat_*), SSH remotes, and missing tokens fall
+# through to the real git: the standard credential helper / ssh-agent handles
+# them correctly without the App-API detour.
+has_ghs_token() {
+    case "${GITHUB_TOKEN:-}" in
+        ghs_*) return 0 ;;
+    esac
+    if [[ -f "$HOME/.github_env" ]] \
+            && grep -q '^export GITHUB_TOKEN="ghs_' "$HOME/.github_env" 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
 case "$subcmd" in
     fetch|pull|push)
         remote=$(get_remote_from_args "$@")
         url=$("$REAL_GIT" remote get-url "$remote" 2>/dev/null || true)
-        if [[ "$url" == *"github.com"* ]]; then
+        # HTTPS GitHub remotes are the only ones that need the App-API path
+        # (SSH bypasses credential helpers entirely). And even then, only when
+        # a ghs_* token is around — otherwise the user has a PAT or no token,
+        # and plain git handles that fine.
+        if [[ "$url" == https://*github.com/* ]] && has_ghs_token; then
             exec "${SCRIPT_DIR}/git-${subcmd}-as-app" "$@"
         fi
         ;;
