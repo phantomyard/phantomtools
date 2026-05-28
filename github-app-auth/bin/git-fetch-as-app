@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""
+Fetch from GitHub via API-authenticated URL.
+Works around ghs_* tokens not working for git fetch over HTTPS.
+Usage: git-fetch-as-app [remote] [refspec...]  (defaults to origin)
+"""
+
+import subprocess
+import sys
+import os
+import re
+import signal
+
+
+def run(cmd, text=True, **kwargs):
+    result = subprocess.run(cmd, capture_output=True, text=text, check=True, **kwargs)
+    return result
+
+
+def get_token():
+    env_file = os.path.expanduser("~/.github_env")
+    if os.path.exists(env_file):
+        with open(env_file) as f:
+            for line in f:
+                if line.startswith('export GITHUB_TOKEN='):
+                    return line.split('"', 1)[1].rsplit('"', 1)[0]
+    return os.environ.get("GITHUB_TOKEN", "")
+
+
+def cleanup_remote(name):
+    """Remove a temporary git remote, ignoring errors."""
+    subprocess.run(["git", "remote", "remove", name], capture_output=True, text=True, check=False)
+
+
+def find_stale_app_fetch_remotes():
+    """Find orphaned __app_fetch_* remotes left by crashed processes."""
+    result = subprocess.run(
+        ["git", "remote"], capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0:
+        return []
+    stale = []
+    for line in result.stdout.strip().split("\n"):
+        line = line.strip()
+        if line.startswith("__app_fetch_"):
+            stale.append(line)
+    return stale
+
+
+def main():
+    args = sys.argv[1:]
+    remote = None
+    extra_args = []
+
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith("-"):
+            extra_args.append(arg)
+            if arg in ("-o", "--upload-pack", "-c", "--depth", "--deepen"):
+                i += 1
+                if i < len(args):
+                    extra_args.append(args[i])
+        elif remote is None:
+            remote = arg
+        else:
+            extra_args.append(arg)
+        i += 1
+
+    if remote is None:
+        remote = "origin"
+
+    repo_url = run(["git", "remote", "get-url", remote]).stdout.strip()
+
+    m = re.search(r'github\.com[/:]([^/]+)/(.+?)(?:\.git)?$', repo_url)
+    if not m:
+        # Not GitHub — fall through to real git
+        os.execvp("git", ["git", "fetch"] + sys.argv[1:])
+
+    owner, repo = m.group(1), m.group(2)
+    token = get_token()
+    if not token:
+        print("Error: GITHUB_TOKEN not set", file=sys.stderr)
+        sys.exit(1)
+
+    # Clean up stale remotes from prior crashes
+    stale = find_stale_app_fetch_remotes()
+    for name in stale:
+        cleanup_remote(name)
+
+    temp_remote = f"__app_fetch_{os.getpid()}"
+    auth_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+
+    def signal_handler(signum, frame):
+        cleanup_remote(temp_remote)
+        # Re-raise default handler
+        import signal as sigmod
+        sigmod.signal(signum, sigmod.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, signal_handler)
+
+    try:
+        cleanup_remote(temp_remote)
+        subprocess.run(["git", "remote", "add", temp_remote, auth_url],
+                       capture_output=True, text=True, check=False)
+        cmd = ["git", "fetch", temp_remote] + extra_args
+        subprocess.run(cmd, check=True)
+    finally:
+        cleanup_remote(temp_remote)
+
+
+if __name__ == "__main__":
+    main()

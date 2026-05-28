@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh GitHub App installation token
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/refresh-github-env.sh
+Environment="PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+EnvironmentFile=-%h/.config/phantombot/.env
+EnvironmentFile=-%h/.env
+StandardOutput=journal
+StandardError=journal

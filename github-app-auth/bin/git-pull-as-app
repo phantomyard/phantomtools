@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# =============================================================================
+# git-pull via GitHub App auth for GitHub repos
+# Fetch via API auth, then merge/rebase normally
+# =============================================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+# Parse remote from args (first non-flag)
+remote="origin"
+for arg in "$@"; do
+    case "$arg" in
+        -*) continue ;;
+    esac
+    remote="$arg"
+    break
+done
+
+# Fetch via app auth
+"$SCRIPT_DIR/git-fetch-as-app" "$@"
+
+# Determine if --rebase was passed
+rebase=false
+for arg in "$@"; do
+    if [[ "$arg" == "--rebase" ]]; then
+        rebase=true
+        break
+    fi
+done
+
+# Get upstream branch
+branch=$(git rev-parse --abbrev-ref HEAD)
+upstream=$(git rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null || true)
+
+if [ -z "$upstream" ]; then
+    upstream="${remote}/${branch}"
+fi
+
+if [ "$rebase" = true ]; then
+    exec git rebase "$upstream"
+else
+    exec git merge "$upstream"
+fi

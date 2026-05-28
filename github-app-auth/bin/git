@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# =============================================================================
+# git wrapper — routes fetch/pull/push for GitHub remotes through App-auth variants
+# Falls back to /usr/bin/git for everything else
+#
+# Install: place earlier in $PATH than system git (e.g. ~/.local/bin/git)
+# =============================================================================
+set -euo pipefail
+
+REAL_GIT="/usr/bin/git"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+subcmd="${1:-}"
+shift 2>/dev/null || true
+
+get_remote_from_args() {
+    local default_remote="${1:-origin}"
+    for arg in "$@"; do
+        case "$arg" in
+            -*) continue ;;
+        esac
+        echo "$arg"
+        return
+    done
+    echo "$default_remote"
+}
+
+case "$subcmd" in
+    fetch|pull|push)
+        remote=$(get_remote_from_args "$@")
+        url=$("$REAL_GIT" remote get-url "$remote" 2>/dev/null || true)
+        if [[ "$url" == *"github.com"* ]]; then
+            exec "${SCRIPT_DIR}/git-${subcmd}-as-app" "$@"
+        fi
+        ;;
+esac
+
+exec "$REAL_GIT" "$subcmd" "$@"
