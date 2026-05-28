@@ -226,31 +226,71 @@ def main():
 
     print(f"Pushing {len(commits)} commit(s)...")
 
+    # Cache for trees and blobs already known to exist on the remote
+    # to avoid redundant GET/POST calls.
+    remote_object_cache = set()
+
     def upload_tree(tree_sha, api_base, token):
+        # 1. Fast path: check if this exact tree SHA is already on GitHub
+        if tree_sha in remote_object_cache:
+            return tree_sha
+        try:
+            api_request("GET", f"{api_base}/git/trees/{tree_sha}?recursive=0", token)
+            remote_object_cache.add(tree_sha)
+            return tree_sha
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+
+        # 2. Not on remote (or we can't see it), must rebuild via API.
+        # We use a flat list for ls-tree -r, which the API accepts.
         entries = []
         ls_tree = run([GIT, "ls-tree", "-r", tree_sha]).stdout.strip()
         if not ls_tree:
-            tree_data = api_request("POST", f"{api_base}/git/trees", token, {"tree": []})
-            return tree_data["sha"]
+            # Empty tree
+            resp = api_request("POST", f"{api_base}/git/trees", token, {"tree": []})
+            return resp["sha"]
 
         for line in ls_tree.split("\n"):
+            # Format: <mode> <type> <sha>\t<path>
             parts = line.split("\t", 1)
+            if len(parts) < 2:
+                continue
             meta = parts[0].split()
-            mode, obj_type, sha = meta[0], meta[1], meta[2]
-            path = parts[1] if len(parts) > 1 else ""
+            mode, obj_type, sha, path = meta[0], meta[1], meta[2], parts[1]
 
             if obj_type == "blob":
+                # GitHub returns the existing SHA if content matches, so we don't
+                # strictly need a 'blob exists' check, but it's slow to POST.
+                # However, there is no simple 'GET blob exists' without downloading.
                 content = run([GIT, "cat-file", "-p", sha], text=False).stdout
+                encoding = "utf-8"
                 try:
+                    # Symlinks (mode 120000) contain the target path as text
                     text_content = content.decode("utf-8")
-                    blob_data = {"content": text_content, "encoding": "utf-8"}
                 except UnicodeDecodeError:
-                    blob_data = {"content": base64.b64encode(content).decode("ascii"), "encoding": "base64"}
+                    text_content = base64.b64encode(content).decode("ascii")
+                    encoding = "base64"
 
-                blob_resp = api_request("POST", f"{api_base}/git/blobs", token, blob_data)
-                entries.append({"path": path, "mode": mode, "type": "blob", "sha": blob_resp["sha"]})
+                blob_resp = api_request("POST", f"{api_base}/git/blobs", token,
+                                        {"content": text_content, "encoding": encoding})
+                entries.append({
+                    "path": path,
+                    "mode": mode,
+                    "type": "blob",
+                    "sha": blob_resp["sha"]
+                })
+            elif obj_type == "commit":
+                # Submodule reference
+                entries.append({
+                    "path": path,
+                    "mode": "160000",
+                    "type": "commit",
+                    "sha": sha
+                })
 
         tree_data = api_request("POST", f"{api_base}/git/trees", token, {"tree": entries})
+        remote_object_cache.add(tree_data["sha"])
         return tree_data["sha"]
 
     # sha_map: local-original SHA → uploaded-API SHA.
