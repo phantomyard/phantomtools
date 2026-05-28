@@ -9,7 +9,39 @@ import subprocess
 import sys
 import os
 import re
+import shutil
 import signal
+
+
+def _real_git():
+    """Locate the real git binary, bypassing this project's wrapper.
+
+    Order: $REAL_GIT (exported by the wrapper) → $GITHUB_APP_REAL_GIT →
+    /usr/bin/git → PATH search with this script's directory filtered out.
+    Without this, calling `git fetch` here recurses back into the wrapper
+    when the wrapper is earlier in $PATH than the real git.
+    """
+    for env_var in ("REAL_GIT", "GITHUB_APP_REAL_GIT"):
+        candidate = os.environ.get(env_var, "")
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    if os.path.isfile("/usr/bin/git") and os.access("/usr/bin/git", os.X_OK):
+        return "/usr/bin/git"
+    self_dir = os.path.dirname(os.path.realpath(__file__))
+    saved_path = os.environ.get("PATH", "")
+    sanitized = os.pathsep.join(
+        d for d in saved_path.split(os.pathsep)
+        if d and os.path.realpath(d) != self_dir
+    )
+    found = shutil.which("git", path=sanitized)
+    if found:
+        return found
+    print("Error: could not locate real git binary (set GITHUB_APP_REAL_GIT)",
+          file=sys.stderr)
+    sys.exit(1)
+
+
+GIT = _real_git()
 
 
 def run(cmd, text=True, **kwargs):
@@ -29,13 +61,13 @@ def get_token():
 
 def cleanup_remote(name):
     """Remove a temporary git remote, ignoring errors."""
-    subprocess.run(["git", "remote", "remove", name], capture_output=True, text=True, check=False)
+    subprocess.run([GIT, "remote", "remove", name], capture_output=True, text=True, check=False)
 
 
 def find_stale_app_fetch_remotes():
     """Find orphaned __app_fetch_* remotes left by crashed processes."""
     result = subprocess.run(
-        ["git", "remote"], capture_output=True, text=True, check=False
+        [GIT, "remote"], capture_output=True, text=True, check=False
     )
     if result.returncode != 0:
         return []
@@ -70,12 +102,12 @@ def main():
     if remote is None:
         remote = "origin"
 
-    repo_url = run(["git", "remote", "get-url", remote]).stdout.strip()
+    repo_url = run([GIT, "remote", "get-url", remote]).stdout.strip()
 
     m = re.search(r'github\.com[/:]([^/]+)/(.+?)(?:\.git)?$', repo_url)
     if not m:
         # Not GitHub — fall through to real git
-        os.execvp("git", ["git", "fetch"] + sys.argv[1:])
+        os.execv(GIT, [GIT, "fetch"] + sys.argv[1:])
 
     owner, repo = m.group(1), m.group(2)
     token = get_token()
@@ -103,9 +135,9 @@ def main():
 
     try:
         cleanup_remote(temp_remote)
-        subprocess.run(["git", "remote", "add", temp_remote, auth_url],
+        subprocess.run([GIT, "remote", "add", temp_remote, auth_url],
                        capture_output=True, text=True, check=False)
-        cmd = ["git", "fetch", temp_remote] + extra_args
+        cmd = [GIT, "fetch", temp_remote] + extra_args
         subprocess.run(cmd, check=True)
     finally:
         cleanup_remote(temp_remote)

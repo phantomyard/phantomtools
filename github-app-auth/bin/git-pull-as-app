@@ -5,6 +5,11 @@
 # =============================================================================
 set -euo pipefail
 
+# Use the real git binary, bypassing the wrapper (which would re-enter
+# git-pull-as-app on every `git pull` and recurse). REAL_GIT is exported
+# by the wrapper; fall back to /usr/bin/git or $GITHUB_APP_REAL_GIT.
+REAL_GIT="${REAL_GIT:-${GITHUB_APP_REAL_GIT:-/usr/bin/git}}"
+
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # Parse remote from args (first non-flag)
@@ -30,15 +35,15 @@ for arg in "$@"; do
 done
 
 # Get upstream branch
-branch=$(git rev-parse --abbrev-ref HEAD)
-upstream=$(git rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null || true)
+branch=$("$REAL_GIT" rev-parse --abbrev-ref HEAD)
+upstream=$("$REAL_GIT" rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null || true)
 
 if [ -z "$upstream" ]; then
     upstream="${remote}/${branch}"
 fi
 
 if [ "$rebase" = true ]; then
-    exec git rebase "$upstream"
+    exec "$REAL_GIT" rebase "$upstream"
 else
-    exec git merge "$upstream"
+    exec "$REAL_GIT" merge "$upstream"
 fi

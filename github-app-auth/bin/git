@@ -7,7 +7,10 @@
 # =============================================================================
 set -euo pipefail
 
-REAL_GIT="/usr/bin/git"
+# Exported so child scripts (git-fetch-as-app, git-push-as-app, git-pull-as-app)
+# can bypass this wrapper and avoid recursion. Override with GITHUB_APP_REAL_GIT
+# if /usr/bin/git is not the canonical path (e.g. /opt/homebrew/bin/git on macOS).
+export REAL_GIT="${GITHUB_APP_REAL_GIT:-/usr/bin/git}"
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 subcmd="${1:-}"

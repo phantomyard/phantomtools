@@ -11,8 +11,40 @@ import os
 import json
 import base64
 import re
+import shutil
 import urllib.request
 import urllib.error
+
+
+def _real_git():
+    """Locate the real git binary, bypassing this project's wrapper.
+
+    Order: $REAL_GIT (exported by the wrapper) → $GITHUB_APP_REAL_GIT →
+    /usr/bin/git → PATH search with this script's directory filtered out.
+    Without this, plain `git` calls here recurse back into the wrapper
+    when the wrapper is earlier in $PATH than the real git.
+    """
+    for env_var in ("REAL_GIT", "GITHUB_APP_REAL_GIT"):
+        candidate = os.environ.get(env_var, "")
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    if os.path.isfile("/usr/bin/git") and os.access("/usr/bin/git", os.X_OK):
+        return "/usr/bin/git"
+    self_dir = os.path.dirname(os.path.realpath(__file__))
+    saved_path = os.environ.get("PATH", "")
+    sanitized = os.pathsep.join(
+        d for d in saved_path.split(os.pathsep)
+        if d and os.path.realpath(d) != self_dir
+    )
+    found = shutil.which("git", path=sanitized)
+    if found:
+        return found
+    print("Error: could not locate real git binary (set GITHUB_APP_REAL_GIT)",
+          file=sys.stderr)
+    sys.exit(1)
+
+
+GIT = _real_git()
 
 
 def run(cmd, text=True, **kwargs):
@@ -77,13 +109,13 @@ def main():
         i += 1
 
     remote = remote or "origin"
-    branch = branch or run(["git", "rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+    branch = branch or run([GIT, "rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
 
     if dry_run:
         print(f"[dry-run] Would push {branch} to {remote}")
         return
 
-    repo_url = run(["git", "remote", "get-url", remote]).stdout.strip()
+    repo_url = run([GIT, "remote", "get-url", remote]).stdout.strip()
 
     m = re.search(r'github\.com[/:]([^/]+)/(.+?)(?:\.git)?$', repo_url)
     if not m:
@@ -108,7 +140,7 @@ def main():
         if e.code != 404:
             raise
 
-    local_sha = run(["git", "rev-parse", branch]).stdout.strip()
+    local_sha = run([GIT, "rev-parse", branch]).stdout.strip()
 
     if remote_sha == local_sha and remote_sha:
         print("Everything up-to-date")
@@ -117,14 +149,14 @@ def main():
     is_ancestor = False
     if remote_sha:
         try:
-            run(["git", "merge-base", "--is-ancestor", remote_sha, local_sha])
+            run([GIT, "merge-base", "--is-ancestor", remote_sha, local_sha])
             is_ancestor = True
         except subprocess.CalledProcessError:
             pass
 
     commits = []
     if is_ancestor:
-        rev_list = run(["git", "rev-list", "--reverse", f"{remote_sha}..{local_sha}"]).stdout.strip()
+        rev_list = run([GIT, "rev-list", "--reverse", f"{remote_sha}..{local_sha}"]).stdout.strip()
         if rev_list:
             commits = rev_list.split("\n")
     else:
@@ -139,7 +171,7 @@ def main():
 
     def upload_tree(tree_sha, api_base, token):
         entries = []
-        ls_tree = run(["git", "ls-tree", "-r", tree_sha]).stdout.strip()
+        ls_tree = run([GIT, "ls-tree", "-r", tree_sha]).stdout.strip()
         if not ls_tree:
             tree_data = api_request("POST", f"{api_base}/git/trees", token, {"tree": []})
             return tree_data["sha"]
@@ -151,7 +183,7 @@ def main():
             path = parts[1] if len(parts) > 1 else ""
 
             if obj_type == "blob":
-                content = run(["git", "cat-file", "-p", sha], text=False).stdout
+                content = run([GIT, "cat-file", "-p", sha], text=False).stdout
                 try:
                     text_content = content.decode("utf-8")
                     blob_data = {"content": text_content, "encoding": "utf-8"}
@@ -166,14 +198,14 @@ def main():
 
     current_parent = remote_sha
     for commit_sha in commits:
-        tree_sha = run(["git", "rev-parse", f"{commit_sha}^{{tree}}"]).stdout.strip()
-        msg = run(["git", "log", "-1", "--format=%B", commit_sha]).stdout.strip()
-        author_name = run(["git", "log", "-1", "--format=%an", commit_sha]).stdout.strip()
-        author_email = run(["git", "log", "-1", "--format=%ae", commit_sha]).stdout.strip()
-        author_date = run(["git", "log", "-1", "--format=%aI", commit_sha]).stdout.strip()
-        committer_name = run(["git", "log", "-1", "--format=%cn", commit_sha]).stdout.strip()
-        committer_email = run(["git", "log", "-1", "--format=%ce", commit_sha]).stdout.strip()
-        committer_date = run(["git", "log", "-1", "--format=%cI", commit_sha]).stdout.strip()
+        tree_sha = run([GIT, "rev-parse", f"{commit_sha}^{{tree}}"]).stdout.strip()
+        msg = run([GIT, "log", "-1", "--format=%B", commit_sha]).stdout.strip()
+        author_name = run([GIT, "log", "-1", "--format=%an", commit_sha]).stdout.strip()
+        author_email = run([GIT, "log", "-1", "--format=%ae", commit_sha]).stdout.strip()
+        author_date = run([GIT, "log", "-1", "--format=%aI", commit_sha]).stdout.strip()
+        committer_name = run([GIT, "log", "-1", "--format=%cn", commit_sha]).stdout.strip()
+        committer_email = run([GIT, "log", "-1", "--format=%ce", commit_sha]).stdout.strip()
+        committer_date = run([GIT, "log", "-1", "--format=%cI", commit_sha]).stdout.strip()
 
         print(f"  Uploading tree for {commit_sha[:7]}...")
         new_tree_sha = upload_tree(tree_sha, api_base, token)
