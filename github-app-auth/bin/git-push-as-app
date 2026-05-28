@@ -133,12 +133,25 @@ def main():
 
     # Get remote SHA
     remote_sha = ""
+    branch_exists_remote = False
     try:
         ref_data = api_request("GET", f"{api_base}/git/refs/heads/{branch}", token)
         remote_sha = ref_data.get("object", {}).get("sha", "")
+        branch_exists_remote = bool(remote_sha)
     except urllib.error.HTTPError as e:
         if e.code != 404:
             raise
+
+    # Previous App-pushes upload commits via the API, which recreates commit
+    # objects with new SHAs that do NOT exist in the local repo. Detect that
+    # so we don't try to use remote_sha as a git ref locally.
+    remote_known_locally = False
+    if remote_sha:
+        try:
+            run([GIT, "cat-file", "-e", remote_sha])
+            remote_known_locally = True
+        except subprocess.CalledProcessError:
+            pass
 
     local_sha = run([GIT, "rev-parse", branch]).stdout.strip()
 
@@ -147,7 +160,7 @@ def main():
         return
 
     is_ancestor = False
-    if remote_sha:
+    if remote_known_locally:
         try:
             run([GIT, "merge-base", "--is-ancestor", remote_sha, local_sha])
             is_ancestor = True
@@ -155,13 +168,38 @@ def main():
             pass
 
     commits = []
-    if is_ancestor:
+    parent_for_first = ""
+    needs_force = False
+
+    if force:
+        # User asked for force-push: rebuild local HEAD with no parent.
+        commits = [local_sha]
+        parent_for_first = ""
+        needs_force = True
+    elif is_ancestor:
+        # Normal fast-forward: upload only the new commits.
         rev_list = run([GIT, "rev-list", "--reverse", f"{remote_sha}..{local_sha}"]).stdout.strip()
         if rev_list:
             commits = rev_list.split("\n")
-    else:
+        parent_for_first = remote_sha
+    elif branch_exists_remote and not remote_known_locally:
+        # Remote ref points to a commit we don't have locally — typically
+        # because a previous App-push recreated the SHAs via the API. We
+        # can't compute a delta against an unknown object, so push local
+        # HEAD as a child of the existing remote tip. The ref update is
+        # still a fast-forward (parent → child), no force needed.
         commits = [local_sha]
-        remote_sha = ""
+        parent_for_first = remote_sha
+    elif branch_exists_remote:
+        # Truly divergent (remote SHA exists locally but isn't an ancestor).
+        # Rebuild HEAD with no parent and force-update the ref.
+        commits = [local_sha]
+        parent_for_first = ""
+        needs_force = True
+    else:
+        # New branch on the remote.
+        commits = [local_sha]
+        parent_for_first = ""
 
     if not commits:
         print("No new commits to push")
@@ -196,7 +234,7 @@ def main():
         tree_data = api_request("POST", f"{api_base}/git/trees", token, {"tree": entries})
         return tree_data["sha"]
 
-    current_parent = remote_sha
+    current_parent = parent_for_first
     for commit_sha in commits:
         tree_sha = run([GIT, "rev-parse", f"{commit_sha}^{{tree}}"]).stdout.strip()
         msg = run([GIT, "log", "-1", "--format=%B", commit_sha]).stdout.strip()
@@ -222,9 +260,9 @@ def main():
         current_parent = commit_resp["sha"]
         print(f"  Created commit {current_parent[:7]}")
 
-    if branch_exists := bool(remote_sha):
+    if branch_exists_remote:
         api_request("PATCH", f"{api_base}/git/refs/heads/{branch}", token,
-                    {"sha": current_parent, "force": force})
+                    {"sha": current_parent, "force": force or needs_force})
     else:
         api_request("POST", f"{api_base}/git/refs", token,
                     {"ref": f"refs/heads/{branch}", "sha": current_parent})
