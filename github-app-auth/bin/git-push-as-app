@@ -168,11 +168,24 @@ def main():
         committer_email = run_git(GIT, ["log", "-1", "--format=%ce", commit_sha]).stdout.strip()
         committer_date = run_git(GIT, ["log", "-1", "--format=%cI", commit_sha]).stdout.strip()
 
+        # Use the first parent's tree as an incremental base when possible.
+        # Its content (hence tree SHA) is identical on the remote — the parent
+        # is either the remote branch point or a commit we just pushed — so
+        # upload_tree only has to send the blobs that actually changed.
+        orig_parents = run_git(GIT, ["log", "-1", "--format=%P", commit_sha]).stdout.strip().split()
+        base_tree_sha = None
+        if orig_parents:
+            try:
+                base_tree_sha = run_git(
+                    GIT, ["rev-parse", f"{orig_parents[0]}^{{tree}}"]
+                ).stdout.strip()
+            except subprocess.CalledProcessError:
+                base_tree_sha = None
+
         print(f"  Uploading tree for {commit_sha[:7]}...")
-        new_tree_sha = client.upload_tree(tree_sha)
+        new_tree_sha = client.upload_tree(tree_sha, base_tree_sha)
 
         if preserve_parents:
-            orig_parents = run_git(GIT, ["log", "-1", "--format=%P", commit_sha]).stdout.strip().split()
             parents = [sha_map.get(p, p) for p in orig_parents]
         else:
             parents = [current_parent] if current_parent else []

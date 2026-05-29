@@ -149,6 +149,76 @@ class TestGhappLib(unittest.TestCase):
         # Should NOT have tried to rebuild via ls-tree
         mock_run_git.assert_not_called()
 
+    @mock.patch('ghapplib.run_git')
+    @mock.patch('urllib.request.urlopen')
+    def test_upload_tree_incremental_changed_only(self, mock_urlopen, mock_run_git):
+        """With a base tree on the remote, only changed blobs are uploaded and
+        deletions are sent as sha=None — no full re-upload of the whole tree."""
+        client = ghapplib.GitHubAppClient('owner', 'repo', 'token', 'git')
+
+        # 1. GET target tree → 404 (not on remote yet)
+        target_miss = urllib.error.HTTPError('url', 404, 'Not Found', {}, io.BytesIO(b'{}'))
+        # 2. GET base tree → success (base is on remote)
+        base_ok = mock.MagicMock()
+        base_ok.read.return_value = json.dumps({'sha': 'base_tree'}).encode('utf-8')
+        base_ok.__enter__.return_value = base_ok
+        # 3. POST blob for the one modified file
+        blob_resp = mock.MagicMock()
+        blob_resp.read.return_value = json.dumps({'sha': 'new_blob'}).encode('utf-8')
+        blob_resp.__enter__.return_value = blob_resp
+        # 4. POST tree → reconstructs the exact target tree
+        tree_resp = mock.MagicMock()
+        tree_resp.read.return_value = json.dumps({'sha': 'target_tree'}).encode('utf-8')
+        tree_resp.__enter__.return_value = tree_resp
+
+        mock_urlopen.side_effect = [target_miss, base_ok, blob_resp, tree_resp]
+
+        diff = (":100644 100644 aaa bbb M\x00file.txt\x00"
+                ":100644 000000 ccc 0000000000000000000000000000000000000000 D\x00gone.txt\x00")
+        mock_run_git.side_effect = [
+            mock.Mock(stdout=diff),            # diff-tree
+            mock.Mock(stdout=b'new content'),  # cat-file for file.txt
+        ]
+
+        sha = client.upload_tree('target_tree', base_tree_sha='base_tree')
+
+        self.assertEqual(sha, 'target_tree')
+        # Only ONE blob uploaded despite there being a whole repo behind it.
+        post_tree_data = json.loads(mock_urlopen.call_args_list[-1][0][0].data)
+        self.assertEqual(post_tree_data['base_tree'], 'base_tree')
+        by_path = {e['path']: e for e in post_tree_data['tree']}
+        self.assertEqual(by_path['file.txt']['sha'], 'new_blob')
+        self.assertIsNone(by_path['gone.txt']['sha'])  # deletion
+
+    @mock.patch('ghapplib.run_git')
+    @mock.patch('urllib.request.urlopen')
+    def test_upload_tree_incremental_base_missing_falls_back(self, mock_urlopen, mock_run_git):
+        """If the base tree isn't on the remote, fall back to a full rebuild."""
+        client = ghapplib.GitHubAppClient('owner', 'repo', 'token', 'git')
+
+        target_miss = urllib.error.HTTPError('url', 404, 'Not Found', {}, io.BytesIO(b'{}'))
+        base_miss = urllib.error.HTTPError('url', 404, 'Not Found', {}, io.BytesIO(b'{}'))
+        blob_resp = mock.MagicMock()
+        blob_resp.read.return_value = json.dumps({'sha': 'blob_sha'}).encode('utf-8')
+        blob_resp.__enter__.return_value = blob_resp
+        tree_resp = mock.MagicMock()
+        tree_resp.read.return_value = json.dumps({'sha': 'full_tree'}).encode('utf-8')
+        tree_resp.__enter__.return_value = tree_resp
+
+        # GET target → 404, GET base → 404, then full rebuild: POST blob, POST tree
+        mock_urlopen.side_effect = [target_miss, base_miss, blob_resp, tree_resp]
+        mock_run_git.side_effect = [
+            mock.Mock(stdout='100644 blob blob_sha\tfile.txt\n'),  # ls-tree (full path)
+            mock.Mock(stdout=b'file content'),                      # cat-file
+        ]
+
+        sha = client.upload_tree('target_tree', base_tree_sha='base_tree')
+
+        self.assertEqual(sha, 'full_tree')
+        # Full-rebuild POST has no base_tree key.
+        post_tree_data = json.loads(mock_urlopen.call_args_list[-1][0][0].data)
+        self.assertNotIn('base_tree', post_tree_data)
+
     @mock.patch('urllib.request.urlopen')
     def test_list_installation_repositories_single_page(self, mock_urlopen):
         # Mock response

@@ -90,7 +90,21 @@ class GitHubAppClient:
             print(body, file=sys.stderr)
             raise
 
-    def upload_tree(self, tree_sha):
+    def _upload_blob(self, sha):
+        """Upload a single blob by its local SHA, return the remote blob SHA.
+        GitHub blob SHAs are content-addressed, so this is idempotent."""
+        content = run_git(self.git_bin, ["cat-file", "-p", sha], text=False).stdout
+        encoding = "utf-8"
+        try:
+            text_content = content.decode("utf-8")
+        except UnicodeDecodeError:
+            text_content = base64.b64encode(content).decode("ascii")
+            encoding = "base64"
+        blob_resp = self.api_request("POST", "git/blobs",
+                                     {"content": text_content, "encoding": encoding})
+        return blob_resp["sha"]
+
+    def upload_tree(self, tree_sha, base_tree_sha=None):
         # 1. Fast path: check if this exact tree SHA is already on GitHub
         if tree_sha in self.remote_object_cache:
             return tree_sha
@@ -106,7 +120,69 @@ class GitHubAppClient:
             if e.code not in (404, 422):
                 raise
 
-        # 2. Not on remote, rebuild via API.
+        # 2. Incremental path: if we know a base tree that is already on the
+        # remote, only upload the blobs that actually changed relative to it.
+        # This turns an O(whole repo) push into O(diff) — critical for real
+        # repos where a one-file change otherwise re-uploads hundreds of blobs.
+        if base_tree_sha and base_tree_sha != tree_sha:
+            try:
+                return self._upload_tree_incremental(tree_sha, base_tree_sha)
+            except (urllib.error.HTTPError, subprocess.CalledProcessError, RuntimeError):
+                # Base tree not on remote, diff failed, or result mismatched —
+                # fall back to the full rebuild below.
+                pass
+
+        # 3. Full rebuild: upload every blob in the tree.
+        return self._upload_tree_full(tree_sha)
+
+    def _upload_tree_incremental(self, tree_sha, base_tree_sha):
+        # Base must already exist on the remote; raises (caught by caller) if not.
+        self.api_request("GET", f"git/trees/{base_tree_sha}?recursive=0")
+
+        # -z gives NUL-separated records, immune to path-quoting surprises.
+        raw = run_git(self.git_bin,
+                      ["diff-tree", "-r", "-z", "--no-commit-id",
+                       base_tree_sha, tree_sha]).stdout
+        tokens = raw.split("\0")
+        entries = []
+        i = 0
+        while i < len(tokens):
+            meta = tokens[i]
+            if not meta.startswith(":"):
+                i += 1
+                continue
+            path = tokens[i + 1]
+            i += 2
+            # meta: ":<old_mode> <new_mode> <old_sha> <new_sha> <status>"
+            old_mode, new_mode, _old_sha, new_sha, status = meta[1:].split()
+            if status == "D":
+                # Deletion: sha=None tells GitHub to drop the path from base_tree.
+                entries.append({"path": path, "mode": old_mode,
+                                "type": "blob", "sha": None})
+            elif new_mode == "160000":
+                # Submodule pointer — reference the commit SHA directly.
+                entries.append({"path": path, "mode": "160000",
+                                "type": "commit", "sha": new_sha})
+            else:
+                entries.append({"path": path, "mode": new_mode,
+                                "type": "blob", "sha": self._upload_blob(new_sha)})
+
+        if not entries:
+            # No diff means the trees are identical.
+            self.remote_object_cache.add(tree_sha)
+            return tree_sha
+
+        resp = self.api_request("POST", "git/trees",
+                                {"base_tree": base_tree_sha, "tree": entries})
+        if resp["sha"] != tree_sha:
+            # The overlay didn't reconstruct the exact target tree — bail so the
+            # caller falls back to a full, guaranteed-correct rebuild.
+            raise RuntimeError(
+                f"incremental tree mismatch: got {resp['sha']}, want {tree_sha}")
+        self.remote_object_cache.add(tree_sha)
+        return tree_sha
+
+    def _upload_tree_full(self, tree_sha):
         entries = []
         ls_tree = run_git(self.git_bin, ["ls-tree", "-r", tree_sha]).stdout.strip()
         if not ls_tree:
@@ -121,21 +197,11 @@ class GitHubAppClient:
             mode, obj_type, sha, path = meta[0], meta[1], meta[2], parts[1]
 
             if obj_type == "blob":
-                content = run_git(self.git_bin, ["cat-file", "-p", sha], text=False).stdout
-                encoding = "utf-8"
-                try:
-                    text_content = content.decode("utf-8")
-                except UnicodeDecodeError:
-                    text_content = base64.b64encode(content).decode("ascii")
-                    encoding = "base64"
-
-                blob_resp = self.api_request("POST", "git/blobs",
-                                        {"content": text_content, "encoding": encoding})
                 entries.append({
                     "path": path,
                     "mode": mode,
                     "type": "blob",
-                    "sha": blob_resp["sha"]
+                    "sha": self._upload_blob(sha)
                 })
             elif obj_type == "commit":
                 entries.append({
