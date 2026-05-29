@@ -57,6 +57,7 @@ github-token.sh  (JWT → installation token)
 | `bin/git-push-as-app` | Push via GitHub API with `--dry-run` and `-f`/`--force` support |
 | `bin/git-fetch-as-app` | Fetch via temporary authenticated remote; auto-cleans stale `__app_fetch_*` remotes on crash |
 | `bin/git-pull-as-app` | Fetch + merge/rebase |
+| `bin/list-repos-as-app` | List repositories accessible to the installation |
 | `bin/git-credential-github-app` | Git credential helper reading `~/.github_env` |
 | `bin/github-token.sh` | Generates JWT, finds installation ID, exchanges for access token |
 | `bin/refresh-github-env.sh` | Timer wrapper that refreshes `~/.github_env` |
@@ -64,6 +65,31 @@ github-token.sh  (JWT → installation token)
 | `systemd/github-app-auth-refresh.service` | systemd oneshot service |
 | `install.sh` | Symlinks, timers, git config, prerequisite check, test |
 | `uninstall.sh` | Reverses `install.sh` |
+
+## Usage
+
+Once installed, standard git commands work as usual for GitHub remotes:
+
+```bash
+git push origin main
+git fetch origin
+git pull origin main
+```
+
+### Discover accessible repos
+
+Check which repositories your App installation has access to:
+
+```bash
+# List all repos (name, visibility, permissions)
+list-repos-as-app
+
+# Get just the clone URLs (handy for automation)
+list-repos-as-app --clone-urls
+
+# JSON output for jq processing
+list-repos-as-app --json | jq -r '.[].full_name'
+```
 
 ## Requirements
 

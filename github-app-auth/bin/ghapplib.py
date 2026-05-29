@@ -166,3 +166,39 @@ def determine_push_strategy(local_sha, remote_sha, remote_known_locally, is_ance
         
     # New branch
     return ([local_sha], "", False, False)
+
+def list_installation_repositories(token):
+    url = "https://api.github.com/installation/repositories"
+    repos = []
+    while url:
+        req = urllib.request.Request(url)
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Accept", "application/vnd.github+json")
+        
+        try:
+            with urllib.request.urlopen(req) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                repos.extend(data.get("repositories", []))
+                
+                # Pagination
+                url = None
+                link_header = resp.headers.get("Link")
+                if link_header:
+                    # Format: <https://api.github.com/...>; rel="next", ...
+                    links = link_header.split(",")
+                    for link in links:
+                        if 'rel="next"' in link:
+                            m = re.search(r'<(.*)>', link)
+                            if m:
+                                url = m.group(1)
+                                break
+        except urllib.error.HTTPError as e:
+            try:
+                body = e.read().decode("utf-8")
+            except:
+                body = "(could not read error body)"
+            print(f"API error: {e.code} {e.reason}", file=sys.stderr)
+            print(body, file=sys.stderr)
+            raise
+    return repos
+

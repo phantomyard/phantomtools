@@ -105,5 +105,49 @@ class TestGhappLib(unittest.TestCase):
         last_post_data = json.loads(mock_urlopen.call_args_list[-1][0][0].data)
         self.assertEqual(last_post_data['tree'][0]['mode'], '100644')
 
+    @mock.patch('urllib.request.urlopen')
+    def test_list_installation_repositories_single_page(self, mock_urlopen):
+        # Mock response
+        mock_resp = mock.MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            'repositories': [{'full_name': 'org/repo1', 'clone_url': 'https://github.com/org/repo1.git'}]
+        }).encode('utf-8')
+        mock_resp.headers = {}
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
+        repos = ghapplib.list_installation_repositories('token')
+        
+        self.assertEqual(len(repos), 1)
+        self.assertEqual(repos[0]['full_name'], 'org/repo1')
+        mock_urlopen.assert_called_once()
+
+    @mock.patch('urllib.request.urlopen')
+    def test_list_installation_repositories_paginated(self, mock_urlopen):
+        # Mock 1st page
+        mock_resp1 = mock.MagicMock()
+        mock_resp1.read.return_value = json.dumps({
+            'repositories': [{'full_name': 'org/repo1'}]
+        }).encode('utf-8')
+        mock_resp1.headers = {'Link': '<https://api.github.com/installation/repositories?page=2>; rel="next"'}
+        mock_resp1.__enter__.return_value = mock_resp1
+
+        # Mock 2nd page
+        mock_resp2 = mock.MagicMock()
+        mock_resp2.read.return_value = json.dumps({
+            'repositories': [{'full_name': 'org/repo2'}]
+        }).encode('utf-8')
+        mock_resp2.headers = {}
+        mock_resp2.__enter__.return_value = mock_resp2
+
+        mock_urlopen.side_effect = [mock_resp1, mock_resp2]
+
+        repos = ghapplib.list_installation_repositories('token')
+        
+        self.assertEqual(len(repos), 2)
+        self.assertEqual(repos[0]['full_name'], 'org/repo1')
+        self.assertEqual(repos[1]['full_name'], 'org/repo2')
+        self.assertEqual(mock_urlopen.call_count, 2)
+
 if __name__ == '__main__':
     unittest.main()
