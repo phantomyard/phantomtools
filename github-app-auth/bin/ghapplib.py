@@ -99,7 +99,11 @@ class GitHubAppClient:
             self.remote_object_cache.add(tree_sha)
             return tree_sha
         except urllib.error.HTTPError as e:
-            if e.code != 404:
+            # 404: tree object simply absent.
+            # 422: GitHub returns this for unknown / unresolvable SHAs on the
+            # git data API (e.g. SHA exists nowhere on the remote yet).
+            # Either way, fall through and rebuild the tree via the API.
+            if e.code not in (404, 422):
                 raise
 
         # 2. Not on remote, rebuild via API.

@@ -105,6 +105,50 @@ class TestGhappLib(unittest.TestCase):
         last_post_data = json.loads(mock_urlopen.call_args_list[-1][0][0].data)
         self.assertEqual(last_post_data['tree'][0]['mode'], '100644')
 
+    @mock.patch('ghapplib.run_git')
+    @mock.patch('urllib.request.urlopen')
+    def test_upload_tree_422_falls_through(self, mock_urlopen, mock_run_git):
+        """GitHub returns 422 (not 404) for unknown tree SHAs on git/trees.
+        Regression: the fast-path used to only catch 404 and crashed on 422."""
+        client = ghapplib.GitHubAppClient('owner', 'repo', 'token', 'git')
+
+        # 1. GET tree fails with 422 (unknown SHA on remote)
+        mock_err = urllib.error.HTTPError(
+            'url', 422, 'Unprocessable Entity', {}, io.BytesIO(b'{}')
+        )
+
+        # 2. POST tree success (empty tree path — no blobs to upload)
+        mock_tree_resp = mock.MagicMock()
+        mock_tree_resp.read.return_value = json.dumps({'sha': 'new_tree_sha'}).encode('utf-8')
+        mock_tree_resp.__enter__.return_value = mock_tree_resp
+
+        mock_urlopen.side_effect = [mock_err, mock_tree_resp]
+
+        # ls-tree returns empty → triggers the empty-tree POST branch
+        mock_run_git.return_value = mock.Mock(stdout='')
+
+        sha = client.upload_tree('local_sha')
+
+        self.assertEqual(sha, 'new_tree_sha')
+        # Both calls happened: the failed GET, then the rebuild POST
+        self.assertEqual(mock_urlopen.call_count, 2)
+
+    @mock.patch('ghapplib.run_git')
+    @mock.patch('urllib.request.urlopen')
+    def test_upload_tree_other_http_error_propagates(self, mock_urlopen, mock_run_git):
+        """Non-404/422 errors (e.g. 500, 403) should still bubble up."""
+        client = ghapplib.GitHubAppClient('owner', 'repo', 'token', 'git')
+
+        mock_err = urllib.error.HTTPError(
+            'url', 500, 'Server Error', {}, io.BytesIO(b'{}')
+        )
+        mock_urlopen.side_effect = mock_err
+
+        with self.assertRaises(urllib.error.HTTPError):
+            client.upload_tree('local_sha')
+        # Should NOT have tried to rebuild via ls-tree
+        mock_run_git.assert_not_called()
+
     @mock.patch('urllib.request.urlopen')
     def test_list_installation_repositories_single_page(self, mock_urlopen):
         # Mock response
