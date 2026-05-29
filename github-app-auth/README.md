@@ -10,6 +10,16 @@ GitHub App installation tokens (`ghs_*`) do not work over HTTPS git operations. 
 - **Short-lived tokens** — GitHub App tokens auto-refresh every 50 minutes.
 - **Transparent** — Once installed, `git push origin main` just works.
 
+## Install from source
+
+```bash
+git clone -b feat/github-app-auth https://github.com/phantomyard/phantomtools.git ~/repos/phantomtools
+cd ~/repos/phantomtools/github-app-auth
+./install.sh
+```
+
+The repo is public, so no token is needed to clone.
+
 ## Quick start
 
 ```bash
