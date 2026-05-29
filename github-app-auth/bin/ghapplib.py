@@ -264,7 +264,7 @@ def determine_push_strategy(local_sha, remote_sha, remote_known_locally, is_ance
     Returns: (commits_to_push, parent_for_first, needs_force, preserve_parents)
     """
     if force:
-        return ([local_sha], "", True, False)
+        return (None, "", True, True)
     
     if is_ancestor:
         # Normal fast-forward
@@ -272,11 +272,11 @@ def determine_push_strategy(local_sha, remote_sha, remote_known_locally, is_ance
         
     if branch_exists_remote and not remote_known_locally:
         # Recreated SHA scenario
-        return ([local_sha], remote_sha, False, False)
+        return (None, remote_sha, False, False)
         
     if branch_exists_remote:
         # Truly divergent
-        return ([local_sha], "", True, False)
+        return (None, "", True, True)
 
     # New branch: caller computes the rev-list of commits not yet on the remote
     # (e.g. `local_sha --not --remotes=<remote>`) and preserves the original

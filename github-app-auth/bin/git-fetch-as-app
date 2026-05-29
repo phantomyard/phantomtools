@@ -94,7 +94,8 @@ def main():
         cleanup_remote(temp_remote)
         subprocess.run([GIT, "remote", "add", temp_remote, auth_url],
                        capture_output=True, text=True, check=False)
-        cmd = [GIT, "fetch", temp_remote] + extra_args
+        refspec = f"+refs/heads/*:refs/remotes/{remote}/*"
+        cmd = [GIT, "fetch", temp_remote, refspec] + extra_args
         subprocess.run(cmd, check=True)
     finally:
         cleanup_remote(temp_remote)

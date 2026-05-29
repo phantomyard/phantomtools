@@ -11,10 +11,10 @@ class TestPushStrategy(unittest.TestCase):
         commits, parent, force, preserve = determine_push_strategy(
             "L", "R", True, True, True, force=True
         )
-        self.assertEqual(commits, ["L"])
+        self.assertIsNone(commits)
         self.assertEqual(parent, "")
         self.assertTrue(force)
-        self.assertFalse(preserve)
+        self.assertTrue(preserve)
 
     def test_fast_forward(self):
         commits, parent, force, preserve = determine_push_strategy(
@@ -30,7 +30,7 @@ class TestPushStrategy(unittest.TestCase):
         commits, parent, force, preserve = determine_push_strategy(
             "L", "R", False, False, True, force=False
         )
-        self.assertEqual(commits, ["L"])
+        self.assertIsNone(commits)
         self.assertEqual(parent, "R")
         self.assertFalse(force)
         self.assertFalse(preserve)
@@ -40,10 +40,10 @@ class TestPushStrategy(unittest.TestCase):
         commits, parent, force, preserve = determine_push_strategy(
             "L", "R", True, False, True, force=False
         )
-        self.assertEqual(commits, ["L"])
+        self.assertIsNone(commits)
         self.assertEqual(parent, "")
         self.assertTrue(force)
-        self.assertFalse(preserve)
+        self.assertTrue(preserve)
 
     def test_new_branch(self):
         # New branch: caller must compute the full rev-list of commits not yet
