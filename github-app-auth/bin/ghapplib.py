@@ -57,6 +57,14 @@ def get_token():
                     break
     return token
 
+def parse_owner_repo(repo_url):
+    """Extract (owner, repo) from an HTTPS or SSH GitHub remote URL.
+    Returns None if the URL isn't a github.com remote."""
+    m = re.search(r'github\.com[/:]([^/]+)/(.+?)(?:\.git)?$', repo_url)
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
 class GitHubAppClient:
     def __init__(self, owner, repo, token, git_bin):
         self.owner = owner
@@ -67,7 +75,13 @@ class GitHubAppClient:
         self.remote_object_cache = set()
 
     def api_request(self, method, endpoint, data=None):
-        url = f"{self.api_base}/{endpoint}" if not endpoint.startswith("http") else endpoint
+        if endpoint.startswith("http"):
+            url = endpoint
+        elif endpoint:
+            url = f"{self.api_base}/{endpoint}"
+        else:
+            # Empty endpoint → the repo resource itself (no trailing slash).
+            url = self.api_base
         req = urllib.request.Request(url, method=method)
         req.add_header("Authorization", f"Bearer {self.token}")
         req.add_header("Accept", "application/vnd.github+json")
@@ -88,6 +102,36 @@ class GitHubAppClient:
                 body = "(could not read error body)"
             print(f"API error: {e.code} {e.reason}", file=sys.stderr)
             print(body, file=sys.stderr)
+            raise
+
+    def get_default_branch(self):
+        info = self.api_request("GET", "")
+        return info.get("default_branch", "main")
+
+    def create_pull_request(self, head, base, title, body=None, draft=False):
+        """Open a pull request via the REST API using the App identity.
+
+        head/base are branch names (or owner:branch for cross-fork heads).
+        A 403/404 here almost always means the App lacks the `Pull requests:
+        write` permission — git push works with only `Contents: write`, so a
+        working push but failing PR is the classic symptom. We surface that
+        explicitly so the next bot doesn't go installing gh out of confusion.
+        """
+        payload = {"head": head, "base": base, "title": title, "draft": draft}
+        if body is not None:
+            payload["body"] = body
+        try:
+            return self.api_request("POST", "pulls", payload)
+        except urllib.error.HTTPError as e:
+            if e.code in (403, 404):
+                print(
+                    "Hint: PR creation got "
+                    f"{e.code} — does the GitHub App have the 'Pull requests: "
+                    "Read & write' permission, and has the installation "
+                    "accepted it? (git push needs only 'Contents: write', so a "
+                    "working push with a failing PR points straight at this.)",
+                    file=sys.stderr,
+                )
             raise
 
     def _upload_blob(self, sha):

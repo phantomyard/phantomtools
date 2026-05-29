@@ -263,5 +263,67 @@ class TestGhappLib(unittest.TestCase):
         self.assertEqual(repos[1]['full_name'], 'org/repo2')
         self.assertEqual(mock_urlopen.call_count, 2)
 
+    def test_parse_owner_repo(self):
+        cases = {
+            'https://github.com/org/repo.git': ('org', 'repo'),
+            'https://github.com/org/repo': ('org', 'repo'),
+            'git@github.com:org/repo.git': ('org', 'repo'),
+            'https://github.com/org/sub.repo.name.git': ('org', 'sub.repo.name'),
+        }
+        for url, expected in cases.items():
+            self.assertEqual(ghapplib.parse_owner_repo(url), expected, url)
+        self.assertIsNone(ghapplib.parse_owner_repo('https://gitlab.com/org/repo.git'))
+
+    @mock.patch('urllib.request.urlopen')
+    def test_create_pull_request_success(self, mock_urlopen):
+        mock_resp = mock.MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            'number': 7,
+            'html_url': 'https://github.com/org/repo/pull/7',
+        }).encode('utf-8')
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
+        client = ghapplib.GitHubAppClient('org', 'repo', 'token', 'git')
+        resp = client.create_pull_request('feature', 'main', 'My PR', body='hi')
+
+        self.assertEqual(resp['number'], 7)
+        req = mock_urlopen.call_args[0][0]
+        self.assertEqual(req.get_method(), 'POST')
+        self.assertTrue(req.full_url.endswith('/repos/org/repo/pulls'))
+        payload = json.loads(req.data)
+        self.assertEqual(payload['head'], 'feature')
+        self.assertEqual(payload['base'], 'main')
+        self.assertEqual(payload['title'], 'My PR')
+        self.assertEqual(payload['body'], 'hi')
+
+    @mock.patch('sys.stderr', new_callable=io.StringIO)
+    @mock.patch('urllib.request.urlopen')
+    def test_create_pull_request_403_hints_permission(self, mock_urlopen, mock_stderr):
+        """A 403/404 should still raise, but print a clear permission hint so the
+        next bot doesn't go install gh out of confusion."""
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            'url', 403, 'Forbidden', {}, io.BytesIO(b'{}'))
+
+        client = ghapplib.GitHubAppClient('org', 'repo', 'token', 'git')
+        with self.assertRaises(urllib.error.HTTPError):
+            client.create_pull_request('feature', 'main', 'My PR')
+
+        self.assertIn('Pull requests', mock_stderr.getvalue())
+
+    @mock.patch('urllib.request.urlopen')
+    def test_get_default_branch(self, mock_urlopen):
+        mock_resp = mock.MagicMock()
+        mock_resp.read.return_value = json.dumps({'default_branch': 'trunk'}).encode('utf-8')
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
+        client = ghapplib.GitHubAppClient('org', 'repo', 'token', 'git')
+        self.assertEqual(client.get_default_branch(), 'trunk')
+        # Empty endpoint must hit the repo resource with no trailing slash.
+        req = mock_urlopen.call_args[0][0]
+        self.assertTrue(req.full_url.endswith('/repos/org/repo'))
+
+
 if __name__ == '__main__':
     unittest.main()

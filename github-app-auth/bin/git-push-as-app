@@ -8,9 +8,8 @@ Usage: git-push-as-app [remote] [branch]  (defaults to origin HEAD)
 import subprocess
 import sys
 import os
-import re
 import urllib.error
-from ghapplib import get_real_git, run_git, get_token, GitHubAppClient
+from ghapplib import get_real_git, run_git, get_token, GitHubAppClient, parse_owner_repo
 
 GIT = get_real_git(__file__)
 if not GIT:
@@ -51,11 +50,11 @@ def main():
 
     repo_url = run_git(GIT, ["remote", "get-url", remote]).stdout.strip()
 
-    m = re.search(r'github\.com[/:]([^/]+)/(.+?)(?:\.git)?$', repo_url)
-    if not m:
+    parsed = parse_owner_repo(repo_url)
+    if not parsed:
         print(f"Error: could not parse owner/repo from: {repo_url}", file=sys.stderr)
         sys.exit(1)
-    owner, repo = m.group(1), m.group(2)
+    owner, repo = parsed
 
     token = get_token()
     if not token:
