@@ -13,25 +13,20 @@ GitHub App installation tokens (`ghs_*`) do not work over HTTPS git operations. 
 ## Install from source
 
 ```bash
-git clone -b feat/github-app-auth https://github.com/phantomyard/phantomtools.git ~/repos/phantomtools
+git clone https://github.com/phantomyard/phantomtools.git ~/repos/phantomtools
 cd ~/repos/phantomtools/github-app-auth
 ./install.sh
 ```
 
 The repo is public, so no token is needed to clone.
 
-## Quick start
-
-```bash
-cd github-app-auth
-./install.sh
-```
-
 Prerequisites in `~/.env`:
 ```bash
 GITHUB_APP_ID=123456
 GITHUB_APP_PRIVATE_KEY_PATH=/home/you/.ssh/my-app.private-key.pem
 ```
+
+`install.sh` lays down the binaries and the timer regardless, so you can install first and fill in `~/.env` afterwards.
 
 ## How it works
 
@@ -78,12 +73,6 @@ github-token.sh  (JWT → installation token)
   - Installations: read
   - Installed on the target repos
 - The App's private key file on disk
-
-## Install
-
-```bash
-./install.sh
-```
 
 ## Uninstall
 
