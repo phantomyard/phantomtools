@@ -31,9 +31,18 @@ systemctl --user daemon-reload
 
 # --- Unconfigure git ---
 info "Removing git credential helper..."
-current_helper=$(git config --global credential.helper 2>/dev/null || true)
-if [[ "$current_helper" == *"git-credential-github-app"* ]]; then
-    git config --global --unset credential.helper 2>/dev/null || true
+# URL-scoped helper (current install layout): unset only if it still points
+# at our binary — never touch unrelated helpers.
+scoped_helper=$(git config --global credential.https://github.com.helper 2>/dev/null || true)
+if [[ "$scoped_helper" == *"git-credential-github-app"* ]]; then
+    git config --global --unset credential.https://github.com.helper 2>/dev/null || true
+fi
+# Legacy global helper (older installs wrote here): remove just the entry that
+# pointed at our binary so we don't strip the user's osxkeychain/manager-core/…
+if git config --global --get-all credential.helper 2>/dev/null \
+        | grep -q "git-credential-github-app"; then
+    git config --global --unset-all credential.helper '.*git-credential-github-app.*' \
+        2>/dev/null || true
 fi
 
 # --- Clean up token file ---

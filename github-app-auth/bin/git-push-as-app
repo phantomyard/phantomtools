@@ -105,13 +105,47 @@ def main():
         local_sha, remote_sha, remote_known_locally, is_ancestor, branch_exists_remote, force
     )
 
-    if commits is None: # Fast-forward case
-        rev_list = run_git(GIT, ["rev-list", "--topo-order", "--reverse",
-                        f"{remote_sha}..{local_sha}"]).stdout.strip()
+    if commits is None:
+        if remote_sha:
+            # Fast-forward: rev-list between known remote tip and local.
+            rev_args = ["rev-list", "--topo-order", "--reverse",
+                        f"{remote_sha}..{local_sha}"]
+        else:
+            # New branch: rev-list every commit not yet on the remote. We
+            # scope to refs/remotes/<remote>/* so parents resolve to SHAs
+            # the GitHub API will accept as branch points.
+            rev_args = ["rev-list", "--topo-order", "--reverse",
+                        local_sha, "--not", f"--remotes={remote}"]
+        rev_list = run_git(GIT, rev_args).stdout.strip()
         if rev_list:
             commits = rev_list.split("\n")
         else:
             commits = []
+
+        if commits and not remote_sha:
+            # Sanity check: every commit's parents must either be in this push
+            # batch OR already exist on the remote. If we'd be pushing every
+            # ancestor (no shared history known), bail with guidance rather
+            # than silently creating an orphan branch.
+            batch = set(commits)
+            roots = []
+            for c in commits:
+                parent_line = run_git(
+                    GIT, ["log", "-1", "--format=%P", c]
+                ).stdout.strip()
+                if not parent_line:
+                    roots.append(c)
+                    continue
+                for p in parent_line.split():
+                    if p not in batch:
+                        # Parent is expected on the remote — that's fine.
+                        pass
+            if roots:
+                print(f"Error: would push root commit(s) {', '.join(r[:7] for r in roots)} "
+                      f"with no parent on {remote}. Fetch from {remote} first so the "
+                      f"branch point is known locally, or push with --force to accept "
+                      f"an orphan history.", file=sys.stderr)
+                sys.exit(1)
 
     if not commits:
         print("No new commits to push")

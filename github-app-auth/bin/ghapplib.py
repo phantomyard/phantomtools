@@ -167,9 +167,12 @@ def determine_push_strategy(local_sha, remote_sha, remote_known_locally, is_ance
     if branch_exists_remote:
         # Truly divergent
         return ([local_sha], "", True, False)
-        
-    # New branch
-    return ([local_sha], "", False, False)
+
+    # New branch: caller computes the rev-list of commits not yet on the remote
+    # (e.g. `local_sha --not --remotes=<remote>`) and preserves the original
+    # parent chain. Returning ([local_sha], ...) here would push only the tip
+    # commit as an orphan, severing it from main.
+    return (None, "", False, True)
 
 def list_installation_repositories(token):
     url = "https://api.github.com/installation/repositories"

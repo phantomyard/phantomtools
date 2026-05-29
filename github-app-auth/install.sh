@@ -114,8 +114,23 @@ fi
 
 # --- Configure git ---
 info "Configuring git..."
-git config --global credential.helper "!$LOCAL_BIN/git-credential-github-app"
-info "  git credential.helper set"
+
+# Migration: earlier versions of this installer set credential.helper at the
+# global scope, which blew away platform helpers (osxkeychain, manager-core,
+# store, …) for ALL remotes. Remove only the entry that pointed at our helper.
+if git config --global --get-all credential.helper 2>/dev/null \
+        | grep -q "git-credential-github-app"; then
+    git config --global --unset-all credential.helper '.*git-credential-github-app.*' \
+        2>/dev/null || true
+    info "  removed legacy global credential.helper entry"
+fi
+
+# URL-scoped: only intercept credentials for github.com. Other hosts keep
+# whatever helper the user already had configured.
+git config --global --replace-all \
+    credential.https://github.com.helper \
+    "!$LOCAL_BIN/git-credential-github-app"
+info "  git credential.helper set (scoped to https://github.com)"
 
 # --- Test token generation ---
 if [[ $CREDS_OK -eq 1 ]]; then

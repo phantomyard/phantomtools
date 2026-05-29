@@ -46,13 +46,25 @@ class TestPushStrategy(unittest.TestCase):
         self.assertFalse(preserve)
 
     def test_new_branch(self):
+        # New branch: caller must compute the full rev-list of commits not yet
+        # on the remote AND preserve original parents — otherwise we'd push
+        # only the tip as an orphan, disconnected from main.
         commits, parent, force, preserve = determine_push_strategy(
             "L", "", False, False, False, force=False
         )
-        self.assertEqual(commits, ["L"])
+        self.assertIsNone(commits, "caller must do the rev-list itself")
         self.assertEqual(parent, "")
         self.assertFalse(force)
-        self.assertFalse(preserve)
+        self.assertTrue(preserve, "must preserve parents to avoid orphan commits")
+
+    def test_new_branch_never_orphans(self):
+        # Regression guard for the bug Copilot caught: for any new-branch
+        # invocation (force=False), the strategy must signal preserve_parents
+        # so the original parent chain is mapped onto the remote branchpoint.
+        _, _, _, preserve = determine_push_strategy(
+            "L", "", False, False, False, force=False
+        )
+        self.assertTrue(preserve)
 
 if __name__ == '__main__':
     unittest.main()
