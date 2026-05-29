@@ -201,7 +201,7 @@ function getLocaleForLanguage(language) {
 
 // Deepgram speech model per language. English stays on `flux` — it's
 // the lowest-latency model but English-only — so English calls keep the
-// exact snappy behaviour Andrew likes. Every other language uses
+// snappiest turn-taking behaviour. Every other language uses
 // `nova-3-general`, which is multilingual (flux can't do es/nl/fr), so
 // those are a touch less snappy but actually work instead of garbling
 // into English. Switching back to English via switch_language returns
