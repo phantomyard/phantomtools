@@ -91,6 +91,8 @@ list-repos-as-app --clone-urls
 list-repos-as-app --json | jq -r '.[].full_name'
 ```
 
+If [phantombot](https://github.com/phantomyard/phantombot) is installed on this host, `install.sh` automatically captures a hint to its memory so the agent learns about this capability on its next turn — no manual prompting required.
+
 ## Requirements
 
 - `openssl`, `python3`, `curl`, `git`

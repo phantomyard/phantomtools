@@ -128,6 +128,19 @@ else
     info "Skipping token generation test (credentials incomplete)."
 fi
 
+# --- Phantombot memory capture (optional) ---
+# If this host runs phantombot, leave a breadcrumb in its memory so the agent
+# discovers the new capability on its next turn. Silent no-op if phantombot is
+# not installed — this tool stays usable on hosts without it.
+if command -v phantombot &>/dev/null; then
+    info "Capturing capability hint to phantombot memory..."
+    phantombot memory capture \
+      "github-app-auth installed: I can read/write any repo my GitHub App is installed on. Run \`list-repos-as-app\` to discover which repos are accessible (use \`--clone-urls\` for HTTPS URLs, \`--json\` for scripting). Standard \`git clone/fetch/pull/push\` work transparently for those repos via the wrapper in ~/.local/bin/git." \
+      --tag lesson >/dev/null 2>&1 \
+      && info "  hint captured (will surface on next agent turn)" \
+      || warn "  phantombot memory capture failed (non-fatal)"
+fi
+
 # --- Summary ---
 echo ""
 echo -e "${GREEN}✓ github-app-auth installed successfully!${NC}"
