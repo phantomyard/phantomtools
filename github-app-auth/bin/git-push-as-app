@@ -210,6 +210,21 @@ def main():
               + (f" (parents: {', '.join(p[:7] for p in parents)})" if len(parents) > 1 else ""))
 
     if branch_exists_remote:
+        # Concurrency guard: re-read the ref right before moving it. If someone
+        # else advanced the branch while we were uploading objects, our push
+        # strategy (and parent chain) was computed against a stale tip — bail
+        # rather than clobber their work. A real force push (-f) skips this.
+        if not (force or needs_force):
+            try:
+                current = client.api_request("GET", f"git/refs/heads/{branch}")
+                latest_remote_sha = current.get("object", {}).get("sha", "")
+            except urllib.error.HTTPError:
+                latest_remote_sha = remote_sha
+            if latest_remote_sha and latest_remote_sha != remote_sha:
+                print(f"Error: {branch} on {remote} moved from {remote_sha[:7]} to "
+                      f"{latest_remote_sha[:7]} while pushing. Fetch and retry, or "
+                      f"push with --force to override.", file=sys.stderr)
+                sys.exit(1)
         client.api_request("PATCH", f"git/refs/heads/{branch}",
                     {"sha": current_parent, "force": force or needs_force})
     else:

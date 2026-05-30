@@ -7,10 +7,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
-# Load credentials from ~/.env
-set -a
-source ~/.env
-set +a
+# Load credentials from ~/.env (guard the existence check — under `set -u`
+# a missing file would otherwise abort with an opaque error).
+if [[ -f "$HOME/.env" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "$HOME/.env"
+    set +a
+else
+    echo "Error: $HOME/.env not found — cannot load GitHub App credentials" >&2
+    exit 1
+fi
 
 # Generate fresh token
 source "$SCRIPT_DIR/github-token.sh"

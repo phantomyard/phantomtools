@@ -48,6 +48,14 @@ def get_token():
     env_file = os.path.expanduser("~/.github_env")
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token and os.path.exists(env_file):
+        # The token file holds a live credential. If it's group/world-readable
+        # something has loosened the permissions refresh-github-env.sh sets
+        # (umask 077) — refuse to read it rather than trust a leaked token.
+        mode = os.stat(env_file).st_mode
+        if mode & 0o077:
+            print(f"Error: refusing to read {env_file}: permissions are too open "
+                  f"({oct(mode & 0o777)}). Run: chmod 600 {env_file}", file=sys.stderr)
+            return ""
         with open(env_file) as f:
             for line in f:
                 if line.startswith('export GITHUB_TOKEN='):

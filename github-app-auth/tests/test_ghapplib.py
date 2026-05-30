@@ -30,12 +30,36 @@ class TestGhappLib(unittest.TestCase):
             mock_access.return_value = True
             self.assertEqual(ghapplib.get_real_git(), '/usr/bin/git')
 
+    @mock.patch('os.stat')
     @mock.patch('os.path.exists')
     @mock.patch('builtins.open', new_callable=mock.mock_open, read_data='export GITHUB_TOKEN="ghs_test_token"\n')
-    def test_get_token_from_file(self, mock_file, mock_exists):
+    def test_get_token_from_file(self, mock_file, mock_exists, mock_stat):
         mock_exists.return_value = True
+        mock_stat.return_value = mock.Mock(st_mode=0o100600)  # -rw-------
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(ghapplib.get_token(), 'ghs_test_token')
+
+    @mock.patch('sys.stderr', new_callable=io.StringIO)
+    @mock.patch('os.stat')
+    @mock.patch('os.path.exists')
+    @mock.patch('builtins.open', new_callable=mock.mock_open, read_data='export GITHUB_TOKEN="ghs_test_token"\n')
+    def test_get_token_refuses_loose_permissions(self, mock_file, mock_exists, mock_stat, mock_stderr):
+        """A group/world-readable token file is a leak — refuse to read it."""
+        mock_exists.return_value = True
+        mock_stat.return_value = mock.Mock(st_mode=0o100644)  # -rw-r--r--
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(ghapplib.get_token(), '')
+        mock_file.assert_not_called()  # never opened the file
+        self.assertIn('too open', mock_stderr.getvalue())
+
+    @mock.patch('os.stat')
+    @mock.patch('os.path.exists')
+    def test_get_token_prefers_env(self, mock_exists, mock_stat):
+        """An already-exported GITHUB_TOKEN short-circuits the file read."""
+        with mock.patch.dict(os.environ, {'GITHUB_TOKEN': 'ghs_env'}, clear=True):
+            self.assertEqual(ghapplib.get_token(), 'ghs_env')
+        mock_exists.assert_not_called()
+        mock_stat.assert_not_called()
 
     @mock.patch('urllib.request.urlopen')
     def test_api_request_success(self, mock_urlopen):

@@ -69,8 +69,20 @@ mkdir -p "$LOCAL_BIN"
 for bin in "$BIN_DIR"/*; do
     name=$(basename "$bin")
     target="$LOCAL_BIN/$name"
-    if [[ -L "$target" || -f "$target" ]]; then
-        rm -f "$target"
+    if [[ -L "$target" ]]; then
+        # Only reclaim a symlink that already points into this repo's bin dir.
+        # A symlink to somewhere else is someone else's tool — refuse to touch it.
+        current="$(readlink -f "$target" 2>/dev/null || true)"
+        if [[ "$current" == "$(readlink -f "$bin")" || "$current" == "$bin" ]]; then
+            rm -f "$target"
+        elif [[ -z "$current" ]]; then
+            rm -f "$target"  # dangling symlink, safe to replace
+        else
+            die "refusing to overwrite $target — it links to $current, not this repo. Remove it manually if intended."
+        fi
+    elif [[ -e "$target" ]]; then
+        # A real file (not a symlink) with our name — don't silently clobber it.
+        die "refusing to overwrite $target — it's a regular file, not one of our symlinks. Remove it manually if intended."
     fi
     ln -s "$bin" "$target"
     info "  $name → $target"
