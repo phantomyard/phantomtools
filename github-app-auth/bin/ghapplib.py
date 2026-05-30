@@ -271,8 +271,16 @@ def determine_push_strategy(local_sha, remote_sha, remote_known_locally, is_ance
         return (None, remote_sha, False, True) # None means needs rev-list
         
     if branch_exists_remote and not remote_known_locally:
-        # Recreated SHA scenario
-        return (None, remote_sha, False, False)
+        # Recreated-SHA scenario: a previous App-push rebuilt our commits with
+        # new SHAs on the remote, so remote_sha is unknown locally and there is
+        # NO sound local rev-list for "what's new" (no local commit matches a
+        # remote SHA). Returning None would make the caller run
+        # `rev-list remote_sha..local_sha` against a SHA it doesn't have (crash)
+        # or `--not --remotes` which re-pushes the entire history as duplicates.
+        # Instead, push the local tip onto the recreated remote tip: for the
+        # common single-new-commit case this is exactly right; for multiple new
+        # commits it squashes them, which beats crashing or duplicating history.
+        return ([local_sha], remote_sha, False, False)
         
     if branch_exists_remote:
         # Truly divergent

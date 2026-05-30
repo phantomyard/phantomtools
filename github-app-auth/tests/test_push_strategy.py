@@ -26,11 +26,16 @@ class TestPushStrategy(unittest.TestCase):
         self.assertTrue(preserve)
 
     def test_recreated_sha_on_remote(self):
-        # Remote exists but is not known locally (recreated by App)
+        # Remote exists but is not known locally (recreated by an earlier
+        # App-push). There is no sound local rev-list here, so the strategy must
+        # NOT return None — that would make the caller run
+        # `rev-list remote_sha..local_sha` against a SHA it doesn't have (crash)
+        # or re-push the whole history as duplicates. Push the local tip onto
+        # the recreated remote tip instead.
         commits, parent, force, preserve = determine_push_strategy(
             "L", "R", False, False, True, force=False
         )
-        self.assertIsNone(commits)
+        self.assertEqual(commits, ["L"])
         self.assertEqual(parent, "R")
         self.assertFalse(force)
         self.assertFalse(preserve)

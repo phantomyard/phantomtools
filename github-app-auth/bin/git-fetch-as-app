@@ -9,7 +9,6 @@ import subprocess
 import sys
 import os
 import re
-import signal
 from ghapplib import get_real_git, run_git, get_token
 
 GIT = get_real_git(__file__)
@@ -72,33 +71,22 @@ def main():
         print("Error: GITHUB_TOKEN not set", file=sys.stderr)
         sys.exit(1)
 
-    # Clean up stale remotes from prior crashes
-    stale = find_stale_app_fetch_remotes()
-    for name in stale:
+    # Clean up stale remotes left by older versions of this tool (which used a
+    # temporary `git remote add`). Current versions never persist a remote.
+    for name in find_stale_app_fetch_remotes():
         cleanup_remote(name)
 
-    temp_remote = f"__app_fetch_{os.getpid()}"
     auth_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
 
-    def signal_handler(signum, frame):
-        cleanup_remote(temp_remote)
-        # Re-raise default handler
-        import signal as sigmod
-        sigmod.signal(signum, sigmod.SIG_DFL)
-        os.kill(os.getpid(), signum)
-
-    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(sig, signal_handler)
-
-    try:
-        cleanup_remote(temp_remote)
-        subprocess.run([GIT, "remote", "add", temp_remote, auth_url],
-                       capture_output=True, text=True, check=False)
-        refspec = f"+refs/heads/*:refs/remotes/{remote}/*"
-        cmd = [GIT, "fetch", temp_remote, refspec] + extra_args
-        subprocess.run(cmd, check=True)
-    finally:
-        cleanup_remote(temp_remote)
+    # Pass the authenticated URL directly to `git fetch` instead of persisting it
+    # via `git remote add`. A temp remote writes the token into .git/config, and
+    # a SIGKILL between `remote add` and cleanup would leave it on disk. As an
+    # argument the token lives only for the lifetime of the fetch process.
+    # The explicit refspec keeps remotes/<remote>/* tracking refs up to date so
+    # git-pull-as-app and friends see the fetched state.
+    refspec = f"+refs/heads/*:refs/remotes/{remote}/*"
+    cmd = [GIT, "fetch", auth_url, refspec] + extra_args
+    subprocess.run(cmd, check=True)
 
 if __name__ == "__main__":
     main()

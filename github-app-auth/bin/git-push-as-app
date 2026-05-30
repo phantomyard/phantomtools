@@ -105,14 +105,19 @@ def main():
     )
 
     if commits is None:
-        if remote_sha:
-            # Fast-forward: rev-list between known remote tip and local.
+        if remote_known_locally:
+            # Remote tip is a real local object (fast-forward / divergent):
+            # rev-list between the known remote tip and local. Guarding on
+            # remote_known_locally (not just `remote_sha`) keeps us from feeding
+            # `git rev-list` a SHA it doesn't have — e.g. a force push to a
+            # branch whose remote tip was recreated by an earlier App-push.
             rev_args = ["rev-list", "--topo-order", "--reverse",
                         f"{remote_sha}..{local_sha}"]
         else:
-            # New branch: rev-list every commit not yet on the remote. We
-            # scope to refs/remotes/<remote>/* so parents resolve to SHAs
-            # the GitHub API will accept as branch points.
+            # New branch, or a push whose remote tip isn't known locally:
+            # rev-list every commit not yet on the remote. We scope to
+            # refs/remotes/<remote>/* so parents resolve to SHAs the GitHub API
+            # will accept as branch points.
             rev_args = ["rev-list", "--topo-order", "--reverse",
                         local_sha, "--not", f"--remotes={remote}"]
         rev_list = run_git(GIT, rev_args).stdout.strip()
