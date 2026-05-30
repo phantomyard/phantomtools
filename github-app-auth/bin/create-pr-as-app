@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""
+Open a pull request via the GitHub API using the GitHub App identity.
+
+Installation tokens (ghs_*) can't talk to `gh` the usual way, and a bot with
+no gh installed tends to flail. This gives it one clear path.
+
+Usage:
+  create-pr-as-app <title> [--head BRANCH] [--base BRANCH]
+                   [--body TEXT | --body-file FILE]
+                   [--repo owner/repo] [--remote origin] [--draft] [--json]
+
+Defaults: --head = current branch, --base = repo default branch,
+          --repo derived from the remote (origin).
+"""
+
+import sys
+import os
+import json
+import argparse
+import urllib.error
+from ghapplib import (
+    get_real_git, run_git, get_token, GitHubAppClient, parse_owner_repo,
+)
+
+GIT = get_real_git(__file__)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Open a pull request via the GitHub API (App identity).")
+    parser.add_argument("title", help="PR title")
+    parser.add_argument("--head", help="Source branch (default: current branch)")
+    parser.add_argument("--base", help="Target branch (default: repo default branch)")
+    body_group = parser.add_mutually_exclusive_group()
+    body_group.add_argument("--body", help="PR body text")
+    body_group.add_argument("--body-file", help="Read PR body from a file ('-' for stdin)")
+    parser.add_argument("--repo", help="owner/repo (default: derived from the remote)")
+    parser.add_argument("--remote", default="origin",
+                        help="Remote to derive owner/repo from (default: origin)")
+    parser.add_argument("--draft", action="store_true", help="Open as a draft PR")
+    parser.add_argument("--json", action="store_true", help="Print the full API response as JSON")
+    args = parser.parse_args()
+
+    token = get_token()
+    if not token:
+        print("Error: GITHUB_TOKEN not found in environment or ~/.github_env",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Resolve owner/repo: explicit --repo wins, else parse the remote URL.
+    if args.repo:
+        if "/" not in args.repo:
+            print(f"Error: --repo must be owner/repo, got: {args.repo}", file=sys.stderr)
+            sys.exit(1)
+        owner, repo = args.repo.split("/", 1)
+    else:
+        if not GIT:
+            print("Error: could not locate git to read the remote; pass --repo owner/repo",
+                  file=sys.stderr)
+            sys.exit(1)
+        repo_url = run_git(GIT, ["remote", "get-url", args.remote]).stdout.strip()
+        parsed = parse_owner_repo(repo_url)
+        if not parsed:
+            print(f"Error: could not parse owner/repo from: {repo_url}", file=sys.stderr)
+            sys.exit(1)
+        owner, repo = parsed
+
+    # Resolve head branch.
+    head = args.head
+    if not head:
+        if not GIT:
+            print("Error: --head not given and git unavailable to detect current branch",
+                  file=sys.stderr)
+            sys.exit(1)
+        head = run_git(GIT, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+
+    # Resolve body.
+    body = args.body
+    if args.body_file:
+        if args.body_file == "-":
+            body = sys.stdin.read()
+        else:
+            with open(args.body_file) as f:
+                body = f.read()
+
+    client = GitHubAppClient(owner, repo, token, GIT)
+
+    # Resolve base branch (default to the repo's default branch).
+    base = args.base or client.get_default_branch()
+
+    print(f"Opening PR {owner}/{repo}: {head} → {base}...", file=sys.stderr)
+    try:
+        resp = client.create_pull_request(head, base, args.title, body=body, draft=args.draft)
+    except urllib.error.HTTPError:
+        sys.exit(1)
+
+    if args.json:
+        print(json.dumps(resp, indent=2))
+    else:
+        print(resp.get("html_url", f"PR #{resp.get('number', '?')} created"))
+
+
+if __name__ == "__main__":
+    main()

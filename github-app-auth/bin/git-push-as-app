@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""
+Push commits via GitHub API using the GitHub App identity.
+Works around ghs_* tokens not working for git push over HTTPS.
+Usage: git-push-as-app [remote] [branch]  (defaults to origin HEAD)
+"""
+
+import subprocess
+import sys
+import os
+import urllib.error
+from ghapplib import get_real_git, run_git, get_token, GitHubAppClient, parse_owner_repo
+
+GIT = get_real_git(__file__)
+if not GIT:
+    print("Error: could not locate real git binary (set GITHUB_APP_REAL_GIT)",
+          file=sys.stderr)
+    sys.exit(1)
+
+def main():
+    args = sys.argv[1:]
+
+    # Parse flags and positional args
+    force = False
+    dry_run = False
+    remote = None
+    branch = None
+
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-f", "--force"):
+            force = True
+        elif a == "--dry-run":
+            dry_run = True
+        elif a.startswith("-"):
+            pass  # ignore unknown flags
+        elif remote is None:
+            remote = a
+        elif branch is None:
+            branch = a
+        i += 1
+
+    remote = remote or "origin"
+    branch = branch or run_git(GIT, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+
+    if dry_run:
+        print(f"[dry-run] Would push {branch} to {remote}")
+        return
+
+    repo_url = run_git(GIT, ["remote", "get-url", remote]).stdout.strip()
+
+    parsed = parse_owner_repo(repo_url)
+    if not parsed:
+        print(f"Error: could not parse owner/repo from: {repo_url}", file=sys.stderr)
+        sys.exit(1)
+    owner, repo = parsed
+
+    token = get_token()
+    if not token:
+        print("Error: GITHUB_TOKEN not set", file=sys.stderr)
+        sys.exit(1)
+
+    client = GitHubAppClient(owner, repo, token, GIT)
+    print(f"Pushing {branch} to {owner}/{repo} via GitHub API (App identity)...")
+
+    # Get remote SHA
+    remote_sha = ""
+    branch_exists_remote = False
+    try:
+        ref_data = client.api_request("GET", f"git/refs/heads/{branch}")
+        remote_sha = ref_data.get("object", {}).get("sha", "")
+        branch_exists_remote = bool(remote_sha)
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+
+    # Previous App-pushes upload commits via the API, which recreates commit
+    # objects with new SHAs that do NOT exist in the local repo.
+    remote_known_locally = False
+    if remote_sha:
+        try:
+            run_git(GIT, ["cat-file", "-e", remote_sha])
+            remote_known_locally = True
+        except subprocess.CalledProcessError:
+            pass
+
+    local_sha = run_git(GIT, ["rev-parse", branch]).stdout.strip()
+
+    if remote_sha == local_sha and remote_sha:
+        print("Everything up-to-date")
+        return
+
+    is_ancestor = False
+    if remote_known_locally:
+        try:
+            run_git(GIT, ["merge-base", "--is-ancestor", remote_sha, local_sha])
+            is_ancestor = True
+        except subprocess.CalledProcessError:
+            pass
+
+    from ghapplib import determine_push_strategy
+    commits, parent_for_first, needs_force, preserve_parents = determine_push_strategy(
+        local_sha, remote_sha, remote_known_locally, is_ancestor, branch_exists_remote, force
+    )
+
+    if commits is None:
+        if remote_known_locally:
+            # Remote tip is a real local object (fast-forward / divergent):
+            # rev-list between the known remote tip and local. Guarding on
+            # remote_known_locally (not just `remote_sha`) keeps us from feeding
+            # `git rev-list` a SHA it doesn't have — e.g. a force push to a
+            # branch whose remote tip was recreated by an earlier App-push.
+            rev_args = ["rev-list", "--topo-order", "--reverse",
+                        f"{remote_sha}..{local_sha}"]
+        else:
+            # New branch, or a push whose remote tip isn't known locally:
+            # rev-list every commit not yet on the remote. We scope to
+            # refs/remotes/<remote>/* so parents resolve to SHAs the GitHub API
+            # will accept as branch points.
+            rev_args = ["rev-list", "--topo-order", "--reverse",
+                        local_sha, "--not", f"--remotes={remote}"]
+        rev_list = run_git(GIT, rev_args).stdout.strip()
+        if rev_list:
+            commits = rev_list.split("\n")
+        else:
+            commits = []
+
+        if commits and not remote_sha:
+            # Sanity check: every commit's parents must either be in this push
+            # batch OR already exist on the remote. If we'd be pushing every
+            # ancestor (no shared history known), bail with guidance rather
+            # than silently creating an orphan branch.
+            batch = set(commits)
+            roots = []
+            for c in commits:
+                parent_line = run_git(
+                    GIT, ["log", "-1", "--format=%P", c]
+                ).stdout.strip()
+                if not parent_line:
+                    roots.append(c)
+                    continue
+                for p in parent_line.split():
+                    if p not in batch:
+                        # Parent is expected on the remote — that's fine.
+                        pass
+            if roots:
+                print(f"Error: would push root commit(s) {', '.join(r[:7] for r in roots)} "
+                      f"with no parent on {remote}. Fetch from {remote} first so the "
+                      f"branch point is known locally, or push with --force to accept "
+                      f"an orphan history.", file=sys.stderr)
+                sys.exit(1)
+
+    if not commits:
+        print("No new commits to push")
+        return
+
+    print(f"Pushing {len(commits)} commit(s)...")
+
+    sha_map = {}
+    if remote_sha:
+        sha_map[remote_sha] = remote_sha
+
+    current_parent = parent_for_first
+    for commit_sha in commits:
+        tree_sha = run_git(GIT, ["rev-parse", f"{commit_sha}^{{tree}}"]).stdout.strip()
+        msg = run_git(GIT, ["log", "-1", "--format=%B", commit_sha]).stdout.strip()
+        author_name = run_git(GIT, ["log", "-1", "--format=%an", commit_sha]).stdout.strip()
+        author_email = run_git(GIT, ["log", "-1", "--format=%ae", commit_sha]).stdout.strip()
+        author_date = run_git(GIT, ["log", "-1", "--format=%aI", commit_sha]).stdout.strip()
+        committer_name = run_git(GIT, ["log", "-1", "--format=%cn", commit_sha]).stdout.strip()
+        committer_email = run_git(GIT, ["log", "-1", "--format=%ce", commit_sha]).stdout.strip()
+        committer_date = run_git(GIT, ["log", "-1", "--format=%cI", commit_sha]).stdout.strip()
+
+        # Use the first parent's tree as an incremental base when possible.
+        # Its content (hence tree SHA) is identical on the remote — the parent
+        # is either the remote branch point or a commit we just pushed — so
+        # upload_tree only has to send the blobs that actually changed.
+        orig_parents = run_git(GIT, ["log", "-1", "--format=%P", commit_sha]).stdout.strip().split()
+        base_tree_sha = None
+        if orig_parents:
+            try:
+                base_tree_sha = run_git(
+                    GIT, ["rev-parse", f"{orig_parents[0]}^{{tree}}"]
+                ).stdout.strip()
+            except subprocess.CalledProcessError:
+                base_tree_sha = None
+
+        print(f"  Uploading tree for {commit_sha[:7]}...")
+        new_tree_sha = client.upload_tree(tree_sha, base_tree_sha)
+
+        if preserve_parents:
+            parents = [sha_map.get(p, p) for p in orig_parents]
+        else:
+            parents = [current_parent] if current_parent else []
+
+        commit_data = {
+            "message": msg,
+            "tree": new_tree_sha,
+            "parents": parents,
+            "author": {"name": author_name, "email": author_email, "date": author_date},
+            "committer": {"name": committer_name, "email": committer_email, "date": committer_date},
+        }
+
+        commit_resp = client.api_request("POST", "git/commits", commit_data)
+        new_sha = commit_resp["sha"]
+        sha_map[commit_sha] = new_sha
+        current_parent = new_sha
+        print(f"  Created commit {new_sha[:7]}"
+              + (f" (parents: {', '.join(p[:7] for p in parents)})" if len(parents) > 1 else ""))
+
+    if branch_exists_remote:
+        # Concurrency guard: re-read the ref right before moving it. If someone
+        # else advanced the branch while we were uploading objects, our push
+        # strategy (and parent chain) was computed against a stale tip — bail
+        # rather than clobber their work. A real force push (-f) skips this.
+        if not (force or needs_force):
+            try:
+                current = client.api_request("GET", f"git/refs/heads/{branch}")
+                latest_remote_sha = current.get("object", {}).get("sha", "")
+            except urllib.error.HTTPError:
+                latest_remote_sha = remote_sha
+            if latest_remote_sha and latest_remote_sha != remote_sha:
+                print(f"Error: {branch} on {remote} moved from {remote_sha[:7]} to "
+                      f"{latest_remote_sha[:7]} while pushing. Fetch and retry, or "
+                      f"push with --force to override.", file=sys.stderr)
+                sys.exit(1)
+        client.api_request("PATCH", f"git/refs/heads/{branch}",
+                    {"sha": current_parent, "force": force or needs_force})
+    else:
+        client.api_request("POST", "git/refs",
+                    {"ref": f"refs/heads/{branch}", "sha": current_parent})
+
+    print(f"Pushed {branch} → {current_parent[:7]}")
+
+if __name__ == "__main__":
+    main()

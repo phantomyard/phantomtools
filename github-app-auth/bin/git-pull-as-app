@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# =============================================================================
+# git-pull via GitHub App auth for GitHub repos
+# Fetch via API auth, then merge/rebase normally
+# =============================================================================
+set -euo pipefail
+
+# Use the real git binary, bypassing the wrapper (which would re-enter
+# git-pull-as-app on every `git pull` and recurse). REAL_GIT is exported
+# by the wrapper; fall back to /usr/bin/git or $GITHUB_APP_REAL_GIT.
+REAL_GIT="${REAL_GIT:-${GITHUB_APP_REAL_GIT:-/usr/bin/git}}"
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+# Parse remote from args (first non-flag)
+remote="origin"
+for arg in "$@"; do
+    case "$arg" in
+        -*) continue ;;
+    esac
+    remote="$arg"
+    break
+done
+
+# Build the argument list for the fetch step. `git pull` accepts merge/rebase
+# flags that `git fetch` does not understand (e.g. --rebase, --ff-only); passing
+# them straight through makes `git fetch --rebase` fail. Strip the pull-only
+# flags here and forward only what fetch actually accepts.
+fetch_args=()
+skip_next=false
+for arg in "$@"; do
+    if [ "$skip_next" = true ]; then
+        skip_next=false
+        continue
+    fi
+    case "$arg" in
+        # Pull-only flags that take a separate value argument — drop both.
+        -s|--strategy|-X|--strategy-option|-m|--message|-S|--gpg-sign)
+            skip_next=true
+            continue ;;
+        # Pull-only valued flags written as --flag=value — drop in one go.
+        --strategy=*|--strategy-option=*|--message=*|--gpg-sign=*)
+            continue ;;
+        # Pull-only boolean flags — meaningful to merge/rebase, not to fetch.
+        -r|--rebase|--rebase=*|--no-rebase|--ff|--no-ff|--ff-only|\
+        --autostash|--no-autostash|--squash|--no-squash|--commit|--no-commit|\
+        --log|--log=*|--no-log|--signoff|--no-signoff|--allow-unrelated-histories|\
+        --verify-signatures|--no-verify-signatures)
+            continue ;;
+    esac
+    fetch_args+=("$arg")
+done
+
+# Fetch via app auth (only fetch-safe args)
+"$SCRIPT_DIR/git-fetch-as-app" "${fetch_args[@]}"
+
+# Determine if --rebase was passed
+rebase=false
+for arg in "$@"; do
+    if [[ "$arg" == "--rebase" ]]; then
+        rebase=true
+        break
+    fi
+done
+
+# Get upstream branch
+branch=$("$REAL_GIT" rev-parse --abbrev-ref HEAD)
+upstream=$("$REAL_GIT" rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2>/dev/null || true)
+
+if [ -z "$upstream" ]; then
+    upstream="${remote}/${branch}"
+fi
+
+if [ "$rebase" = true ]; then
+    exec "$REAL_GIT" rebase "$upstream"
+else
+    exec "$REAL_GIT" merge "$upstream"
+fi

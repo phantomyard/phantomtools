@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""
+List repositories accessible to the GitHub App installation.
+Usage: list-repos-as-app [--json] [--clone-urls]
+"""
+
+import sys
+import json
+import argparse
+from ghapplib import get_token, list_installation_repositories
+
+def main():
+    parser = argparse.ArgumentParser(description="List repositories accessible to the GitHub App installation.")
+    parser.add_argument("--json", action="store_true", help="Output as JSON")
+    parser.add_argument("--clone-urls", action="store_true", help="Output only clone URLs")
+    args = parser.parse_args()
+
+    token = get_token()
+    if not token:
+        print("Error: GITHUB_TOKEN not found in environment or ~/.github_env", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        repos = list_installation_repositories(token)
+    except Exception as e:
+        # Error already printed to stderr in ghapplib if it was an HTTPError
+        sys.exit(1)
+
+    if args.json:
+        print(json.dumps(repos, indent=2))
+    elif args.clone_urls:
+        for repo in repos:
+            print(repo["clone_url"])
+    else:
+        # Default tab-separated output: full_name visibility permissions
+        for repo in repos:
+            perms = repo.get("permissions", {})
+            perm_str = ",".join(k for k, v in perms.items() if v)
+            print(f"{repo['full_name']}\t{repo.get('visibility', 'unknown')}\t{perm_str}")
+
+if __name__ == "__main__":
+    main()

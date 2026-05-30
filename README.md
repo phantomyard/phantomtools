@@ -9,6 +9,7 @@ deps, and license.
 | Path                                        | What it is                                                              |
 |---------------------------------------------|-------------------------------------------------------------------------|
 | [`twilio-voice-agent/`](./twilio-voice-agent) | Twilio ConversationRelay-based voice agent — inbound + outbound calls, low-latency LLM, optional back-end assistant relay. |
+| [`github-app-auth/`](./github-app-auth) | GitHub App authentication for `git push` / `fetch` / `pull` — wraps the GitHub API so App installation tokens work transparently. |
 
 ## License
 

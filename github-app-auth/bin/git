@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# =============================================================================
+# git wrapper — routes fetch/pull/push for GitHub remotes through App-auth variants
+# Falls back to /usr/bin/git for everything else
+#
+# Install: place earlier in $PATH than system git (e.g. ~/.local/bin/git)
+# =============================================================================
+set -euo pipefail
+
+# Exported so child scripts (git-fetch-as-app, git-push-as-app, git-pull-as-app)
+# can bypass this wrapper and avoid recursion. Override with GITHUB_APP_REAL_GIT
+# if /usr/bin/git is not the canonical path (e.g. /opt/homebrew/bin/git on macOS).
+export REAL_GIT="${GITHUB_APP_REAL_GIT:-/usr/bin/git}"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+subcmd="${1:-}"
+shift 2>/dev/null || true
+
+get_remote_from_args() {
+    local default_remote="${1:-origin}"
+    for arg in "$@"; do
+        case "$arg" in
+            -*) continue ;;
+        esac
+        echo "$arg"
+        return
+    done
+    echo "$default_remote"
+}
+
+# Only intercept when a GitHub App installation token (ghs_*) is actually
+# loadable. PATs (ghp_*, github_pat_*), SSH remotes, and missing tokens fall
+# through to the real git: the standard credential helper / ssh-agent handles
+# them correctly without the App-API detour.
+has_ghs_token() {
+    case "${GITHUB_TOKEN:-}" in
+        ghs_*) return 0 ;;
+    esac
+    if [[ -f "$HOME/.github_env" ]] \
+            && grep -q '^export GITHUB_TOKEN="ghs_' "$HOME/.github_env" 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+case "$subcmd" in
+    fetch|pull|push)
+        remote=$(get_remote_from_args "$@")
+        url=$("$REAL_GIT" remote get-url "$remote" 2>/dev/null || true)
+        # HTTPS GitHub remotes are the only ones that need the App-API path
+        # (SSH bypasses credential helpers entirely). And even then, only when
+        # a ghs_* token is around — otherwise the user has a PAT or no token,
+        # and plain git handles that fine.
+        if [[ "$url" == https://*github.com/* ]] && has_ghs_token; then
+            exec "${SCRIPT_DIR}/git-${subcmd}-as-app" "$@"
+        fi
+        ;;
+esac
+
+exec "$REAL_GIT" "$subcmd" "$@"

@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh GitHub App token every 50 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=50min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
