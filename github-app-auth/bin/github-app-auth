@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""
+github-app-auth — control & diagnostics for the GitHub App auth tooling.
+
+Subcommands:
+  doctor    Run health checks and, per failure, print the exact fix.
+  refresh   Force a token refresh now (runs refresh-github-env.sh).
+
+`doctor` exists so "use the wrapper!" is an actual command: one place that
+answers "is my token alive, has it expired, is the timer running, can I reach
+the API?" — instead of a bot rediscovering a dead token via a 401 loop.
+"""
+
+import sys
+import os
+import json
+import argparse
+import platform
+import subprocess
+import urllib.request
+import urllib.error
+from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from ghapplib import (  # noqa: E402
+    get_token, get_token_expiry, refresh_token,
+)
+
+TIMER_UNIT = "github-app-auth-refresh.timer"
+ENV_FILE = os.path.expanduser("~/.github_env")
+
+# ANSI markers, dropped automatically when stdout isn't a TTY.
+_TTY = sys.stdout.isatty()
+def _c(code, text):
+    return f"\033[{code}m{text}\033[0m" if _TTY else text
+
+PASS = _c("32", "PASS")
+WARN = _c("33", "WARN")
+FAIL = _c("31", "FAIL")
+
+
+class Doctor:
+    def __init__(self):
+        self.failed = False
+        self.warned = False
+
+    def ok(self, label, detail=""):
+        print(f"  [{PASS}] {label}" + (f" — {detail}" if detail else ""))
+
+    def warn(self, label, detail, fix):
+        self.warned = True
+        print(f"  [{WARN}] {label} — {detail}")
+        print(f"         fix: {fix}")
+
+    def fail(self, label, detail, fix):
+        self.failed = True
+        print(f"  [{FAIL}] {label} — {detail}")
+        print(f"         fix: {fix}")
+
+
+def read_env_value(name):
+    """Return the value of `name` from the process env, else from ~/.env.
+    Used for config checks (GITHUB_APP_ID etc.) — not for the token, which
+    ghapplib reads with its own permission guard."""
+    val = os.environ.get(name, "")
+    if val:
+        return val
+    env_file = os.path.expanduser("~/.env")
+    if os.path.exists(env_file):
+        try:
+            with open(env_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("export "):
+                        line = line[len("export "):]
+                    if line.startswith(name + "="):
+                        v = line.split("=", 1)[1].strip()
+                        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                            v = v[1:-1]
+                        return v
+        except OSError:
+            pass
+    return ""
+
+
+def check_config(doc):
+    app_id = read_env_value("GITHUB_APP_ID")
+    key_path = read_env_value("GITHUB_APP_PRIVATE_KEY_PATH")
+    if not app_id:
+        doc.fail("App config", "GITHUB_APP_ID not set",
+                 "add GITHUB_APP_ID=<id> to ~/.env")
+    else:
+        doc.ok("App ID", app_id)
+    if not key_path:
+        doc.fail("App config", "GITHUB_APP_PRIVATE_KEY_PATH not set",
+                 "add GITHUB_APP_PRIVATE_KEY_PATH=/path/to/key.pem to ~/.env")
+    elif not os.path.isfile(os.path.expanduser(key_path)):
+        doc.fail("Private key", f"file not found at {key_path}",
+                 f"place the App private key at {key_path}, or fix the path in ~/.env")
+    else:
+        doc.ok("Private key", key_path)
+
+
+def check_token_file_perms(doc):
+    if not os.path.exists(ENV_FILE):
+        # Not necessarily fatal: the token may live only in the process env.
+        doc.warn("Token file", f"{ENV_FILE} does not exist",
+                 f"run `github-app-auth refresh` (or wait for {TIMER_UNIT})")
+        return
+    mode = os.stat(ENV_FILE).st_mode
+    if mode & 0o077:
+        doc.fail("Token file perms", f"{oct(mode & 0o777)} is group/world-readable",
+                 f"chmod 600 {ENV_FILE}")
+    else:
+        doc.ok("Token file perms", oct(mode & 0o777))
+
+
+def check_token_present(doc):
+    token = get_token()
+    if not token:
+        doc.fail("Token", "no usable GITHUB_TOKEN (env or ~/.github_env)",
+                 "run `github-app-auth refresh`")
+        return None
+    doc.ok("Token", f"present ({token[:4]}…, {len(token)} chars)")
+    return token
+
+
+def check_token_expiry(doc):
+    exp = get_token_expiry()
+    if exp is None:
+        doc.warn("Token expiry", "unknown (env file predates expiry tracking)",
+                 "run `github-app-auth refresh` to write an expiry-stamped token")
+        return
+    now = datetime.now(timezone.utc)
+    secs = (exp - now).total_seconds()
+    if secs <= 0:
+        doc.fail("Token expiry", f"expired {exp.isoformat()}",
+                 "run `github-app-auth refresh`")
+    elif secs <= 300:
+        doc.warn("Token expiry", f"expires in {int(secs)}s ({exp.isoformat()})",
+                 f"refresh soon, or check {TIMER_UNIT} is firing")
+    else:
+        mins = int(secs // 60)
+        doc.ok("Token expiry", f"valid for ~{mins} min (until {exp.isoformat()})")
+
+
+def check_timer(doc):
+    if platform.system() == "Darwin":
+        doc.warn("Refresh timer", "no systemd on macOS — token won't auto-refresh",
+                 "refresh manually with `github-app-auth refresh`, or run it from cron/launchd")
+        return
+    try:
+        res = subprocess.run(
+            ["systemctl", "--user", "is-active", TIMER_UNIT],
+            capture_output=True, text=True)
+    except FileNotFoundError:
+        doc.warn("Refresh timer", "systemctl not found",
+                 "ensure systemd is available, or refresh manually")
+        return
+    state = res.stdout.strip()
+    if state == "active":
+        doc.ok("Refresh timer", f"{TIMER_UNIT} active")
+    else:
+        doc.fail("Refresh timer", f"{TIMER_UNIT} is '{state or 'inactive'}'",
+                 f"systemctl --user enable --now {TIMER_UNIT}")
+
+
+def check_api(doc, token):
+    if not token:
+        doc.warn("API reachability", "skipped (no token)",
+                 "fix the token first, then re-run doctor")
+        return
+    req = urllib.request.Request("https://api.github.com/rate_limit")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        core = data.get("resources", {}).get("core", {})
+        doc.ok("API reachability",
+               f"200 OK (core rate limit {core.get('remaining', '?')}/{core.get('limit', '?')})")
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            doc.fail("API reachability", "401 — token rejected by GitHub",
+                     "run `github-app-auth refresh` (token is dead or rotated)")
+        else:
+            doc.fail("API reachability", f"{e.code} {e.reason}",
+                     "check App permissions / installation, then re-run doctor")
+    except urllib.error.URLError as e:
+        doc.fail("API reachability", f"network error: {e.reason}",
+                 "check connectivity / DNS to api.github.com")
+
+
+def cmd_doctor(args):
+    print("github-app-auth doctor")
+    doc = Doctor()
+    check_config(doc)
+    check_token_file_perms(doc)
+    token = check_token_present(doc)
+    check_token_expiry(doc)
+    check_timer(doc)
+    check_api(doc, token)
+    print()
+    if doc.failed:
+        print(_c("31", "doctor: problems found (see fixes above)"))
+        return 1
+    if doc.warned:
+        print(_c("33", "doctor: ok with warnings"))
+        return 0
+    print(_c("32", "doctor: all checks passed"))
+    return 0
+
+
+def cmd_refresh(args):
+    token = refresh_token()
+    if not token:
+        print("refresh failed (see errors above)", file=sys.stderr)
+        return 1
+    exp = get_token_expiry()
+    when = f" (expires {exp.isoformat()})" if exp else ""
+    print(f"token refreshed{when}")
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="github-app-auth",
+        description="Control & diagnostics for GitHub App authentication.")
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("doctor", help="Run health checks with concrete fixes.")
+    sub.add_parser("refresh", help="Force a token refresh now.")
+    args = parser.parse_args()
+
+    if args.command == "doctor":
+        sys.exit(cmd_doctor(args))
+    elif args.command == "refresh":
+        sys.exit(cmd_refresh(args))
+    else:
+        parser.print_help()
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

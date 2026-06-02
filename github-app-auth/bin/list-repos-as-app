@@ -7,7 +7,7 @@ Usage: list-repos-as-app [--json] [--clone-urls]
 import sys
 import json
 import argparse
-from ghapplib import get_token, list_installation_repositories
+from ghapplib import ensure_token, list_installation_repositories
 
 def main():
     parser = argparse.ArgumentParser(description="List repositories accessible to the GitHub App installation.")
@@ -15,7 +15,7 @@ def main():
     parser.add_argument("--clone-urls", action="store_true", help="Output only clone URLs")
     args = parser.parse_args()
 
-    token = get_token()
+    token = ensure_token()
     if not token:
         print("Error: GITHUB_TOKEN not found in environment or ~/.github_env", file=sys.stderr)
         sys.exit(1)

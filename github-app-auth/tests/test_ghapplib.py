@@ -349,5 +349,146 @@ class TestGhappLib(unittest.TestCase):
         self.assertTrue(req.full_url.endswith('/repos/org/repo'))
 
 
+class TestSelfHeal(unittest.TestCase):
+    """Token expiry tracking + the one-shot refresh-on-401 self-heal."""
+
+    def test_get_token_expiry_from_env(self):
+        with mock.patch.dict(os.environ,
+                             {'GITHUB_TOKEN_EXPIRES_AT': '2030-01-01T00:00:00Z'},
+                             clear=True):
+            exp = ghapplib.get_token_expiry()
+        self.assertIsNotNone(exp)
+        self.assertEqual(exp.year, 2030)
+        # 'Z' must be parsed as UTC, not dropped.
+        self.assertIsNotNone(exp.tzinfo)
+
+    def test_get_token_expiry_unknown(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch('os.path.exists', return_value=False):
+                self.assertIsNone(ghapplib.get_token_expiry())
+
+    def test_get_token_expiry_bad_value(self):
+        with mock.patch.dict(os.environ,
+                             {'GITHUB_TOKEN_EXPIRES_AT': 'not-a-date'},
+                             clear=True):
+            self.assertIsNone(ghapplib.get_token_expiry())
+
+    def test_token_is_expired_past(self):
+        with mock.patch.dict(os.environ,
+                             {'GITHUB_TOKEN_EXPIRES_AT': '2000-01-01T00:00:00Z'},
+                             clear=True):
+            self.assertTrue(ghapplib.token_is_expired())
+
+    def test_token_is_expired_future(self):
+        with mock.patch.dict(os.environ,
+                             {'GITHUB_TOKEN_EXPIRES_AT': '2999-01-01T00:00:00Z'},
+                             clear=True):
+            self.assertFalse(ghapplib.token_is_expired())
+
+    def test_token_is_expired_unknown_is_false(self):
+        """Unknown expiry must NOT trigger a refresh — we don't act on a hunch."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch('os.path.exists', return_value=False):
+                self.assertFalse(ghapplib.token_is_expired())
+
+    @mock.patch('ghapplib.get_token', return_value='ghs_fresh')
+    @mock.patch('ghapplib.subprocess.run')
+    @mock.patch('os.access', return_value=True)
+    @mock.patch('os.path.isfile', return_value=True)
+    def test_refresh_token_success(self, _isfile, _access, mock_run, _get):
+        with mock.patch.dict(os.environ, {'GITHUB_TOKEN': 'stale'}, clear=True):
+            token = ghapplib.refresh_token()
+            # Stale process env must be cleared so get_token reads fresh.
+            self.assertNotIn('GITHUB_TOKEN', os.environ)
+        self.assertEqual(token, 'ghs_fresh')
+        mock_run.assert_called_once()
+
+    @mock.patch('os.path.isfile', return_value=False)
+    def test_refresh_token_missing_script(self, _isfile):
+        self.assertEqual(ghapplib.refresh_token(), '')
+
+    @mock.patch('ghapplib.refresh_token')
+    @mock.patch('ghapplib.get_token', return_value='')
+    @mock.patch('ghapplib.token_is_expired', return_value=False)
+    def test_ensure_token_refreshes_when_empty(self, _exp, _get, mock_refresh):
+        mock_refresh.return_value = 'ghs_new'
+        self.assertEqual(ghapplib.ensure_token(), 'ghs_new')
+        mock_refresh.assert_called_once()
+
+    @mock.patch('ghapplib.refresh_token')
+    @mock.patch('ghapplib.get_token', return_value='ghs_old')
+    @mock.patch('ghapplib.token_is_expired', return_value=True)
+    def test_ensure_token_refreshes_when_expired(self, _exp, _get, mock_refresh):
+        mock_refresh.return_value = 'ghs_new'
+        self.assertEqual(ghapplib.ensure_token(), 'ghs_new')
+        mock_refresh.assert_called_once()
+
+    @mock.patch('ghapplib.refresh_token')
+    @mock.patch('ghapplib.get_token', return_value='ghs_live')
+    @mock.patch('ghapplib.token_is_expired', return_value=False)
+    def test_ensure_token_no_refresh_when_healthy(self, _exp, _get, mock_refresh):
+        self.assertEqual(ghapplib.ensure_token(), 'ghs_live')
+        mock_refresh.assert_not_called()
+
+    @mock.patch('ghapplib.refresh_token', return_value='ghs_new')
+    @mock.patch('urllib.request.urlopen')
+    def test_api_request_refreshes_on_401(self, mock_urlopen, mock_refresh):
+        err = urllib.error.HTTPError('url', 401, 'Unauthorized', {}, io.BytesIO(b'{}'))
+        ok = mock.MagicMock()
+        ok.read.return_value = json.dumps({'ok': True}).encode('utf-8')
+        ok.__enter__.return_value = ok
+        mock_urlopen.side_effect = [err, ok]
+
+        client = ghapplib.GitHubAppClient('o', 'r', 'ghs_dead', 'git')
+        resp = client.api_request('GET', '')
+
+        self.assertEqual(resp['ok'], True)
+        mock_refresh.assert_called_once()
+        # Client adopted the refreshed token, and the retry carried it.
+        self.assertEqual(client.token, 'ghs_new')
+        retry_req = mock_urlopen.call_args_list[-1][0][0]
+        self.assertEqual(retry_req.get_header('Authorization'), 'Bearer ghs_new')
+
+    @mock.patch('ghapplib.refresh_token', return_value='')
+    @mock.patch('urllib.request.urlopen')
+    def test_api_request_401_refresh_fails_raises(self, mock_urlopen, mock_refresh):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            'url', 401, 'Unauthorized', {}, io.BytesIO(b'{}'))
+        client = ghapplib.GitHubAppClient('o', 'r', 'ghs_dead', 'git')
+        with self.assertRaises(urllib.error.HTTPError):
+            client.api_request('GET', '')
+        mock_refresh.assert_called_once()
+
+    @mock.patch('ghapplib.refresh_token')
+    @mock.patch('urllib.request.urlopen')
+    def test_api_request_403_does_not_refresh(self, mock_urlopen, mock_refresh):
+        """403 is a permission problem — refreshing the token won't help, so
+        the narrow self-heal must leave it alone."""
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            'url', 403, 'Forbidden', {}, io.BytesIO(b'{}'))
+        client = ghapplib.GitHubAppClient('o', 'r', 'ghs_live', 'git')
+        with self.assertRaises(urllib.error.HTTPError):
+            client.api_request('GET', '')
+        mock_refresh.assert_not_called()
+
+    @mock.patch('ghapplib.refresh_token', return_value='ghs_new')
+    @mock.patch('urllib.request.urlopen')
+    def test_list_repos_refreshes_on_401(self, mock_urlopen, mock_refresh):
+        err = urllib.error.HTTPError('url', 401, 'Unauthorized', {}, io.BytesIO(b'{}'))
+        ok = mock.MagicMock()
+        ok.read.return_value = json.dumps(
+            {'repositories': [{'full_name': 'o/r'}]}).encode('utf-8')
+        ok.headers = {}
+        ok.__enter__.return_value = ok
+        mock_urlopen.side_effect = [err, ok]
+
+        repos = ghapplib.list_installation_repositories('ghs_dead')
+
+        self.assertEqual(repos[0]['full_name'], 'o/r')
+        mock_refresh.assert_called_once()
+        retry_req = mock_urlopen.call_args_list[-1][0][0]
+        self.assertEqual(retry_req.get_header('Authorization'), 'Bearer ghs_new')
+
+
 if __name__ == '__main__':
     unittest.main()

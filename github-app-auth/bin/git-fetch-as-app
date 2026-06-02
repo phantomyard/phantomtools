@@ -9,7 +9,7 @@ import subprocess
 import sys
 import os
 import re
-from ghapplib import get_real_git, run_git, get_token
+from ghapplib import get_real_git, run_git, ensure_token
 
 GIT = get_real_git(__file__)
 if not GIT:
@@ -66,7 +66,7 @@ def main():
         os.execv(GIT, [GIT, "fetch"] + sys.argv[1:])
 
     owner, repo = m.group(1), m.group(2)
-    token = get_token()
+    token = ensure_token()
     if not token:
         print("Error: GITHUB_TOKEN not set", file=sys.stderr)
         sys.exit(1)
