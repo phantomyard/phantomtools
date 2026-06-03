@@ -409,6 +409,50 @@ def force_push_to_default_blocked(branch, default_branch, force, needs_force,
         return False
     return branch == default_branch
 
+def ensure_user_systemd_env(env=None, runtime_dir=None, uid=None, dir_exists=None):
+    """Make the user-level systemd bus reachable for `systemctl --user`.
+
+    In a non-login session (a bot, a `sudo su -` shell) PAM does not set
+    XDG_RUNTIME_DIR, so `systemctl --user` can't find the D-Bus socket and
+    every timer check fails — the manual `export XDG_RUNTIME_DIR=/run/user/$(id -u)`
+    dance. Mirror what phantombot does: if XDG_RUNTIME_DIR is already set, leave
+    it alone; otherwise derive /run/user/<uid> and, when that dir exists (linger
+    is on), set XDG_RUNTIME_DIR + DBUS_SESSION_BUS_ADDRESS so spawned
+    subprocesses inherit a working bus. If the dir is missing, linger isn't
+    enabled — report the reason with the fix instead of guessing.
+
+    Returns (ready, auto_set, runtime_dir, reason). Params are injectable so the
+    decision stays unit-testable without touching the host's real /run/user.
+    """
+    if env is None:
+        env = os.environ
+    if dir_exists is None:
+        dir_exists = os.path.isdir
+
+    if env.get("XDG_RUNTIME_DIR"):
+        return (True, False, env["XDG_RUNTIME_DIR"], None)
+
+    if uid is None:
+        getuid = getattr(os, "getuid", None)
+        if getuid is None:
+            return (False, False, None,
+                    "cannot determine uid (os.getuid unavailable — non-POSIX?)")
+        uid = getuid()
+
+    if runtime_dir is None:
+        runtime_dir = f"/run/user/{uid}"
+
+    if not dir_exists(runtime_dir):
+        user = env.get("USER", "$USER")
+        return (False, False, None,
+                f"{runtime_dir} does not exist — enable linger first: "
+                f"sudo loginctl enable-linger {user}")
+
+    env["XDG_RUNTIME_DIR"] = runtime_dir
+    if not env.get("DBUS_SESSION_BUS_ADDRESS"):
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={runtime_dir}/bus"
+    return (True, True, runtime_dir, None)
+
 def list_installation_repositories(token, _allow_refresh=True):
     url = "https://api.github.com/installation/repositories"
     repos = []

@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from ghapplib import (  # noqa: E402
-    get_token, get_token_expiry, refresh_token,
+    get_token, get_token_expiry, refresh_token, ensure_user_systemd_env,
 )
 
 TIMER_UNIT = "github-app-auth-refresh.timer"
@@ -148,6 +148,14 @@ def check_timer(doc):
     if platform.system() == "Darwin":
         doc.warn("Refresh timer", "no systemd on macOS — token won't auto-refresh",
                  "refresh manually with `github-app-auth refresh`, or run it from cron/launchd")
+        return
+    # In a non-login session (bot, `sudo su -`) XDG_RUNTIME_DIR is unset, so
+    # `systemctl --user` can't reach the bus and would report a false inactive.
+    # Set it up first (idempotent); if linger isn't on, say so with the fix.
+    ready, auto_set, _runtime_dir, reason = ensure_user_systemd_env()
+    if not ready:
+        doc.warn("Refresh timer", f"can't reach user systemd bus — {reason}",
+                 "enable linger (see fix above), then re-run doctor")
         return
     try:
         res = subprocess.run(

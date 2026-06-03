@@ -148,6 +148,14 @@ github-app-auth refresh
 
 `doctor` exits non-zero if anything is broken, so it drops straight into scripts and CI. Most token trouble self-heals (a `401` triggers one refresh-and-retry, and a missing/expired token is refreshed before use), but `doctor` is the fast way to confirm *why* something failed instead of guessing.
 
+### Non-login sessions (`systemctl --user` and the bus)
+
+`systemctl --user` needs `XDG_RUNTIME_DIR` to find the D-Bus socket. In a non-login session — a bot, or a shell reached via `sudo su -` — PAM doesn't set it, so the refresh timer looks dead and the manual workaround is `export XDG_RUNTIME_DIR=/run/user/$(id -u)`. Both `install.sh` and `github-app-auth doctor` now derive this automatically from `/run/user/<uid>` when user **linger** is enabled, so the export is no longer needed. If linger is off, the runtime dir doesn't exist and you'll be told to enable it:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
 ## Requirements
 
 - `openssl`, `python3`, `curl`, `git`

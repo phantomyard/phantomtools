@@ -113,15 +113,35 @@ mkdir -p "$USER_SYSTEMD"
 cp "$SYSTEMD_DIR/github-app-auth-refresh.timer" "$USER_SYSTEMD/"
 cp "$SYSTEMD_DIR/github-app-auth-refresh.service" "$USER_SYSTEMD/"
 
-systemctl --user daemon-reload
-systemctl --user enable github-app-auth-refresh.timer
+# `systemctl --user` needs XDG_RUNTIME_DIR to find the D-Bus socket. In a
+# non-login session (a bot, `sudo su -`) PAM doesn't set it, so derive it from
+# /run/user/<uid> when linger is on — same logic as ghapplib/phantombot.
+SYSTEMD_USER_OK=1
+if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+    _rt="/run/user/$(id -u)"
+    if [[ -d "$_rt" ]]; then
+        export XDG_RUNTIME_DIR="$_rt"
+        export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$_rt/bus}"
+    else
+        SYSTEMD_USER_OK=0
+    fi
+fi
 
-if [[ $CREDS_OK -eq 1 ]]; then
-    systemctl --user start github-app-auth-refresh.timer
-    info "  Timer installed and started: github-app-auth-refresh.timer"
+if [[ $SYSTEMD_USER_OK -eq 0 ]]; then
+    warn "Skipping systemd timer: no user bus ($_rt missing)."
+    warn "  Enable linger, then re-run: sudo loginctl enable-linger $(id -un)"
+    warn "  Until then the token won't auto-refresh; run 'github-app-auth doctor' to verify."
 else
-    info "  Timer installed and enabled (not started — fill ~/.env first, then:"
-    info "    systemctl --user start github-app-auth-refresh.timer)"
+    systemctl --user daemon-reload
+    systemctl --user enable github-app-auth-refresh.timer
+
+    if [[ $CREDS_OK -eq 1 ]]; then
+        systemctl --user start github-app-auth-refresh.timer
+        info "  Timer installed and started: github-app-auth-refresh.timer"
+    else
+        info "  Timer installed and enabled (not started — fill ~/.env first, then:"
+        info "    systemctl --user start github-app-auth-refresh.timer)"
+    fi
 fi
 
 # --- Configure git ---

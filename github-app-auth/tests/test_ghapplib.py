@@ -490,5 +490,57 @@ class TestSelfHeal(unittest.TestCase):
         self.assertEqual(retry_req.get_header('Authorization'), 'Bearer ghs_new')
 
 
+class TestEnsureUserSystemdEnv(unittest.TestCase):
+    def test_respects_existing_xdg_runtime_dir(self):
+        env = {"XDG_RUNTIME_DIR": "/run/user/1000"}
+        ready, auto_set, rt, reason = ghapplib.ensure_user_systemd_env(
+            env=env, dir_exists=lambda p: True)
+        self.assertTrue(ready)
+        self.assertFalse(auto_set)
+        self.assertEqual(rt, "/run/user/1000")
+        self.assertIsNone(reason)
+        # must not invent a DBUS address when XDG was already set
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", env)
+
+    def test_derives_runtime_dir_when_unset_and_dir_exists(self):
+        env = {"USER": "bot"}
+        ready, auto_set, rt, reason = ghapplib.ensure_user_systemd_env(
+            env=env, uid=1234, dir_exists=lambda p: True)
+        self.assertTrue(ready)
+        self.assertTrue(auto_set)
+        self.assertEqual(rt, "/run/user/1234")
+        self.assertEqual(env["XDG_RUNTIME_DIR"], "/run/user/1234")
+        self.assertEqual(env["DBUS_SESSION_BUS_ADDRESS"],
+                         "unix:path=/run/user/1234/bus")
+        self.assertIsNone(reason)
+
+    def test_not_ready_when_runtime_dir_missing(self):
+        env = {"USER": "bot"}
+        ready, auto_set, rt, reason = ghapplib.ensure_user_systemd_env(
+            env=env, uid=1234, dir_exists=lambda p: False)
+        self.assertFalse(ready)
+        self.assertFalse(auto_set)
+        self.assertIsNone(rt)
+        self.assertIn("/run/user/1234", reason)
+        self.assertIn("enable-linger bot", reason)
+        # nothing mutated when we couldn't set up the bus
+        self.assertNotIn("XDG_RUNTIME_DIR", env)
+
+    def test_preserves_existing_dbus_address(self):
+        env = {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/custom/bus"}
+        ghapplib.ensure_user_systemd_env(
+            env=env, uid=7, dir_exists=lambda p: True)
+        self.assertEqual(env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/custom/bus")
+        self.assertEqual(env["XDG_RUNTIME_DIR"], "/run/user/7")
+
+    def test_empty_xdg_runtime_dir_is_treated_as_unset(self):
+        env = {"XDG_RUNTIME_DIR": ""}
+        ready, auto_set, rt, _ = ghapplib.ensure_user_systemd_env(
+            env=env, uid=5, dir_exists=lambda p: True)
+        self.assertTrue(ready)
+        self.assertTrue(auto_set)
+        self.assertEqual(rt, "/run/user/5")
+
+
 if __name__ == '__main__':
     unittest.main()
