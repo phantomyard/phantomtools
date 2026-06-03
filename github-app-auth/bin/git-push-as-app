@@ -9,7 +9,7 @@ import subprocess
 import sys
 import os
 import urllib.error
-from ghapplib import get_real_git, run_git, get_token, GitHubAppClient, parse_owner_repo
+from ghapplib import get_real_git, run_git, ensure_token, GitHubAppClient, parse_owner_repo
 
 GIT = get_real_git(__file__)
 if not GIT:
@@ -19,6 +19,10 @@ if not GIT:
 
 def main():
     args = sys.argv[1:]
+
+    if "-h" in args or "--help" in args:
+        print(__doc__.strip())
+        return
 
     # Parse flags and positional args
     force = False
@@ -56,7 +60,7 @@ def main():
         sys.exit(1)
     owner, repo = parsed
 
-    token = get_token()
+    token = ensure_token()
     if not token:
         print("Error: GITHUB_TOKEN not set", file=sys.stderr)
         sys.exit(1)
@@ -103,6 +107,29 @@ def main():
     commits, parent_for_first, needs_force, preserve_parents = determine_push_strategy(
         local_sha, remote_sha, remote_known_locally, is_ancestor, branch_exists_remote, force
     )
+
+    # Guard: never rewrite history on the repo's DEFAULT branch. A force push
+    # (explicit -f, or a divergent push that needs_force) there silently drops
+    # commits — exactly the rebase+force that wiped a collaborator's work. The
+    # default branch is read live from the repo API, so this holds whatever it
+    # is named (main, master, trunk, develop, ...). Non-force fast-forwards and
+    # the recreated-SHA re-sync (needs_force=False) pass through untouched, so
+    # we stay narrow and don't get "too eager". Deliberate override:
+    # GITHUB_APP_ALLOW_FORCE_DEFAULT=1.
+    override = bool(os.environ.get("GITHUB_APP_ALLOW_FORCE_DEFAULT"))
+    if (force or needs_force) and not override:
+        default_branch = client.get_default_branch()
+        from ghapplib import force_push_to_default_blocked
+        if force_push_to_default_blocked(branch, default_branch, force,
+                                         needs_force, override):
+            print(f"Error: refusing to force-push to the default branch "
+                  f"'{default_branch}' of {owner}/{repo}. This rewrites shared "
+                  f"history and can drop commits other people pushed. Open a PR "
+                  f"from a feature branch, or rebase onto the current "
+                  f"{default_branch} so the push fast-forwards. To override "
+                  f"deliberately: GITHUB_APP_ALLOW_FORCE_DEFAULT=1 git-push-as-app ...",
+                  file=sys.stderr)
+            sys.exit(1)
 
     if commits is None:
         if remote_known_locally:

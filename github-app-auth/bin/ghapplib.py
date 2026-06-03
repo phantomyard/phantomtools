@@ -8,6 +8,7 @@ import re
 import shutil
 import urllib.request
 import urllib.error
+from datetime import datetime, timezone
 
 def get_real_git(script_path=None):
     """Locate the real git binary, bypassing the wrapper.
@@ -65,6 +66,85 @@ def get_token():
                     break
     return token
 
+def _bin_dir():
+    """Directory holding this module and its sibling shell scripts."""
+    return os.path.dirname(os.path.realpath(__file__))
+
+def get_token_expiry():
+    """Return the token's expiry as a timezone-aware datetime, or None if
+    unknown. Reads GITHUB_TOKEN_EXPIRES_AT from the environment or, failing
+    that, from ~/.github_env. 'Unknown' (None) is deliberate: an old env file
+    written before expiry was persisted has no field, and callers must treat
+    that as 'can't tell' rather than 'expired'."""
+    raw = os.environ.get("GITHUB_TOKEN_EXPIRES_AT", "")
+    if not raw:
+        env_file = os.path.expanduser("~/.github_env")
+        if os.path.exists(env_file):
+            try:
+                with open(env_file) as f:
+                    for line in f:
+                        if line.startswith("export GITHUB_TOKEN_EXPIRES_AT="):
+                            m = re.search(
+                                r'export GITHUB_TOKEN_EXPIRES_AT="([^"]*)"', line)
+                            if m:
+                                raw = m.group(1)
+                            break
+            except OSError:
+                return None
+    if not raw:
+        return None
+    # GitHub emits RFC 3339 like "2026-06-02T13:45:00Z". Python <3.11 chokes on
+    # the trailing Z, so normalise it to an explicit UTC offset.
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+def token_is_expired(skew_seconds=60):
+    """True only if we KNOW the token is past (or within skew_seconds of) its
+    expiry. Unknown expiry returns False — we don't refresh on a hunch; the
+    401-retry path is the safety net for a token that's stale without us
+    knowing."""
+    exp = get_token_expiry()
+    if exp is None:
+        return False
+    now = datetime.now(timezone.utc)
+    return (exp - now).total_seconds() <= skew_seconds
+
+def refresh_token():
+    """Regenerate the installation token by running refresh-github-env.sh,
+    which rewrites ~/.github_env (mode 0600). Returns the fresh token, or ""
+    on failure (diagnostics go to stderr). This is the single sanctioned
+    self-heal hook — call it at most once per failure, never in a loop."""
+    script = os.path.join(_bin_dir(), "refresh-github-env.sh")
+    if not (os.path.isfile(script) and os.access(script, os.X_OK)):
+        print(f"Error: cannot refresh token — {script} missing or not executable",
+              file=sys.stderr)
+        return ""
+    print("Refreshing GitHub App token...", file=sys.stderr)
+    try:
+        subprocess.run(["bash", script], check=True,
+                       stdout=subprocess.DEVNULL, stderr=sys.stderr)
+    except subprocess.CalledProcessError as e:
+        print(f"Error: token refresh failed (exit {e.returncode})", file=sys.stderr)
+        return ""
+    # The just-rewritten file is the source of truth; drop any stale process
+    # env so get_token() reads the fresh value off disk.
+    os.environ.pop("GITHUB_TOKEN", None)
+    os.environ.pop("GITHUB_TOKEN_EXPIRES_AT", None)
+    return get_token()
+
+def ensure_token():
+    """Return a usable token, refreshing first if it's missing or known-expired.
+    Use this from entry-point scripts instead of get_token() so a dead or
+    absent token self-heals instead of dead-ending in a 401 loop."""
+    token = get_token()
+    if not token or token_is_expired():
+        refreshed = refresh_token()
+        if refreshed:
+            token = refreshed
+    return token
+
 def parse_owner_repo(repo_url):
     """Extract (owner, repo) from an HTTPS or SSH GitHub remote URL.
     Returns None if the URL isn't a github.com remote."""
@@ -82,7 +162,7 @@ class GitHubAppClient:
         self.api_base = f"https://api.github.com/repos/{owner}/{repo}"
         self.remote_object_cache = set()
 
-    def api_request(self, method, endpoint, data=None):
+    def api_request(self, method, endpoint, data=None, _allow_refresh=True):
         if endpoint.startswith("http"):
             url = endpoint
         elif endpoint:
@@ -103,6 +183,18 @@ class GitHubAppClient:
             with urllib.request.urlopen(req) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
+            # A 401 means the token died (expired / rotated) mid-flight. Refresh
+            # exactly once and retry — _allow_refresh=False on the retry call
+            # guarantees we never loop. Only 401 triggers this: a 403 is a
+            # permission problem and a 404 is a missing resource; refreshing the
+            # token would not help either, so we leave them alone (the wrapper
+            # has been "too eager" before — keep the self-heal narrow).
+            if e.code == 401 and _allow_refresh:
+                new_token = refresh_token()
+                if new_token and new_token != self.token:
+                    self.token = new_token
+                    return self.api_request(method, endpoint, data,
+                                            _allow_refresh=False)
             # Re-read body for error reporting
             try:
                 body = e.read().decode("utf-8")
@@ -300,19 +392,80 @@ def determine_push_strategy(local_sha, remote_sha, remote_known_locally, is_ance
     # commit as an orphan, severing it from main.
     return (None, "", False, True)
 
-def list_installation_repositories(token):
+def force_push_to_default_blocked(branch, default_branch, force, needs_force,
+                                  override=False):
+    """Whether this push must be refused to protect the repo's default branch.
+
+    A history rewrite — an explicit -f, or a divergent push that needs_force —
+    onto the default branch silently drops shared commits (the rebase+force
+    that wiped a collaborator's work). Block it unless the caller set an
+    explicit override. Non-force fast-forwards and the recreated-SHA re-sync
+    (needs_force=False) are never blocked, keeping the guard narrow. Pure
+    function so it stays unit-testable alongside determine_push_strategy.
+    """
+    if override:
+        return False
+    if not (force or needs_force):
+        return False
+    return branch == default_branch
+
+def ensure_user_systemd_env(env=None, runtime_dir=None, uid=None, dir_exists=None):
+    """Make the user-level systemd bus reachable for `systemctl --user`.
+
+    In a non-login session (a bot, a `sudo su -` shell) PAM does not set
+    XDG_RUNTIME_DIR, so `systemctl --user` can't find the D-Bus socket and
+    every timer check fails — the manual `export XDG_RUNTIME_DIR=/run/user/$(id -u)`
+    dance. Mirror what phantombot does: if XDG_RUNTIME_DIR is already set, leave
+    it alone; otherwise derive /run/user/<uid> and, when that dir exists (linger
+    is on), set XDG_RUNTIME_DIR + DBUS_SESSION_BUS_ADDRESS so spawned
+    subprocesses inherit a working bus. If the dir is missing, linger isn't
+    enabled — report the reason with the fix instead of guessing.
+
+    Returns (ready, auto_set, runtime_dir, reason). Params are injectable so the
+    decision stays unit-testable without touching the host's real /run/user.
+    """
+    if env is None:
+        env = os.environ
+    if dir_exists is None:
+        dir_exists = os.path.isdir
+
+    if env.get("XDG_RUNTIME_DIR"):
+        return (True, False, env["XDG_RUNTIME_DIR"], None)
+
+    if uid is None:
+        getuid = getattr(os, "getuid", None)
+        if getuid is None:
+            return (False, False, None,
+                    "cannot determine uid (os.getuid unavailable — non-POSIX?)")
+        uid = getuid()
+
+    if runtime_dir is None:
+        runtime_dir = f"/run/user/{uid}"
+
+    if not dir_exists(runtime_dir):
+        user = env.get("USER", "$USER")
+        return (False, False, None,
+                f"{runtime_dir} does not exist — enable linger first: "
+                f"sudo loginctl enable-linger {user}")
+
+    env["XDG_RUNTIME_DIR"] = runtime_dir
+    if not env.get("DBUS_SESSION_BUS_ADDRESS"):
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={runtime_dir}/bus"
+    return (True, True, runtime_dir, None)
+
+def list_installation_repositories(token, _allow_refresh=True):
     url = "https://api.github.com/installation/repositories"
     repos = []
     while url:
         req = urllib.request.Request(url)
         req.add_header("Authorization", f"Bearer {token}")
         req.add_header("Accept", "application/vnd.github+json")
-        
+
         try:
             with urllib.request.urlopen(req) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 repos.extend(data.get("repositories", []))
-                
+
                 # Pagination
                 url = None
                 link_header = resp.headers.get("Link")
@@ -326,6 +479,15 @@ def list_installation_repositories(token):
                                 url = m.group(1)
                                 break
         except urllib.error.HTTPError as e:
+            # Same one-shot self-heal as api_request: a 401 means a dead token,
+            # so refresh once and restart the listing from page one with the
+            # fresh token. Restarting (rather than resuming) keeps it simple and
+            # is harmless — the call is idempotent.
+            if e.code == 401 and _allow_refresh:
+                new_token = refresh_token()
+                if new_token and new_token != token:
+                    return list_installation_repositories(
+                        new_token, _allow_refresh=False)
             try:
                 body = e.read().decode("utf-8")
             except:
@@ -335,3 +497,83 @@ def list_installation_repositories(token):
             raise
     return repos
 
+
+
+# --- Wrapper discovery ------------------------------------------------------
+# So a bot can ask "what can this wrapper do?" at runtime instead of guessing
+# from the *-as-app naming convention or having to open the README. The list is
+# derived live from bin/, so it can't drift out of date as commands are added.
+
+# Scripts that exist but aren't a command a caller should invoke directly:
+# the library module, the git shim, and the credential/refresh plumbing that
+# git and the systemd timer drive on your behalf.
+_DISCOVERY_HIDDEN = {
+    "ghapplib.py",            # imported module, not a command
+    "github-app-auth",        # the dispatcher itself; subcommands listed separately
+    "git",                    # transparent shim; you just run `git`
+    "git-credential-github-app",  # git calls this, not you
+    "github-token.sh",        # internal: prints a raw token
+    "refresh-github-env.sh",  # internal: driven by `refresh` / the timer
+}
+
+
+def wrapper_summary(text):
+    """Extract a one-line description from a script's header.
+
+    Handles both a Python `\"\"\"docstring\"\"\"` and a `#`-comment banner:
+    returns the first meaningful line (skipping the shebang, blank lines, and
+    pure separator rules like `# ====`). Returns "" if nothing usable is found.
+    Pure function — takes the file text, touches no filesystem — so it's unit
+    testable.
+    """
+    lines = text.splitlines()
+
+    # Python docstring: content between the first pair of triple quotes.
+    joined = "\n".join(lines)
+    m = re.search(r'(?:"""|\'\'\')(.*?)(?:"""|\'\'\')', joined, re.DOTALL)
+    if m:
+        for line in m.group(1).splitlines():
+            s = line.strip()
+            if s:
+                return s
+
+    # Shell/comment banner: first real text in the leading comment block.
+    for line in lines:
+        s = line.strip()
+        if not s or s.startswith("#!"):
+            continue
+        if not s.startswith("#"):
+            break  # hit code before any description — there's no banner
+        s = s.lstrip("#").strip()
+        if not s or set(s) <= set("=-"):  # blank or a separator rule
+            continue
+        return s
+    return ""
+
+
+def list_wrappers(bin_dir=None):
+    """Return [(name, summary), ...] for the caller-facing wrapper commands.
+
+    Enumerates executables in bin/, drops the internal plumbing in
+    _DISCOVERY_HIDDEN, and pairs each with its header one-liner. Sorted by name
+    so output is stable.
+    """
+    bin_dir = bin_dir or _bin_dir()
+    out = []
+    try:
+        names = os.listdir(bin_dir)
+    except OSError:
+        return out
+    for name in sorted(names):
+        if name in _DISCOVERY_HIDDEN or name.startswith("."):
+            continue
+        path = os.path.join(bin_dir, name)
+        if not os.path.isfile(path) or not os.access(path, os.X_OK):
+            continue
+        try:
+            with open(path) as f:
+                text = f.read(4096)
+        except OSError:
+            continue
+        out.append((name, wrapper_summary(text)))
+    return out

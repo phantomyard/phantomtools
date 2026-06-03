@@ -20,7 +20,7 @@ import json
 import argparse
 import urllib.error
 from ghapplib import (
-    get_real_git, run_git, get_token, GitHubAppClient, parse_owner_repo,
+    get_real_git, run_git, ensure_token, GitHubAppClient, parse_owner_repo,
 )
 
 GIT = get_real_git(__file__)
@@ -42,7 +42,7 @@ def main():
     parser.add_argument("--json", action="store_true", help="Print the full API response as JSON")
     args = parser.parse_args()
 
-    token = get_token()
+    token = ensure_token()
     if not token:
         print("Error: GITHUB_TOKEN not found in environment or ~/.github_env",
               file=sys.stderr)

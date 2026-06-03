@@ -3,7 +3,7 @@ import sys
 import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'bin')))
-from ghapplib import determine_push_strategy
+from ghapplib import determine_push_strategy, force_push_to_default_blocked
 
 class TestPushStrategy(unittest.TestCase):
 
@@ -70,6 +70,33 @@ class TestPushStrategy(unittest.TestCase):
             "L", "", False, False, False, force=False
         )
         self.assertTrue(preserve)
+
+
+class TestDefaultBranchForceGuard(unittest.TestCase):
+    DEFAULT = "develop"  # user does not use 'main' — guard must be name-agnostic
+
+    def test_explicit_force_to_default_is_blocked(self):
+        self.assertTrue(force_push_to_default_blocked(
+            "develop", self.DEFAULT, force=True, needs_force=False))
+
+    def test_divergent_needs_force_to_default_is_blocked(self):
+        # rebase+force scenario: determine_push_strategy returns needs_force
+        self.assertTrue(force_push_to_default_blocked(
+            "develop", self.DEFAULT, force=False, needs_force=True))
+
+    def test_force_to_feature_branch_is_allowed(self):
+        self.assertFalse(force_push_to_default_blocked(
+            "feat/x", self.DEFAULT, force=True, needs_force=True))
+
+    def test_fast_forward_to_default_is_allowed(self):
+        # no force, no needs_force → ordinary push, never blocked
+        self.assertFalse(force_push_to_default_blocked(
+            "develop", self.DEFAULT, force=False, needs_force=False))
+
+    def test_override_bypasses_block(self):
+        self.assertFalse(force_push_to_default_blocked(
+            "develop", self.DEFAULT, force=True, needs_force=True, override=True))
+
 
 if __name__ == '__main__':
     unittest.main()
