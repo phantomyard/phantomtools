@@ -320,3 +320,28 @@ def test_roster_ignores_non_name_dirs(root, capsys):
     names = {d["name"] for d in json.loads(capsys.readouterr().out)}
     assert "alpha" in names
     assert "Not A Bot!" not in names
+
+
+def test_roster_shows_send_example_for_a_real_peer(root, capsys):
+    # The roster should bridge discovery → action: a copy-pasteable send
+    # pointed at someone *other* than me, so the bot doesn't reconstruct flags.
+    run(["--from", "me", "register"])
+    run(["--from", "me", "send", "--to", "maeve", "--subject", "hi"])
+    capsys.readouterr()
+    run(["--from", "me", "roster"])
+    out = capsys.readouterr().out
+    assert "send --to maeve --subject" in out   # real peer, not "me"
+
+
+# --------------------------------------------------------------------------- #
+# helpful errors (a fumbled `send` should teach, not just reject)
+# --------------------------------------------------------------------------- #
+
+def test_send_missing_args_prints_example(root, capsys):
+    with pytest.raises(SystemExit) as exc:
+        run(["--from", "me", "send"])      # missing --to and --subject
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "required" in err               # the real reason
+    assert "example:" in err               # ... plus a fix to copy
+    assert 'send --to maeve --subject "hi"' in err

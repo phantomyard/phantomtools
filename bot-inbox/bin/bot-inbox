@@ -56,6 +56,27 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 # --------------------------------------------------------------------------- #
+# arg parsing helpers
+# --------------------------------------------------------------------------- #
+
+class ExampleParser(argparse.ArgumentParser):
+    """ArgumentParser that appends a copy-pasteable example to errors.
+
+    A fresh bot that fumbles `send` (forgetting --to/--subject) gets the bare
+    argparse "the following arguments are required" plus usage — easy to
+    misread. If the subparser carries an `.example`, show it on every error so
+    the next attempt can be copied verbatim instead of guessed.
+    """
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        example = getattr(self, "example", None)
+        if example:
+            sys.stderr.write(f"\nexample:\n  {example}\n")
+        self.exit(2, f"{self.prog}: error: {message}\n")
+
+
+# --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
 
@@ -388,6 +409,11 @@ def cmd_roster(args):
         tag = " (you)" if p == me else ""
         load = f"  [{pending} pending]" if pending else ""
         print(f"  {p}{tag}{load}")
+    # Bridge discovery → action: show a copy-pasteable send, pointed at a real
+    # peer (not self) so the bot doesn't have to reconstruct the flag names.
+    example_to = next((p for p in peers if p != me), peers[0])
+    print(f'\nsend an intro with:\n  bot-inbox send --to {example_to} '
+          '--subject "hi" --body "..."')
 
 
 def cmd_register(args):
@@ -450,14 +476,23 @@ def cmd_watch(args):
 # --------------------------------------------------------------------------- #
 
 def build_parser():
-    p = argparse.ArgumentParser(
+    p = ExampleParser(
         prog="bot-inbox",
         description="Thin CLI for inter-bot messaging over a shared inbox.",
     )
     p.add_argument("--from", dest="from_", help="your bot name (default: $PHANTOMBOT_PERSONA)")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd", required=True, parser_class=ExampleParser)
 
-    s = sub.add_parser("send", help="send a message to another bot")
+    s = sub.add_parser(
+        "send", help="send a message to another bot",
+        epilog='example:\n  bot-inbox send --to maeve --subject "hi" '
+               '--body "hello, introducing myself"\n'
+               '\nDiscover recipient names with `bot-inbox roster` '
+               '(don\'t guess).',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    s.example = ('bot-inbox send --to maeve --subject "hi" '
+                 '--body "hello, introducing myself"')
     s.add_argument("--to", required=True, help="recipient bot name")
     s.add_argument("--type", default="request", choices=VALID_TYPES,
                    help="message type (default: request)")
