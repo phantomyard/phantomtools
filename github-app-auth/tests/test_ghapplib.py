@@ -542,5 +542,51 @@ class TestEnsureUserSystemdEnv(unittest.TestCase):
         self.assertEqual(rt, "/run/user/5")
 
 
+class TestWrapperDiscovery(unittest.TestCase):
+    """`github-app-auth list` derives its output from these two helpers."""
+
+    def test_summary_from_python_docstring(self):
+        text = '#!/usr/bin/env python3\n"""\nDo a thing via the API.\nUsage: x\n"""\n'
+        self.assertEqual(ghapplib.wrapper_summary(text), "Do a thing via the API.")
+
+    def test_summary_from_bash_banner(self):
+        text = ("#!/usr/bin/env bash\n"
+                "# ===========================\n"
+                "# Pull via App auth\n"
+                "# ===========================\n")
+        self.assertEqual(ghapplib.wrapper_summary(text), "Pull via App auth")
+
+    def test_summary_skips_shebang_and_blanks(self):
+        text = "#!/bin/bash\n\n# Real description here\n"
+        self.assertEqual(ghapplib.wrapper_summary(text), "Real description here")
+
+    def test_summary_empty_when_no_header(self):
+        self.assertEqual(ghapplib.wrapper_summary("#!/bin/bash\nset -e\n"), "")
+
+    def test_list_wrappers_enumerates_executables_and_hides_plumbing(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            def write(name, body, executable=True):
+                p = os.path.join(d, name)
+                with open(p, "w") as f:
+                    f.write(body)
+                if executable:
+                    os.chmod(p, 0o755)
+            write("git-push-as-app", '#!/usr/bin/env python3\n"""Push it."""\n')
+            write("github-token.sh", "#!/bin/bash\n# prints a token\n")  # hidden
+            write("ghapplib.py", '"""lib"""\n', executable=False)        # not exec
+            write("notes.txt", "just text\n", executable=False)          # not exec
+
+            result = dict(ghapplib.list_wrappers(d))
+            self.assertIn("git-push-as-app", result)
+            self.assertEqual(result["git-push-as-app"], "Push it.")
+            self.assertNotIn("github-token.sh", result)  # in _DISCOVERY_HIDDEN
+            self.assertNotIn("ghapplib.py", result)      # not executable
+            self.assertNotIn("notes.txt", result)        # not executable
+
+    def test_list_wrappers_missing_dir_returns_empty(self):
+        self.assertEqual(ghapplib.list_wrappers("/no/such/dir/xyz"), [])
+
+
 if __name__ == '__main__':
     unittest.main()

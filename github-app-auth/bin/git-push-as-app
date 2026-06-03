@@ -20,6 +20,10 @@ if not GIT:
 def main():
     args = sys.argv[1:]
 
+    if "-h" in args or "--help" in args:
+        print(__doc__.strip())
+        return
+
     # Parse flags and positional args
     force = False
     dry_run = False

@@ -3,12 +3,16 @@
 github-app-auth — control & diagnostics for the GitHub App auth tooling.
 
 Subcommands:
+  list      Show every wrapper command and what it does (discovery hub).
   doctor    Run health checks and, per failure, print the exact fix.
   refresh   Force a token refresh now (runs refresh-github-env.sh).
 
 `doctor` exists so "use the wrapper!" is an actual command: one place that
 answers "is my token alive, has it expired, is the timer running, can I reach
 the API?" — instead of a bot rediscovering a dead token via a 401 loop.
+
+`list` answers the sibling question — "what can the wrapper even do?" — at
+runtime, so a bot discovers the *-as-app family without opening the README.
 """
 
 import sys
@@ -24,6 +28,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from ghapplib import (  # noqa: E402
     get_token, get_token_expiry, refresh_token, ensure_user_systemd_env,
+    list_wrappers,
 )
 
 TIMER_UNIT = "github-app-auth-refresh.timer"
@@ -209,6 +214,8 @@ def cmd_doctor(args):
     check_timer(doc)
     check_api(doc, token)
     print()
+    print("tip: `github-app-auth list` shows every wrapper command.")
+    print()
     if doc.failed:
         print(_c("31", "doctor: problems found (see fixes above)"))
         return 1
@@ -216,6 +223,28 @@ def cmd_doctor(args):
         print(_c("33", "doctor: ok with warnings"))
         return 0
     print(_c("32", "doctor: all checks passed"))
+    return 0
+
+
+def cmd_list(args):
+    print("github-app-auth — wrapper commands")
+    print()
+    wrappers = list_wrappers()
+    # Surface the control commands too, so `list` is a complete map.
+    builtins = [
+        ("github-app-auth list", "Show this list of wrapper commands."),
+        ("github-app-auth doctor", "Health-check auth and print fixes."),
+        ("github-app-auth refresh", "Force a token refresh now."),
+    ]
+    width = max([len(n) for n, _ in wrappers] + [len(n) for n, _ in builtins])
+    for name, summary in wrappers:
+        print(f"  {name.ljust(width)}  {summary}")
+    print()
+    for name, summary in builtins:
+        print(f"  {name.ljust(width)}  {summary}")
+    print()
+    print("Run `<command> --help` for usage. Most accept the same args as the")
+    print("plain git command they wrap (e.g. `git-push-as-app [remote] [branch]`).")
     return 0
 
 
@@ -235,11 +264,15 @@ def main():
         prog="github-app-auth",
         description="Control & diagnostics for GitHub App authentication.")
     sub = parser.add_subparsers(dest="command")
+    sub.add_parser("list", aliases=["help"],
+                   help="List every wrapper command and what it does.")
     sub.add_parser("doctor", help="Run health checks with concrete fixes.")
     sub.add_parser("refresh", help="Force a token refresh now.")
     args = parser.parse_args()
 
-    if args.command == "doctor":
+    if args.command in ("list", "help"):
+        sys.exit(cmd_list(args))
+    elif args.command == "doctor":
         sys.exit(cmd_doctor(args))
     elif args.command == "refresh":
         sys.exit(cmd_refresh(args))
