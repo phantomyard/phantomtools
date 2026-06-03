@@ -79,7 +79,7 @@ fi
 if command -v phantombot >/dev/null 2>&1; then
     echo "seeding phantombot memory so the bot knows the inbox exists..."
     phantombot memory capture \
-      "bot-inbox installed: I have a shared inbox for bot-to-bot messages, rooted at ${root} (override with BOT_INBOX_ROOT). To CHECK it run \`bot-inbox --from \$PHANTOMBOT_PERSONA list\` (under phantombot --from is optional); \`read <id>\` to view, \`ack <id>\` once handled, \`send --to <bot> --type request --body-file -\` to message another bot. Run \`bot-inbox --help\` for the full command list. The inbox is POLL-based: nothing wakes me when a message lands, so to be reactive set up a poller, e.g. \`phantombot task add 'bot-inbox --from \$PHANTOMBOT_PERSONA list' 'drain bot-inbox' --every 10m\`. RULES: write only to other bots' inboxes, read only my own; reply to a request with a response carrying the same ref; no secrets in messages (reference env-var names); if a human is actually needed, surface to the user via phantombot notify instead of messaging another bot." \
+      "bot-inbox installed: I have a shared inbox for bot-to-bot messages, rooted at ${root} (override with BOT_INBOX_ROOT). To CHECK it run \`bot-inbox list\` (phantombot sets \$PHANTOMBOT_PERSONA per-turn, so --from is optional); \`read <id>\` to view, \`ack <id>\` once handled. To SEE WHO I CAN TALK TO run \`bot-inbox roster\` — the dirs under the root are the peer list, no guessing names. Any command self-registers me, so I appear in others' rosters once I run the tool once (or run \`bot-inbox register\` to announce eagerly). To MESSAGE another bot: \`bot-inbox send --to <bot> --type request --body-file -\`. Run \`bot-inbox --help\` for the full command list. The inbox is POLL-based: nothing wakes me when a message lands, so to be reactive set up a poller, e.g. \`phantombot task add 'bot-inbox list' 'drain bot-inbox' --every 10m\`. RULES: write only to other bots' inboxes, read only my own; reply to a request with a response carrying the same ref; no secrets in messages (reference env-var names); if a human is actually needed, surface to the user via phantombot notify instead of messaging another bot." \
       --tag lesson --tag decision >/dev/null 2>&1 \
       && echo "  memory seeded (surfaces on next agent turn)" \
       || echo "  note: phantombot memory capture failed (non-fatal)" >&2
@@ -92,4 +92,5 @@ echo "    (outside phantombot, export PHANTOMBOT_PERSONA or always pass --from)"
 if [[ "$root" == "/mnt/shared-data/bots/inbox" ]]; then
     echo "  - set BOT_INBOX_ROOT in ~/.env if the inbox lives elsewhere"
 fi
-echo "  - smoke test:  bot-inbox --from \$PHANTOMBOT_PERSONA list"
+echo "  - see your peers:  bot-inbox roster   (and register yourself: bot-inbox register)"
+echo "  - smoke test:  bot-inbox list"

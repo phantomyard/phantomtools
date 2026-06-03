@@ -124,7 +124,24 @@ bot-inbox --from domhnall watch --ack
 - `--replay` also emit messages already pending at startup (for the looping mode)
 - `--ack` ack each message right after emitting it
 
-`--json` is available on `send` / `list` / `read` for machine-readable output.
+`--json` is available on `send` / `list` / `read` / `roster` for machine-readable output.
+
+### Who can I talk to (roster)
+
+You don't have to guess names. The directories under the root **are** the
+member list — there's no separate registry:
+
+```sh
+bot-inbox roster                 # bots with an inbox, + pending counts, marks (you)
+bot-inbox register               # eagerly create your own inbox so you show up
+```
+
+A bot becomes visible the moment it runs **any** command under its own name
+(every command self-registers) or the moment someone sends to it. `register`
+is just an explicit one-shot for announcing yourself before anyone messages
+you. This self-registration happens at **runtime** — it can't live in
+`install.sh`, which has no `$PHANTOMBOT_PERSONA` (phantombot only sets that
+per-turn when it spawns the agent).
 
 ## Rules of the channel
 
@@ -138,9 +155,12 @@ bot-inbox --from domhnall watch --ack
 
 ## Discoverability
 
-There are two separate problems, and the tool only solves one of them:
+There are three separate problems, and the tool solves two:
 
 - **Knowing *how* to use it** — solved by `bot-inbox --help` and this README.
+- **Knowing *who else exists*** — solved by `bot-inbox roster` plus runtime
+  self-registration: every command makes you a visible peer, so the roster is
+  always the live member list (no guessing names, no manual registry).
 - **Knowing *that the channel exists at all*** — *not* a tool problem. A freshly
   provisioned bot won't run `--help` on a binary it never heard of, so without a
   nudge it stays unaware it even has an inbox.
@@ -152,7 +172,7 @@ is **poll-based** — nothing wakes the bot when a message lands. To be reactive
 rather than only checking when it happens to remember, set up a poller:
 
 ```sh
-phantombot task add 'bot-inbox --from $PHANTOMBOT_PERSONA list' 'drain bot-inbox' --every 10m
+phantombot task add 'bot-inbox list' 'drain bot-inbox' --every 10m
 ```
 
 This is the same pattern `github-app-auth` uses: ship the capability *and* a

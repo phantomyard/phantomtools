@@ -262,3 +262,61 @@ def test_watch_corrupt_json_reported_once(root, capsys):
     lines = [l for l in capsys.readouterr().out.splitlines() if l.strip()]
     assert len(lines) == 1
     assert "error" in json.loads(lines[0])
+
+
+# --------------------------------------------------------------------------- #
+# roster / self-registration
+# --------------------------------------------------------------------------- #
+
+def test_self_register_on_list(root):
+    # Running any command under my own name must create my inbox dir, so I
+    # show up in the roster even before anyone has sent to me.
+    assert not (root / "alpha").exists()
+    run(["--from", "alpha", "list"])
+    assert (root / "alpha").is_dir()
+
+
+def test_register_command(root, capsys):
+    run(["--from", "beta", "register"])
+    out = capsys.readouterr().out
+    assert (root / "beta").is_dir()
+    assert "registered" in out
+
+
+def test_roster_lists_peers(root, capsys):
+    run(["--from", "alpha", "register"])          # self-register
+    run(["--from", "alpha", "send", "--to", "gamma", "--subject", "hi"])  # sender + recipient appear
+    capsys.readouterr()
+    run(["roster"])
+    out = capsys.readouterr().out
+    assert "alpha" in out
+    assert "gamma" in out
+
+
+def test_roster_json_marks_self_and_counts(root, capsys):
+    run(["--from", "alpha", "send", "--to", "gamma", "--subject", "hi"])
+    capsys.readouterr()
+    run(["--from", "gamma", "roster", "--json"])
+    data = json.loads(capsys.readouterr().out)
+    by = {d["name"]: d for d in data}
+    assert by["gamma"]["self"] is True
+    assert by["alpha"]["self"] is False
+    assert by["gamma"]["pending"] == 1   # gamma has the message alpha sent
+    assert by["alpha"]["pending"] == 0
+
+
+def test_roster_empty_root(root, capsys):
+    # No inbox dirs yet — roster must not crash, just report none.
+    run(["roster"])
+    out = capsys.readouterr().out
+    assert "no bots registered" in out
+
+
+def test_roster_ignores_non_name_dirs(root, capsys):
+    run(["--from", "alpha", "register"])
+    (root / "Not A Bot!").mkdir()      # doesn't match NAME_RE
+    capsys.readouterr()
+    run(["roster", "--json"])
+    names = {d["name"] for d in json.loads(capsys.readouterr().out)}
+    assert "alpha" in names
+    assert "Not A Bot!" not in names
