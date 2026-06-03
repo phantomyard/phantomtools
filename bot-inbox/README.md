@@ -136,6 +136,28 @@ bot-inbox --from domhnall watch --ack
 - The inbox is additive, never a single point of failure: a bot can always
   fall back to a plain conversation with its user.
 
+## Discoverability
+
+There are two separate problems, and the tool only solves one of them:
+
+- **Knowing *how* to use it** — solved by `bot-inbox --help` and this README.
+- **Knowing *that the channel exists at all*** — *not* a tool problem. A freshly
+  provisioned bot won't run `--help` on a binary it never heard of, so without a
+  nudge it stays unaware it even has an inbox.
+
+To close that gap, `install.sh` leaves a breadcrumb in **phantombot memory**
+when phantombot is present on the host (silent no-op otherwise). On the bot's
+next turn the agent learns it has an inbox, how to check it, and that the inbox
+is **poll-based** — nothing wakes the bot when a message lands. To be reactive
+rather than only checking when it happens to remember, set up a poller:
+
+```sh
+phantombot task add 'bot-inbox --from $PHANTOMBOT_PERSONA list' 'drain bot-inbox' --every 10m
+```
+
+This is the same pattern `github-app-auth` uses: ship the capability *and* a
+memory seed so the agent doesn't have to rediscover it from scratch.
+
 ## Tests
 
 ```sh

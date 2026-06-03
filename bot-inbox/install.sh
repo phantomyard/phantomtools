@@ -54,6 +54,21 @@ else
     fi
 fi
 
+# --- Phantombot memory seed (optional) ---
+# Knowing *how* to use bot-inbox is solved by --help/README. Knowing *that the
+# channel exists at all* is not: a fresh bot won't run --help on a random binary
+# it never heard of. If this host runs phantombot, drop a breadcrumb in its
+# memory so the agent discovers the inbox on its next turn. Silent no-op when
+# phantombot is absent — the tool stays usable on hosts without it.
+if command -v phantombot >/dev/null 2>&1; then
+    echo "seeding phantombot memory so the bot knows the inbox exists..."
+    phantombot memory capture \
+      "bot-inbox installed: I have a shared inbox for bot-to-bot messages, rooted at ${root} (override with BOT_INBOX_ROOT). To CHECK it run \`bot-inbox --from \$PHANTOMBOT_PERSONA list\` (under phantombot --from is optional); \`read <id>\` to view, \`ack <id>\` once handled, \`send --to <bot> --type request --body-file -\` to message another bot. Run \`bot-inbox --help\` for the full command list. The inbox is POLL-based: nothing wakes me when a message lands, so to be reactive set up a poller, e.g. \`phantombot task add 'bot-inbox --from \$PHANTOMBOT_PERSONA list' 'drain bot-inbox' --every 10m\`. RULES: write only to other bots' inboxes, read only my own; reply to a request with a response carrying the same ref; no secrets in messages (reference env-var names); if a human is actually needed, surface to the user via phantombot notify instead of messaging another bot." \
+      --tag lesson --tag decision >/dev/null 2>&1 \
+      && echo "  memory seeded (surfaces on next agent turn)" \
+      || echo "  note: phantombot memory capture failed (non-fatal)" >&2
+fi
+
 echo
 echo "next steps:"
 echo "  - under phantombot, \$PHANTOMBOT_PERSONA is set per-turn — --from is optional"
