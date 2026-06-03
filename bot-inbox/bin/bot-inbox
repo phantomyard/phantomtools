@@ -1,0 +1,397 @@
+#!/usr/bin/env python3
+"""
+bot-inbox — thin CLI for inter-bot messaging over a shared filesystem inbox.
+
+Two bots on the same host can't talk over Telegram, so they drop JSON
+messages into each other's inbox directory on shared storage. The mechanics
+are trivial (write + atomic rename); the value of this tool is that the
+*message schema and the atomic/dedup/audit rules live in one place* instead
+of being re-implemented (slightly differently) by every bot.
+
+Layout (under $BOT_INBOX_ROOT, default /mnt/shared-data/bots/inbox):
+    <recipient>/                      pending messages for <recipient>
+    <recipient>/<ts>-<from>-<rand>.json
+    <recipient>/processed/            audit log of handled messages
+
+Write rule: write to ".<name>.tmp" then rename to "<name>" — atomic on the
+same filesystem, so a reader never sees a half-written file. Readers ignore
+dotfiles (in-flight writes).
+
+Commands:
+    send     drop a message into another bot's inbox
+    list     list pending messages in your own inbox
+    read     print one pending message (optionally ack it)
+    ack      move a handled message to processed/ (the audit log)
+    watch    poll your inbox and emit new messages as JSON lines
+
+Identity:
+    Your own bot name comes from --from or $PHANTOMBOT_PERSONA, which
+    phantombot sets per-turn to the active persona key. Receiving commands
+    (list/read/ack/watch) need it to know which inbox is yours.
+
+No secrets in messages — reference env-var names instead.
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+import time
+import uuid
+from datetime import datetime, timezone
+
+DEFAULT_ROOT = "/mnt/shared-data/bots/inbox"
+VALID_TYPES = ("request", "response", "notice")
+# Required keys in every message payload.
+REQUIRED_FIELDS = ("from", "to", "type", "subject", "ts")
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+# --------------------------------------------------------------------------- #
+# helpers
+# --------------------------------------------------------------------------- #
+
+def die(msg, code=1):
+    print(f"bot-inbox: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def root_dir():
+    return os.environ.get("BOT_INBOX_ROOT", DEFAULT_ROOT)
+
+
+def self_name(args):
+    name = getattr(args, "from_", None) or os.environ.get("PHANTOMBOT_PERSONA")
+    if not name:
+        die("no bot name: pass --from or set $PHANTOMBOT_PERSONA")
+    if not NAME_RE.match(name):
+        die(f"invalid bot name {name!r}: use [a-z0-9_-], max 64 chars")
+    return name
+
+
+def check_name(kind, name):
+    if not name or not NAME_RE.match(name):
+        die(f"invalid {kind} name {name!r}: use [a-z0-9_-], max 64 chars")
+    return name
+
+
+def now_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def fs_timestamp():
+    # Filesystem-safe timestamp with microseconds, so messages sent within the
+    # same second still sort in send order. ':' -> '-' for filename safety.
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%fZ")
+
+
+def inbox_path(recipient):
+    return os.path.join(root_dir(), recipient)
+
+
+def validate_payload(msg):
+    """Return a list of human-readable problems (empty == valid)."""
+    problems = []
+    if not isinstance(msg, dict):
+        return ["payload is not a JSON object"]
+    for field in REQUIRED_FIELDS:
+        if not msg.get(field):
+            problems.append(f"missing required field: {field}")
+    t = msg.get("type")
+    if t and t not in VALID_TYPES:
+        problems.append(f"invalid type {t!r}: expected one of {', '.join(VALID_TYPES)}")
+    for who in ("from", "to"):
+        val = msg.get(who)
+        if val and not NAME_RE.match(str(val)):
+            problems.append(f"invalid {who} name {val!r}")
+    if msg.get("type") == "response" and not msg.get("ref"):
+        problems.append("type 'response' should carry a 'ref' correlation-id")
+    return problems
+
+
+def read_body(args):
+    # Explicit only — never auto-consume stdin (a bot run under systemd/pipe
+    # would block). Use --body, or --body-file (with '-' for stdin).
+    if args.body is not None:
+        return args.body
+    if args.body_file:
+        if args.body_file == "-":
+            return sys.stdin.read()
+        with open(args.body_file, "r", encoding="utf-8") as fh:
+            return fh.read()
+    return ""
+
+
+def list_messages(box):
+    """Pending message filenames in <box>, oldest first. Ignores dotfiles."""
+    if not os.path.isdir(box):
+        return []
+    names = [
+        n for n in os.listdir(box)
+        if n.endswith(".json") and not n.startswith(".")
+    ]
+    return sorted(names)
+
+
+def load_message(box, name):
+    path = os.path.join(box, name)
+    with open(path, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+# --------------------------------------------------------------------------- #
+# commands
+# --------------------------------------------------------------------------- #
+
+def cmd_send(args):
+    sender = self_name(args)
+    recipient = check_name("recipient", args.to)
+    if args.type not in VALID_TYPES:
+        die(f"invalid --type {args.type!r}: expected one of {', '.join(VALID_TYPES)}")
+
+    ref = args.ref
+    # Requests get an auto correlation-id so responses can be matched.
+    if not ref and args.type == "request":
+        ref = uuid.uuid4().hex[:12]
+
+    msg = {
+        "from": sender,
+        "to": recipient,
+        "type": args.type,
+        "subject": args.subject,
+        "body": read_body(args),
+        "ref": ref,
+        "ts": now_iso(),
+    }
+    if ref is None:
+        del msg["ref"]
+
+    problems = validate_payload(msg)
+    if problems:
+        die("invalid message:\n  - " + "\n  - ".join(problems))
+
+    box = inbox_path(recipient)
+    try:
+        os.makedirs(box, exist_ok=True)
+    except OSError as e:
+        die(f"cannot create inbox {box}: {e}")
+
+    name = f"{fs_timestamp()}-{sender}-{uuid.uuid4().hex[:6]}.json"
+    final = os.path.join(box, name)
+    tmp = os.path.join(box, "." + name + ".tmp")
+
+    data = json.dumps(msg, ensure_ascii=False, indent=2) + "\n"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.rename(tmp, final)  # atomic on same filesystem
+    except OSError as e:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        die(f"cannot deliver message: {e}")
+
+    if args.json:
+        print(json.dumps({"id": name, "ref": ref, "to": recipient}, ensure_ascii=False))
+    else:
+        loc = f" (ref {ref})" if ref else ""
+        print(f"sent {args.type} to {recipient}: {name}{loc}")
+
+
+def cmd_list(args):
+    me = self_name(args)
+    box = inbox_path(me)
+    names = list_messages(box)
+    if args.json:
+        out = []
+        for n in names:
+            try:
+                m = load_message(box, n)
+            except (OSError, json.JSONDecodeError):
+                m = {}
+            out.append({
+                "id": n,
+                "from": m.get("from"),
+                "type": m.get("type"),
+                "subject": m.get("subject"),
+                "ref": m.get("ref"),
+                "ts": m.get("ts"),
+            })
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return
+    if not names:
+        print(f"no pending messages for {me}")
+        return
+    print(f"{len(names)} pending for {me}:")
+    for n in names:
+        try:
+            m = load_message(box, n)
+            print(f"  {n}")
+            print(f"      {m.get('type','?')} from {m.get('from','?')}: "
+                  f"{m.get('subject','')}")
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"  {n}  [unreadable: {e}]")
+
+
+def _resolve_id(box, names, wanted):
+    if wanted is None:
+        return names[0] if names else None
+    if wanted in names:
+        return wanted
+    # Allow a unique prefix match for convenience.
+    matches = [n for n in names if n.startswith(wanted)]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        die(f"ambiguous id {wanted!r}: matches {len(matches)} messages")
+    return None
+
+
+def cmd_read(args):
+    me = self_name(args)
+    box = inbox_path(me)
+    names = list_messages(box)
+    name = _resolve_id(box, names, args.id)
+    if not name:
+        die("no matching message" if args.id else f"no pending messages for {me}", code=3)
+
+    try:
+        msg = load_message(box, name)
+    except (OSError, json.JSONDecodeError) as e:
+        die(f"cannot read {name}: {e}")
+
+    problems = validate_payload(msg)
+    if args.json:
+        print(json.dumps({"id": name, "message": msg, "problems": problems},
+                         ensure_ascii=False, indent=2))
+    else:
+        print(f"# {name}")
+        for k in ("from", "to", "type", "subject", "ref", "ts"):
+            if msg.get(k):
+                print(f"{k}: {msg[k]}")
+        print()
+        print(msg.get("body", ""))
+        if problems:
+            print("\n[schema warnings]", file=sys.stderr)
+            for p in problems:
+                print(f"  - {p}", file=sys.stderr)
+
+    if args.ack:
+        _do_ack(box, name)
+
+
+def _do_ack(box, name):
+    processed = os.path.join(box, "processed")
+    try:
+        os.makedirs(processed, exist_ok=True)
+        os.rename(os.path.join(box, name), os.path.join(processed, name))
+    except OSError as e:
+        die(f"cannot ack {name}: {e}")
+    print(f"acked -> processed/{name}", file=sys.stderr)
+
+
+def cmd_ack(args):
+    me = self_name(args)
+    box = inbox_path(me)
+    names = list_messages(box)
+    name = _resolve_id(box, names, args.id)
+    if not name:
+        die(f"no matching message {args.id!r}", code=3)
+    _do_ack(box, name)
+
+
+def cmd_watch(args):
+    me = self_name(args)
+    box = inbox_path(me)
+    os.makedirs(box, exist_ok=True)
+    seen = set(list_messages(box))
+    # On start, optionally replay what's already pending.
+    if args.replay:
+        seen = set()
+    interval = max(0.2, args.interval)
+    try:
+        while True:
+            for n in list_messages(box):
+                if n in seen:
+                    continue
+                seen.add(n)
+                try:
+                    msg = load_message(box, n)
+                except (OSError, json.JSONDecodeError) as e:
+                    print(json.dumps({"id": n, "error": str(e)}), flush=True)
+                    continue
+                print(json.dumps({"id": n, "message": msg}, ensure_ascii=False),
+                      flush=True)
+                if args.ack:
+                    _do_ack(box, n)
+                    seen.discard(n)
+            if args.once:
+                return
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        return
+
+
+# --------------------------------------------------------------------------- #
+# arg parsing
+# --------------------------------------------------------------------------- #
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="bot-inbox",
+        description="Thin CLI for inter-bot messaging over a shared inbox.",
+    )
+    p.add_argument("--from", dest="from_", help="your bot name (default: $PHANTOMBOT_PERSONA)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("send", help="send a message to another bot")
+    s.add_argument("--to", required=True, help="recipient bot name")
+    s.add_argument("--type", default="request", choices=VALID_TYPES,
+                   help="message type (default: request)")
+    s.add_argument("--subject", required=True, help="short subject line")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--body", help="message body (else: --body-file or stdin)")
+    g.add_argument("--body-file", help="read body from file ('-' for stdin)")
+    s.add_argument("--ref", help="correlation-id (auto-generated for requests)")
+    s.add_argument("--json", action="store_true", help="machine-readable output")
+    s.set_defaults(func=cmd_send)
+
+    s = sub.add_parser("list", help="list pending messages in your inbox")
+    s.add_argument("--json", action="store_true", help="machine-readable output")
+    s.set_defaults(func=cmd_list)
+
+    s = sub.add_parser("read", help="print one pending message")
+    s.add_argument("--id", help="message id or unique prefix (default: oldest)")
+    s.add_argument("--ack", action="store_true", help="ack after reading")
+    s.add_argument("--json", action="store_true", help="machine-readable output")
+    s.set_defaults(func=cmd_read)
+
+    s = sub.add_parser("ack", help="move a handled message to processed/")
+    s.add_argument("id", help="message id or unique prefix")
+    s.set_defaults(func=cmd_ack)
+
+    s = sub.add_parser("watch", help="poll your inbox, emit new messages as JSON lines")
+    s.add_argument("--interval", type=float, default=2.0,
+                   help="poll interval seconds (default: 2.0)")
+    s.add_argument("--ack", action="store_true",
+                   help="ack each message after emitting it")
+    s.add_argument("--once", action="store_true",
+                   help="scan once and exit (don't loop)")
+    s.add_argument("--replay", action="store_true",
+                   help="also emit messages already pending at start")
+    s.set_defaults(func=cmd_watch)
+
+    return p
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

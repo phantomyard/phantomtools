@@ -1,0 +1,148 @@
+# bot-inbox
+
+A thin CLI for **inter-bot messaging over a shared filesystem inbox**.
+
+Two bots on the same host can't talk over Telegram, so they drop JSON
+messages into each other's inbox directory on shared storage. The mechanics
+are trivial — write a file, atomically rename it — so the file-shuffling is
+*not* the point. The point is that the **message schema and the
+atomic/dedup/audit rules live in one place** instead of being
+re-implemented (slightly differently) by every bot that joins the channel.
+
+`bot-inbox` is the single source of truth for that protocol. Keep it thin:
+it wraps send + receive + ack, nothing more.
+
+## Why a tool and not a runbook
+
+Sending is one `write` + one `mv`. Easy. But the *correctness* details are
+where bots drift apart:
+
+- atomic `.tmp` → `rename` so a reader never sees a half-written message
+- ISO timestamp with `:` → `-` in the filename, **with microseconds** so
+  messages sent in the same second still sort in send order
+- payload schema validation (`from` / `to` / `type` / `subject` / `ref` / `ts`)
+- dotfile-ignore on the read side (skip in-flight writes)
+- `processed/` as an append-only audit log instead of deleting
+- auto-generated `ref` correlation-id on requests, echoed back on responses
+
+One tool enforces all of that. A runbook just hopes everyone read it.
+
+## Install
+
+```sh
+./install.sh            # symlinks bin/bot-inbox into ~/.local/bin
+```
+
+Requires Python 3.8+ (standard library only — no pip deps).
+
+## Configuration
+
+| Env var          | Default                          | Meaning                              |
+|------------------|----------------------------------|--------------------------------------|
+| `BOT_INBOX_ROOT`     | `/mnt/shared-data/bots/inbox` | Root dir holding every bot's inbox.   |
+| `PHANTOMBOT_PERSONA` | —                             | Your own bot name (or pass `--from`). |
+
+Layout under the root:
+
+```
+<recipient>/                                   pending messages for <recipient>
+<recipient>/2026-06-03T10-35-50-042610Z-beart-119e7c.json
+<recipient>/processed/                         audit log of handled messages
+```
+
+## Cross-host
+
+`bot-inbox` is **filesystem-only by design** — it does not, and will not,
+ship an ssh/scp transport. The whole correctness story rests on the atomic
+`.tmp` → `rename`, and that guarantee only holds *within a single
+filesystem*. Put a network copy in the middle and `rename` degrades to a
+copy, so another bot can read a half-written message — exactly the footgun
+this tool exists to remove.
+
+To run a channel across hosts, keep the transport **outside** the tool:
+mount a shared directory on every host and point `BOT_INBOX_ROOT` at it.
+
+- **NFS** — supports atomic `rename`; the safe default for multi-host.
+- **sshfs** — usually works, but more fragile; verify `rename` survives your
+  mount options before trusting it.
+
+The tool stays pure filesystem; *where* that filesystem lives is an ops /
+mount concern, not a tool feature.
+
+## Usage
+
+Under phantombot, `PHANTOMBOT_PERSONA` is set automatically per-turn to the
+active persona key, so `--from` can be omitted entirely. Outside phantombot,
+export it once (shell profile / systemd unit) or pass `--from` explicitly.
+
+### Send
+
+```sh
+bot-inbox --from beart send \
+  --to domhnall \
+  --type request \
+  --subject "review PR #42" \
+  --body "have a look when you get a sec"
+# -> sent request to domhnall: 2026-...-beart-119e7c.json (ref ba7c0521c832)
+```
+
+- `--type` is one of `request` / `response` / `notice` (default `request`).
+- Requests get an auto `ref` correlation-id. Reply with that same ref:
+  ```sh
+  bot-inbox --from domhnall send --to beart --type response \
+    --subject "re: review PR #42" --ref ba7c0521c832 --body "LGTM"
+  ```
+- Body from a file or stdin: `--body-file notes.md` or `--body-file -`.
+  (stdin is **never** auto-consumed — a bot under systemd would block —
+  you must ask for it explicitly.)
+
+### Receive
+
+```sh
+bot-inbox --from domhnall list                 # what's pending
+bot-inbox --from domhnall read                 # print the oldest message
+bot-inbox --from domhnall read --id 2026-06 --ack   # read by id/prefix, then ack
+bot-inbox --from domhnall ack <id>             # ack without reading
+```
+
+`--ack` moves the message to `processed/` (the audit log) instead of
+deleting it. Ids accept a unique prefix.
+
+### Watch (for automation)
+
+Poll your inbox and emit each new message as one JSON line on stdout —
+feed it into whatever loop drives the bot:
+
+```sh
+bot-inbox --from domhnall watch --ack
+# {"id": "...", "message": {"from": "beart", "type": "request", ...}}
+```
+
+- `--interval N` poll seconds (default 2.0)
+- `--once` scan once and exit (no loop)
+- `--replay` also emit messages already pending at startup
+- `--ack` ack each message right after emitting it
+
+`--json` is available on `send` / `list` / `read` for machine-readable output.
+
+## Rules of the channel
+
+- Write **only** to other bots' inboxes; read **only** your own.
+- Reply to a `request` with a `response` carrying the same `ref`.
+- **No secrets** in messages — reference env-var names instead.
+- If a human is actually needed, don't message the other bot — surface it to
+  the user (e.g. `phantombot notify`).
+- The inbox is additive, never a single point of failure: a bot can always
+  fall back to a plain conversation with its user.
+
+## Tests
+
+```sh
+python3 -m pytest tests/ -q
+```
+
+Pure stdlib + pytest, no network and no shared FS (uses `tmp_path`).
+
+## License
+
+MIT.
