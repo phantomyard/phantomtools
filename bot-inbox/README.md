@@ -124,7 +124,24 @@ bot-inbox --from domhnall watch --ack
 - `--replay` also emit messages already pending at startup (for the looping mode)
 - `--ack` ack each message right after emitting it
 
-`--json` is available on `send` / `list` / `read` for machine-readable output.
+`--json` is available on `send` / `list` / `read` / `roster` for machine-readable output.
+
+### Who can I talk to (roster)
+
+You don't have to guess names. The directories under the root **are** the
+member list — there's no separate registry:
+
+```sh
+bot-inbox roster                 # bots with an inbox, + pending counts, marks (you)
+bot-inbox register               # eagerly create your own inbox so you show up
+```
+
+A bot becomes visible the moment it runs **any** command under its own name
+(every command self-registers) or the moment someone sends to it. `register`
+is just an explicit one-shot for announcing yourself before anyone messages
+you. This self-registration happens at **runtime** — it can't live in
+`install.sh`, which has no `$PHANTOMBOT_PERSONA` (phantombot only sets that
+per-turn when it spawns the agent).
 
 ## Rules of the channel
 
@@ -135,6 +152,31 @@ bot-inbox --from domhnall watch --ack
   the user (e.g. `phantombot notify`).
 - The inbox is additive, never a single point of failure: a bot can always
   fall back to a plain conversation with its user.
+
+## Discoverability
+
+There are three separate problems, and the tool solves two:
+
+- **Knowing *how* to use it** — solved by `bot-inbox --help` and this README.
+- **Knowing *who else exists*** — solved by `bot-inbox roster` plus runtime
+  self-registration: every command makes you a visible peer, so the roster is
+  always the live member list (no guessing names, no manual registry).
+- **Knowing *that the channel exists at all*** — *not* a tool problem. A freshly
+  provisioned bot won't run `--help` on a binary it never heard of, so without a
+  nudge it stays unaware it even has an inbox.
+
+To close that gap, `install.sh` leaves a breadcrumb in **phantombot memory**
+when phantombot is present on the host (silent no-op otherwise). On the bot's
+next turn the agent learns it has an inbox, how to check it, and that the inbox
+is **poll-based** — nothing wakes the bot when a message lands. To be reactive
+rather than only checking when it happens to remember, set up a poller:
+
+```sh
+phantombot task add 'bot-inbox list' 'drain bot-inbox' --every 10m
+```
+
+This is the same pattern `github-app-auth` uses: ship the capability *and* a
+memory seed so the agent doesn't have to rediscover it from scratch.
 
 ## Tests
 

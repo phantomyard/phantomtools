@@ -54,6 +54,37 @@ else
     fi
 fi
 
+# --- Persist a custom inbox root (optional) ---
+# If BOT_INBOX_ROOT was set explicitly for this install, the memory breadcrumb
+# below bakes in that resolved path — but the actual bot-inbox calls read the
+# env var at runtime. Without persisting it, those calls fall back to the
+# default and mismatch the seed. So if phantombot is here and a non-default
+# root was given, write it to ~/.env so every future turn/task agrees. Silent
+# no-op without phantombot or when using the default root.
+if [[ "$root" != "/mnt/shared-data/bots/inbox" ]] && command -v phantombot >/dev/null 2>&1; then
+    if phantombot env set BOT_INBOX_ROOT "$root" >/dev/null 2>&1; then
+        echo "persisted BOT_INBOX_ROOT=$root to ~/.env"
+    else
+        echo "note: could not persist BOT_INBOX_ROOT to ~/.env (non-fatal)" >&2
+        echo "      set it manually: phantombot env set BOT_INBOX_ROOT '$root'" >&2
+    fi
+fi
+
+# --- Phantombot memory seed (optional) ---
+# Knowing *how* to use bot-inbox is solved by --help/README. Knowing *that the
+# channel exists at all* is not: a fresh bot won't run --help on a random binary
+# it never heard of. If this host runs phantombot, drop a breadcrumb in its
+# memory so the agent discovers the inbox on its next turn. Silent no-op when
+# phantombot is absent — the tool stays usable on hosts without it.
+if command -v phantombot >/dev/null 2>&1; then
+    echo "seeding phantombot memory so the bot knows the inbox exists..."
+    phantombot memory capture \
+      "bot-inbox installed: I have a shared inbox for bot-to-bot messages, rooted at ${root} (override with BOT_INBOX_ROOT). To CHECK it run \`bot-inbox list\` (phantombot sets \$PHANTOMBOT_PERSONA per-turn, so --from is optional); \`read <id>\` to view, \`ack <id>\` once handled. To SEE WHO I CAN TALK TO run \`bot-inbox roster\` — the dirs under the root are the peer list, no guessing names. Any command self-registers me, so I appear in others' rosters once I run the tool once (or run \`bot-inbox register\` to announce eagerly). To MESSAGE another bot: \`bot-inbox send --to <bot> --subject \"<subject>\" --body \"<text>\"\` — --to and --subject are required (a wrong invocation prints a copy-pasteable example). Run \`bot-inbox --help\` for the full command list. The inbox is POLL-based: nothing wakes me when a message lands, so to be reactive set up a poller, e.g. \`phantombot task add 'bot-inbox list' 'drain bot-inbox' --every 10m\`. RULES: write only to other bots' inboxes, read only my own; reply to a request with a response carrying the same ref; no secrets in messages (reference env-var names); if a human is actually needed, surface to the user via phantombot notify instead of messaging another bot." \
+      --tag lesson --tag decision >/dev/null 2>&1 \
+      && echo "  memory seeded (surfaces on next agent turn)" \
+      || echo "  note: phantombot memory capture failed (non-fatal)" >&2
+fi
+
 echo
 echo "next steps:"
 echo "  - under phantombot, \$PHANTOMBOT_PERSONA is set per-turn — --from is optional"
@@ -61,4 +92,5 @@ echo "    (outside phantombot, export PHANTOMBOT_PERSONA or always pass --from)"
 if [[ "$root" == "/mnt/shared-data/bots/inbox" ]]; then
     echo "  - set BOT_INBOX_ROOT in ~/.env if the inbox lives elsewhere"
 fi
-echo "  - smoke test:  bot-inbox --from \$PHANTOMBOT_PERSONA list"
+echo "  - see your peers:  bot-inbox roster   (and register yourself: bot-inbox register)"
+echo "  - smoke test:  bot-inbox list"

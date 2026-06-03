@@ -23,6 +23,13 @@ Commands:
     read     print one pending message (optionally ack it)
     ack      move a handled message to processed/ (the audit log)
     watch    poll your inbox and emit new messages as JSON lines
+    roster   list the bots that have an inbox (who you can talk to)
+    register create your own inbox so you appear in the roster
+
+Discovery: there's no registry — the directories under the root ARE the
+roster. A bot becomes visible the moment it runs any command under its own
+name (self-register) or someone sends to it. Use `roster` to see your peers
+instead of guessing names.
 
 Identity:
     Your own bot name comes from --from or $PHANTOMBOT_PERSONA, which
@@ -49,6 +56,27 @@ NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 # --------------------------------------------------------------------------- #
+# arg parsing helpers
+# --------------------------------------------------------------------------- #
+
+class ExampleParser(argparse.ArgumentParser):
+    """ArgumentParser that appends a copy-pasteable example to errors.
+
+    A fresh bot that fumbles `send` (forgetting --to/--subject) gets the bare
+    argparse "the following arguments are required" plus usage — easy to
+    misread. If the subparser carries an `.example`, show it on every error so
+    the next attempt can be copied verbatim instead of guessed.
+    """
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        example = getattr(self, "example", None)
+        if example:
+            sys.stderr.write(f"\nexample:\n  {example}\n")
+        self.exit(2, f"{self.prog}: error: {message}\n")
+
+
+# --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
 
@@ -67,7 +95,24 @@ def self_name(args):
         die("no bot name: pass --from or set $PHANTOMBOT_PERSONA")
     if not NAME_RE.match(name):
         die(f"invalid bot name {name!r}: use [a-z0-9_-], max 64 chars")
+    # Self-register: ensure my own inbox dir exists so I show up in `roster`.
+    # This is why discovery needs no separate registry — running any command
+    # under my own name makes me a visible peer. install.sh can't do this: it
+    # has no $PHANTOMBOT_PERSONA, which phantombot only sets per-turn at runtime.
+    ensure_registered(name)
     return name
+
+
+def ensure_registered(name):
+    """Best-effort: create my inbox dir so `roster` lists me as a peer.
+
+    Silent on failure — a read-only or missing root shouldn't break a plain
+    `list`/`read`. The directory simply won't exist, same as before.
+    """
+    try:
+        os.makedirs(inbox_path(name), exist_ok=True)
+    except OSError:
+        pass
 
 
 def check_name(kind, name):
@@ -328,6 +373,61 @@ def cmd_ack(args):
     _do_ack(box, name)
 
 
+def cmd_roster(args):
+    """List the bots with an inbox under the root — the peer roster.
+
+    The directories under $BOT_INBOX_ROOT *are* the member list; there's no
+    separate registry. A bot appears here the moment it runs any command under
+    its own name (self-register) or the moment someone sends to it.
+    """
+    root = root_dir()
+    me = getattr(args, "from_", None) or os.environ.get("PHANTOMBOT_PERSONA")
+    if me and NAME_RE.match(me):
+        ensure_registered(me)
+    if not os.path.isdir(root):
+        if args.json:
+            print(json.dumps([]))
+        else:
+            print(f"no inbox root yet: {root}")
+        return
+    peers = sorted(
+        d for d in os.listdir(root)
+        if NAME_RE.match(d) and os.path.isdir(os.path.join(root, d))
+    )
+    if args.json:
+        out = [
+            {"name": p, "pending": len(list_messages(inbox_path(p))),
+             "self": p == me}
+            for p in peers
+        ]
+        print(json.dumps(out, ensure_ascii=False, indent=2))
+        return
+    if not peers:
+        print(f"no bots registered under {root}")
+        return
+    print(f"{len(peers)} bot(s) under {root}:")
+    for p in peers:
+        pending = len(list_messages(inbox_path(p)))
+        tag = " (you)" if p == me else ""
+        load = f"  [{pending} pending]" if pending else ""
+        print(f"  {p}{tag}{load}")
+    # Bridge discovery → action: show a copy-pasteable send, pointed at a real
+    # peer (not self) so the bot doesn't have to reconstruct the flag names.
+    example_to = next((p for p in peers if p != me), peers[0])
+    print(f'\nsend an intro with:\n  bot-inbox send --to {example_to} '
+          '--subject "hi" --body "..."')
+
+
+def cmd_register(args):
+    """Explicitly announce myself by creating my inbox dir.
+
+    Optional: any send/list/read/ack/watch already self-registers. Useful as a
+    one-shot onboarding step ("appear in the roster before anyone messages me").
+    """
+    me = self_name(args)  # self_name() already calls ensure_registered()
+    print(f"registered: {inbox_path(me)}")
+
+
 def cmd_watch(args):
     me = self_name(args)
     box = inbox_path(me)
@@ -378,14 +478,23 @@ def cmd_watch(args):
 # --------------------------------------------------------------------------- #
 
 def build_parser():
-    p = argparse.ArgumentParser(
+    p = ExampleParser(
         prog="bot-inbox",
         description="Thin CLI for inter-bot messaging over a shared inbox.",
     )
     p.add_argument("--from", dest="from_", help="your bot name (default: $PHANTOMBOT_PERSONA)")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd", required=True, parser_class=ExampleParser)
 
-    s = sub.add_parser("send", help="send a message to another bot")
+    s = sub.add_parser(
+        "send", help="send a message to another bot",
+        epilog='example:\n  bot-inbox send --to maeve --subject "hi" '
+               '--body "hello, introducing myself"\n'
+               '\nDiscover recipient names with `bot-inbox roster` '
+               '(don\'t guess).',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    s.example = ('bot-inbox send --to maeve --subject "hi" '
+                 '--body "hello, introducing myself"')
     s.add_argument("--to", required=True, help="recipient bot name")
     s.add_argument("--type", default="request", choices=VALID_TYPES,
                    help="message type (default: request)")
@@ -410,6 +519,13 @@ def build_parser():
     s = sub.add_parser("ack", help="move a handled message to processed/")
     s.add_argument("id", help="message id or unique prefix")
     s.set_defaults(func=cmd_ack)
+
+    s = sub.add_parser("roster", help="list bots that have an inbox (the peer roster)")
+    s.add_argument("--json", action="store_true", help="machine-readable output")
+    s.set_defaults(func=cmd_roster)
+
+    s = sub.add_parser("register", help="create your own inbox so you appear in the roster")
+    s.set_defaults(func=cmd_register)
 
     s = sub.add_parser("watch", help="poll your inbox, emit new messages as JSON lines")
     s.add_argument("--interval", type=float, default=2.0,
