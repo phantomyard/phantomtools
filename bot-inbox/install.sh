@@ -54,6 +54,22 @@ else
     fi
 fi
 
+# --- Persist a custom inbox root (optional) ---
+# If BOT_INBOX_ROOT was set explicitly for this install, the memory breadcrumb
+# below bakes in that resolved path — but the actual bot-inbox calls read the
+# env var at runtime. Without persisting it, those calls fall back to the
+# default and mismatch the seed. So if phantombot is here and a non-default
+# root was given, write it to ~/.env so every future turn/task agrees. Silent
+# no-op without phantombot or when using the default root.
+if [[ "$root" != "/mnt/shared-data/bots/inbox" ]] && command -v phantombot >/dev/null 2>&1; then
+    if phantombot env set BOT_INBOX_ROOT "$root" >/dev/null 2>&1; then
+        echo "persisted BOT_INBOX_ROOT=$root to ~/.env"
+    else
+        echo "note: could not persist BOT_INBOX_ROOT to ~/.env (non-fatal)" >&2
+        echo "      set it manually: phantombot env set BOT_INBOX_ROOT '$root'" >&2
+    fi
+fi
+
 # --- Phantombot memory seed (optional) ---
 # Knowing *how* to use bot-inbox is solved by --help/README. Knowing *that the
 # channel exists at all* is not: a fresh bot won't run --help on a random binary
