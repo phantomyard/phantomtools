@@ -81,5 +81,9 @@ fi
 export GITHUB_TOKEN="$TOKEN"
 export GITHUB_INSTALLATION_ID="$INSTALL_ID"
 export GITHUB_JWT="$JWT"
+# Persist the expiry so consumers (ghapplib, doctor) can detect a stale token
+# proactively instead of only discovering it via a 401. May be empty if GitHub
+# omitted expires_at; downstream readers treat "unknown" as "can't tell".
+export GITHUB_TOKEN_EXPIRES_AT="$EXPIRES"
 
 echo "GitHub token acquired (expires: $EXPIRES)" >&2

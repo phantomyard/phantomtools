@@ -5,6 +5,18 @@
 # =============================================================================
 set -euo pipefail
 
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help)
+            cat <<'USAGE'
+git-pull via GitHub App auth for GitHub repos.
+Fetch via API auth, then merge/rebase normally.
+Usage: git-pull-as-app [remote] [git-pull flags...]  (defaults to origin)
+USAGE
+            exit 0 ;;
+    esac
+done
+
 # Use the real git binary, bypassing the wrapper (which would re-enter
 # git-pull-as-app on every `git pull` and recurse). REAL_GIT is exported
 # by the wrapper; fall back to /usr/bin/git or $GITHUB_APP_REAL_GIT.

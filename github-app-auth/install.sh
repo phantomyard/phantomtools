@@ -113,15 +113,35 @@ mkdir -p "$USER_SYSTEMD"
 cp "$SYSTEMD_DIR/github-app-auth-refresh.timer" "$USER_SYSTEMD/"
 cp "$SYSTEMD_DIR/github-app-auth-refresh.service" "$USER_SYSTEMD/"
 
-systemctl --user daemon-reload
-systemctl --user enable github-app-auth-refresh.timer
+# `systemctl --user` needs XDG_RUNTIME_DIR to find the D-Bus socket. In a
+# non-login session (a bot, `sudo su -`) PAM doesn't set it, so derive it from
+# /run/user/<uid> when linger is on — same logic as ghapplib/phantombot.
+SYSTEMD_USER_OK=1
+if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+    _rt="/run/user/$(id -u)"
+    if [[ -d "$_rt" ]]; then
+        export XDG_RUNTIME_DIR="$_rt"
+        export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$_rt/bus}"
+    else
+        SYSTEMD_USER_OK=0
+    fi
+fi
 
-if [[ $CREDS_OK -eq 1 ]]; then
-    systemctl --user start github-app-auth-refresh.timer
-    info "  Timer installed and started: github-app-auth-refresh.timer"
+if [[ $SYSTEMD_USER_OK -eq 0 ]]; then
+    warn "Skipping systemd timer: no user bus ($_rt missing)."
+    warn "  Enable linger, then re-run: sudo loginctl enable-linger $(id -un)"
+    warn "  Until then the token won't auto-refresh; run 'github-app-auth doctor' to verify."
 else
-    info "  Timer installed and enabled (not started — fill ~/.env first, then:"
-    info "    systemctl --user start github-app-auth-refresh.timer)"
+    systemctl --user daemon-reload
+    systemctl --user enable github-app-auth-refresh.timer
+
+    if [[ $CREDS_OK -eq 1 ]]; then
+        systemctl --user start github-app-auth-refresh.timer
+        info "  Timer installed and started: github-app-auth-refresh.timer"
+    else
+        info "  Timer installed and enabled (not started — fill ~/.env first, then:"
+        info "    systemctl --user start github-app-auth-refresh.timer)"
+    fi
 fi
 
 # --- Configure git ---
@@ -162,8 +182,8 @@ fi
 if command -v phantombot &>/dev/null; then
     info "Capturing capability hint to phantombot memory..."
     phantombot memory capture \
-      "github-app-auth installed: I can read/write any repo my GitHub App is installed on. Run \`list-repos-as-app\` to discover which repos are accessible (use \`--clone-urls\` for HTTPS URLs, \`--json\` for scripting). Standard \`git clone/fetch/pull/push\` work transparently for those repos via the wrapper in ~/.local/bin/git. To open a pull request, use \`create-pr-as-app \"<title>\"\` instead of gh (needs the App's 'Pull requests: write' permission)." \
-      --tag lesson >/dev/null 2>&1 \
+      "github-app-auth installed: I can read/write any repo my GitHub App is installed on. Run \`github-app-auth list\` to discover every wrapper command and what it does. Run \`list-repos-as-app\` to see which repos are accessible (\`--clone-urls\` for HTTPS URLs, \`--json\` for scripting). Standard \`git clone/fetch/pull/push\` work transparently for those repos via the wrapper in ~/.local/bin/git. To open a pull request, use \`create-pr-as-app \"<title>\"\` instead of gh (needs the App's 'Pull requests: write' permission). NORM: never edit the installed copies in ~/.local/bin/ — they are symlinks into this repo; edit the repo and re-run install.sh. If I change wrapper behaviour, open an issue or PR on phantomyard/phantomtools so the change is versioned and shared instead of patching the local install only." \
+      --tag lesson --tag decision >/dev/null 2>&1 \
       && info "  hint captured (will surface on next agent turn)" \
       || warn "  phantombot memory capture failed (non-fatal)"
 fi
