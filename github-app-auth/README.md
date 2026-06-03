@@ -60,7 +60,7 @@ github-token.sh  (JWT → installation token)
 | `bin/git-pull-as-app` | Fetch + merge/rebase |
 | `bin/list-repos-as-app` | List repositories accessible to the installation |
 | `bin/create-pr-as-app` | Open a pull request via the REST API with the App identity |
-| `bin/github-app-auth` | Control & diagnostics: `doctor` (health checks with fixes) and `refresh` (force a token refresh) |
+| `bin/github-app-auth` | Control & diagnostics: `list` (discover commands), `doctor` (health checks with fixes), `refresh` (force a token refresh) |
 | `bin/git-credential-github-app` | Git credential helper reading `~/.github_env` |
 | `bin/github-token.sh` | Generates JWT, finds installation ID, exchanges for access token |
 | `bin/refresh-github-env.sh` | Timer wrapper that refreshes `~/.github_env` |
@@ -78,6 +78,18 @@ git push origin main
 git fetch origin
 git pull origin main
 ```
+
+### Discover what the wrapper can do
+
+Not sure which commands exist? Ask the wrapper instead of opening this README:
+
+```bash
+github-app-auth list        # every wrapper command + a one-line description
+git-push-as-app --help      # usage for any individual command
+```
+
+`list` enumerates the `bin/` directory live, so it stays accurate as commands
+are added. Every `*-as-app` command accepts `-h`/`--help`.
 
 ### Force-push safety
 

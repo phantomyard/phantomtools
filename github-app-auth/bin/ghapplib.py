@@ -497,3 +497,83 @@ def list_installation_repositories(token, _allow_refresh=True):
             raise
     return repos
 
+
+
+# --- Wrapper discovery ------------------------------------------------------
+# So a bot can ask "what can this wrapper do?" at runtime instead of guessing
+# from the *-as-app naming convention or having to open the README. The list is
+# derived live from bin/, so it can't drift out of date as commands are added.
+
+# Scripts that exist but aren't a command a caller should invoke directly:
+# the library module, the git shim, and the credential/refresh plumbing that
+# git and the systemd timer drive on your behalf.
+_DISCOVERY_HIDDEN = {
+    "ghapplib.py",            # imported module, not a command
+    "github-app-auth",        # the dispatcher itself; subcommands listed separately
+    "git",                    # transparent shim; you just run `git`
+    "git-credential-github-app",  # git calls this, not you
+    "github-token.sh",        # internal: prints a raw token
+    "refresh-github-env.sh",  # internal: driven by `refresh` / the timer
+}
+
+
+def wrapper_summary(text):
+    """Extract a one-line description from a script's header.
+
+    Handles both a Python `\"\"\"docstring\"\"\"` and a `#`-comment banner:
+    returns the first meaningful line (skipping the shebang, blank lines, and
+    pure separator rules like `# ====`). Returns "" if nothing usable is found.
+    Pure function — takes the file text, touches no filesystem — so it's unit
+    testable.
+    """
+    lines = text.splitlines()
+
+    # Python docstring: content between the first pair of triple quotes.
+    joined = "\n".join(lines)
+    m = re.search(r'(?:"""|\'\'\')(.*?)(?:"""|\'\'\')', joined, re.DOTALL)
+    if m:
+        for line in m.group(1).splitlines():
+            s = line.strip()
+            if s:
+                return s
+
+    # Shell/comment banner: first real text in the leading comment block.
+    for line in lines:
+        s = line.strip()
+        if not s or s.startswith("#!"):
+            continue
+        if not s.startswith("#"):
+            break  # hit code before any description — there's no banner
+        s = s.lstrip("#").strip()
+        if not s or set(s) <= set("=-"):  # blank or a separator rule
+            continue
+        return s
+    return ""
+
+
+def list_wrappers(bin_dir=None):
+    """Return [(name, summary), ...] for the caller-facing wrapper commands.
+
+    Enumerates executables in bin/, drops the internal plumbing in
+    _DISCOVERY_HIDDEN, and pairs each with its header one-liner. Sorted by name
+    so output is stable.
+    """
+    bin_dir = bin_dir or _bin_dir()
+    out = []
+    try:
+        names = os.listdir(bin_dir)
+    except OSError:
+        return out
+    for name in sorted(names):
+        if name in _DISCOVERY_HIDDEN or name.startswith("."):
+            continue
+        path = os.path.join(bin_dir, name)
+        if not os.path.isfile(path) or not os.access(path, os.X_OK):
+            continue
+        try:
+            with open(path) as f:
+                text = f.read(4096)
+        except OSError:
+            continue
+        out.append((name, wrapper_summary(text)))
+    return out
