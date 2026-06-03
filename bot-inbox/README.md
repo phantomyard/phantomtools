@@ -119,8 +119,9 @@ bot-inbox --from domhnall watch --ack
 ```
 
 - `--interval N` poll seconds (default 2.0)
-- `--once` scan once and exit (no loop)
-- `--replay` also emit messages already pending at startup
+- `--once` scan once and exit (no loop); drains what's already pending,
+  so it works as a one-shot "read everything now" without `--replay`
+- `--replay` also emit messages already pending at startup (for the looping mode)
 - `--ack` ack each message right after emitting it
 
 `--json` is available on `send` / `list` / `read` for machine-readable output.

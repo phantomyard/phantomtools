@@ -118,8 +118,11 @@ def read_body(args):
     if args.body_file:
         if args.body_file == "-":
             return sys.stdin.read()
-        with open(args.body_file, "r", encoding="utf-8") as fh:
-            return fh.read()
+        try:
+            with open(args.body_file, "r", encoding="utf-8") as fh:
+                return fh.read()
+        except OSError as e:
+            die(f"cannot read body file {args.body_file}: {e}")
     return ""
 
 
@@ -188,6 +191,16 @@ def cmd_send(args):
             fh.flush()
             os.fsync(fh.fileno())
         os.rename(tmp, final)  # atomic on same filesystem
+        # fsync the directory so the rename itself survives a host crash,
+        # not just the file contents. Best-effort: not every FS supports it.
+        try:
+            dfd = os.open(box, os.O_DIRECTORY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except (OSError, AttributeError):
+            pass
     except OSError as e:
         try:
             os.unlink(tmp)
@@ -284,14 +297,25 @@ def cmd_read(args):
         _do_ack(box, name)
 
 
-def _do_ack(box, name):
+def _do_ack(box, name, fatal=True):
+    """Move a handled message to processed/.
+
+    Returns True on success. With fatal=False (used by the watch loop, where
+    another consumer may have moved/acked the same message concurrently),
+    a failure is logged and False returned instead of exiting — one racing
+    ack shouldn't take down a long-running poller.
+    """
     processed = os.path.join(box, "processed")
     try:
         os.makedirs(processed, exist_ok=True)
         os.rename(os.path.join(box, name), os.path.join(processed, name))
     except OSError as e:
-        die(f"cannot ack {name}: {e}")
+        if fatal:
+            die(f"cannot ack {name}: {e}")
+        print(f"bot-inbox: cannot ack {name}: {e}", file=sys.stderr)
+        return False
     print(f"acked -> processed/{name}", file=sys.stderr)
+    return True
 
 
 def cmd_ack(args):
@@ -308,27 +332,40 @@ def cmd_watch(args):
     me = self_name(args)
     box = inbox_path(me)
     os.makedirs(box, exist_ok=True)
-    seen = set(list_messages(box))
-    # On start, optionally replay what's already pending.
-    if args.replay:
+    # On start, suppress what's already pending — unless we're explicitly
+    # replaying, or doing a one-shot drain (--once with a primed `seen` set
+    # would emit nothing, a silent no-op for the common "drain now" use).
+    if args.replay or args.once:
         seen = set()
+    else:
+        seen = set(list_messages(box))
     interval = max(0.2, args.interval)
     try:
         while True:
             for n in list_messages(box):
                 if n in seen:
                     continue
-                seen.add(n)
                 try:
                     msg = load_message(box, n)
-                except (OSError, json.JSONDecodeError) as e:
+                except json.JSONDecodeError as e:
+                    # Genuinely corrupt JSON — mark seen so we report it once,
+                    # not on every poll.
+                    seen.add(n)
                     print(json.dumps({"id": n, "error": str(e)}), flush=True)
                     continue
+                except OSError as e:
+                    # Likely transient (e.g. NFS hiccup mid-write). Leave it
+                    # unseen so the next poll retries.
+                    print(json.dumps({"id": n, "error": str(e)}), flush=True)
+                    continue
+                seen.add(n)
                 print(json.dumps({"id": n, "message": msg}, ensure_ascii=False),
                       flush=True)
                 if args.ack:
-                    _do_ack(box, n)
-                    seen.discard(n)
+                    # A racing consumer may have moved it already; don't let
+                    # that kill the loop. Drop from `seen` only on a real ack.
+                    if _do_ack(box, n, fatal=False):
+                        seen.discard(n)
             if args.once:
                 return
             time.sleep(interval)
@@ -380,7 +417,7 @@ def build_parser():
     s.add_argument("--ack", action="store_true",
                    help="ack each message after emitting it")
     s.add_argument("--once", action="store_true",
-                   help="scan once and exit (don't loop)")
+                   help="scan once and exit (drains pending; implies --replay)")
     s.add_argument("--replay", action="store_true",
                    help="also emit messages already pending at start")
     s.set_defaults(func=cmd_watch)

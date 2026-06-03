@@ -236,3 +236,29 @@ def test_watch_once_ack_moves_to_processed(root, capsys):
     capsys.readouterr()
     assert list((root / "x").glob("*.json")) == []
     assert len(list((root / "x" / "processed").glob("*.json"))) == 1
+
+
+def test_watch_once_drains_without_replay(root, capsys):
+    # --once is a one-shot "drain now": it must emit what is already pending
+    # even without --replay (otherwise it's a silent no-op).
+    run(["--from", "b", "send", "--to", "x", "--subject", "s1"])
+    run(["--from", "b", "send", "--to", "x", "--subject", "s2"])
+    capsys.readouterr()
+    run(["--from", "x", "watch", "--once"])
+    lines = [l for l in capsys.readouterr().out.splitlines() if l.strip()]
+    assert len(lines) == 2
+    subs = {json.loads(l)["message"]["subject"] for l in lines}
+    assert subs == {"s1", "s2"}
+
+
+def test_watch_corrupt_json_reported_once(root, capsys):
+    # A non-conforming writer can leave invalid JSON. watch must report it,
+    # not crash, and (with --once) mark it seen so it isn't replayed forever.
+    box = root / "x"
+    box.mkdir()
+    (box / "2026-06-03T00-00-00-000000Z-b-abcdef.json").write_text("{not json")
+    capsys.readouterr()
+    run(["--from", "x", "watch", "--once"])
+    lines = [l for l in capsys.readouterr().out.splitlines() if l.strip()]
+    assert len(lines) == 1
+    assert "error" in json.loads(lines[0])
