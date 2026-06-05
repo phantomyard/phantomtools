@@ -54,12 +54,29 @@ class TestGhappLib(unittest.TestCase):
 
     @mock.patch('os.stat')
     @mock.patch('os.path.exists')
-    def test_get_token_prefers_env(self, mock_exists, mock_stat):
-        """An already-exported GITHUB_TOKEN short-circuits the file read."""
+    @mock.patch('builtins.open', new_callable=mock.mock_open, read_data='export GITHUB_TOKEN="ghs_file"\n')
+    def test_get_token_file_wins_over_env(self, mock_file, mock_exists, mock_stat):
+        """The on-disk token is the source of truth: a long-lived process holds
+        a stale GITHUB_TOKEN in its env, so the file must win over it."""
+        mock_exists.return_value = True
+        mock_stat.return_value = mock.Mock(st_mode=0o100600)  # -rw-------
+        with mock.patch.dict(os.environ, {'GITHUB_TOKEN': 'ghs_stale_env'}, clear=True):
+            self.assertEqual(ghapplib.get_token(), 'ghs_file')
+
+    @mock.patch('os.path.exists', return_value=False)
+    def test_get_token_falls_back_to_env_without_file(self, mock_exists):
+        """Fresh install / CI: no ~/.github_env yet, so the env is the fallback."""
         with mock.patch.dict(os.environ, {'GITHUB_TOKEN': 'ghs_env'}, clear=True):
             self.assertEqual(ghapplib.get_token(), 'ghs_env')
-        mock_exists.assert_not_called()
-        mock_stat.assert_not_called()
+
+    @mock.patch('os.stat')
+    @mock.patch('os.path.exists', return_value=True)
+    @mock.patch('builtins.open', new_callable=mock.mock_open, read_data='# no token line here\n')
+    def test_get_token_falls_back_to_env_when_file_lacks_token(self, mock_file, mock_exists, mock_stat):
+        """A file present but without a GITHUB_TOKEN line still falls back to env."""
+        mock_stat.return_value = mock.Mock(st_mode=0o100600)  # -rw-------
+        with mock.patch.dict(os.environ, {'GITHUB_TOKEN': 'ghs_env'}, clear=True):
+            self.assertEqual(ghapplib.get_token(), 'ghs_env')
 
     @mock.patch('urllib.request.urlopen')
     def test_api_request_success(self, mock_urlopen):
@@ -353,14 +370,28 @@ class TestSelfHeal(unittest.TestCase):
     """Token expiry tracking + the one-shot refresh-on-401 self-heal."""
 
     def test_get_token_expiry_from_env(self):
-        with mock.patch.dict(os.environ,
-                             {'GITHUB_TOKEN_EXPIRES_AT': '2030-01-01T00:00:00Z'},
-                             clear=True):
-            exp = ghapplib.get_token_expiry()
+        # No file present, so the env is the fallback source.
+        with mock.patch('os.path.exists', return_value=False):
+            with mock.patch.dict(os.environ,
+                                 {'GITHUB_TOKEN_EXPIRES_AT': '2030-01-01T00:00:00Z'},
+                                 clear=True):
+                exp = ghapplib.get_token_expiry()
         self.assertIsNotNone(exp)
         self.assertEqual(exp.year, 2030)
         # 'Z' must be parsed as UTC, not dropped.
         self.assertIsNotNone(exp.tzinfo)
+
+    @mock.patch('os.path.exists', return_value=True)
+    @mock.patch('builtins.open', new_callable=mock.mock_open,
+                read_data='export GITHUB_TOKEN_EXPIRES_AT="2031-01-01T00:00:00Z"\n')
+    def test_get_token_expiry_file_wins_over_env(self, mock_file, mock_exists):
+        """File expiry must win over a stale env copy, matching get_token()."""
+        with mock.patch.dict(os.environ,
+                             {'GITHUB_TOKEN_EXPIRES_AT': '2020-01-01T00:00:00Z'},
+                             clear=True):
+            exp = ghapplib.get_token_expiry()
+        self.assertIsNotNone(exp)
+        self.assertEqual(exp.year, 2031)
 
     def test_get_token_expiry_unknown(self):
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -368,10 +399,11 @@ class TestSelfHeal(unittest.TestCase):
                 self.assertIsNone(ghapplib.get_token_expiry())
 
     def test_get_token_expiry_bad_value(self):
-        with mock.patch.dict(os.environ,
-                             {'GITHUB_TOKEN_EXPIRES_AT': 'not-a-date'},
-                             clear=True):
-            self.assertIsNone(ghapplib.get_token_expiry())
+        with mock.patch('os.path.exists', return_value=False):
+            with mock.patch.dict(os.environ,
+                                 {'GITHUB_TOKEN_EXPIRES_AT': 'not-a-date'},
+                                 clear=True):
+                self.assertIsNone(ghapplib.get_token_expiry())
 
     def test_token_is_expired_past(self):
         with mock.patch.dict(os.environ,
