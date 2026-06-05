@@ -25,9 +25,30 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 mkdir -p "$bindir"
-ln -sf "$src" "$bindir/bot-inbox"
 
-echo "installed: $bindir/bot-inbox -> $src"
+# Don't blindly `ln -sf`: that silently clobbers a regular file someone may
+# have edited in place, losing the change. Reclaim only a symlink that already
+# points at our source (or a dangling one); refuse a foreign symlink or a real
+# file and point at report-drift so any in-place edit can be folded back in.
+target="$bindir/bot-inbox"
+if [[ -L "$target" ]]; then
+    current="$(readlink -f "$target" 2>/dev/null || true)"
+    src_real="$(readlink -f "$src" 2>/dev/null || echo "$src")"
+    if [[ "$current" == "$src_real" || "$current" == "$src" ]]; then
+        rm -f "$target"
+    elif [[ -z "$current" ]]; then
+        rm -f "$target"  # dangling symlink, safe to replace
+    else
+        echo "install: refusing to overwrite $target — it links to $current, not this repo. Remove it manually if intended." >&2
+        exit 1
+    fi
+elif [[ -e "$target" ]]; then
+    echo "install: refusing to overwrite $target — it's a regular file, not our symlink. It may hold in-place edits; check with: github-app-auth report-drift bot-inbox/bot-inbox — then remove it manually if intended." >&2
+    exit 1
+fi
+ln -s "$src" "$target"
+
+echo "installed: $target -> $src"
 
 case ":$PATH:" in
     *":$bindir:"*) ;;

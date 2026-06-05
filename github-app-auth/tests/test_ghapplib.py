@@ -588,5 +588,121 @@ class TestWrapperDiscovery(unittest.TestCase):
         self.assertEqual(ghapplib.list_wrappers("/no/such/dir/xyz"), [])
 
 
+class TestDrift(unittest.TestCase):
+    """Wrapper-drift detection — the pure logic plus a real temp-dir tree."""
+
+    def test_drift_marker_is_stable(self):
+        self.assertEqual(
+            ghapplib.drift_marker("bot-inbox", "bot-inbox"),
+            "<!-- report-drift:bot-inbox/bot-inbox -->")
+
+    def test_unified_drift_identical_is_empty(self):
+        self.assertEqual(ghapplib.unified_drift("a\nb\n", "a\nb\n", "x", "y"), "")
+
+    def test_unified_drift_shows_change(self):
+        diff = ghapplib.unified_drift(
+            "line1\nold\n", "line1\nnew\n", "installed", "repo")
+        self.assertIn("-old", diff)
+        self.assertIn("+new", diff)
+        self.assertIn("installed", diff)
+        self.assertIn("repo", diff)
+
+    def _make_repo(self):
+        import tempfile
+        root = tempfile.mkdtemp()
+        # A proper tool: bin/ + install.sh.
+        tool = os.path.join(root, "mytool")
+        bindir = os.path.join(tool, "bin")
+        os.makedirs(bindir)
+        with open(os.path.join(tool, "install.sh"), "w") as f:
+            f.write("#!/bin/bash\n")
+        with open(os.path.join(bindir, "wrap"), "w") as f:
+            f.write("#!/bin/bash\necho hi\n")
+        # A dir that looks tool-ish but has no install.sh — must be skipped.
+        nope = os.path.join(root, "notatool", "bin")
+        os.makedirs(nope)
+        with open(os.path.join(nope, "ghost"), "w") as f:
+            f.write("x\n")
+        return root
+
+    def test_discover_skips_dirs_without_install_sh(self):
+        root = self._make_repo()
+        found = ghapplib.discover_tool_wrappers(root)
+        names = [(t, s) for (t, s, _p) in found]
+        self.assertIn(("mytool", "wrap"), names)
+        self.assertNotIn(("notatool", "ghost"), names)
+
+    def test_classify_missing_ok_drift_foreign(self):
+        import tempfile
+        root = self._make_repo()
+        repo_wrap = os.path.join(root, "mytool", "bin", "wrap")
+        local_bin = tempfile.mkdtemp()
+        installed = os.path.join(local_bin, "wrap")
+
+        # missing
+        self.assertEqual(
+            ghapplib.classify_wrapper(repo_wrap, installed)[0], "missing")
+        # ok via symlink into repo
+        os.symlink(repo_wrap, installed)
+        self.assertEqual(
+            ghapplib.classify_wrapper(repo_wrap, installed)[0], "ok")
+        # foreign symlink
+        os.remove(installed)
+        other = os.path.join(local_bin, "other")
+        with open(other, "w") as f:
+            f.write("not ours\n")
+        os.symlink(other, installed)
+        self.assertEqual(
+            ghapplib.classify_wrapper(repo_wrap, installed)[0], "foreign")
+        # drift: regular file that differs
+        os.remove(installed)
+        with open(installed, "w") as f:
+            f.write("#!/bin/bash\necho EDITED\n")
+        self.assertEqual(
+            ghapplib.classify_wrapper(repo_wrap, installed)[0], "drift")
+        # ok: regular file identical to repo
+        with open(installed, "w") as f:
+            f.write("#!/bin/bash\necho hi\n")
+        self.assertEqual(
+            ghapplib.classify_wrapper(repo_wrap, installed)[0], "ok")
+
+    def test_scan_drift_populates_diff(self):
+        import tempfile
+        root = self._make_repo()
+        local_bin = tempfile.mkdtemp()
+        with open(os.path.join(local_bin, "wrap"), "w") as f:
+            f.write("#!/bin/bash\necho DRIFTED\n")
+        records = ghapplib.scan_drift(root, local_bin)
+        rec = next(r for r in records if r["script"] == "wrap")
+        self.assertEqual(rec["status"], "drift")
+        self.assertIn("DRIFTED", rec["diff"])
+        self.assertIn("hi", rec["diff"])
+
+    def test_find_open_issue_by_marker_skips_prs(self):
+        client = ghapplib.GitHubAppClient("o", "r", "tok", "/usr/bin/git")
+        marker = "<!-- report-drift:mytool/wrap -->"
+        fake = [
+            {"number": 1, "body": "unrelated"},
+            {"number": 2, "body": f"x {marker} y", "pull_request": {}},  # a PR
+            {"number": 3, "body": f"has {marker} here"},
+        ]
+        with mock.patch.object(client, "api_request", return_value=fake):
+            hit = client.find_open_issue_by_marker(marker)
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit["number"], 3)
+
+    def test_create_issue_posts_payload(self):
+        client = ghapplib.GitHubAppClient("o", "r", "tok", "/usr/bin/git")
+        with mock.patch.object(client, "api_request",
+                               return_value={"number": 7}) as m:
+            client.create_issue("title", "body", labels=["drift"])
+        m.assert_called_once()
+        args, _ = m.call_args
+        self.assertEqual(args[0], "POST")
+        self.assertEqual(args[1], "issues")
+        self.assertEqual(args[2]["title"], "title")
+        self.assertEqual(args[2]["labels"], ["drift"])
+
+
 if __name__ == '__main__':
     unittest.main()

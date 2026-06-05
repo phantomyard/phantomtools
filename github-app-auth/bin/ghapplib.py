@@ -6,6 +6,7 @@ import json
 import base64
 import re
 import shutil
+import difflib
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -234,6 +235,45 @@ class GitHubAppClient:
                 )
             raise
 
+    def create_issue(self, title, body, labels=None):
+        """Open an issue via the REST API using the App identity.
+
+        A 403/404 here usually means the App lacks the `Issues: write`
+        permission (or the installation hasn't accepted it) — same family of
+        symptom as the PR helper above, so we surface it the same way instead
+        of letting the bot guess.
+        """
+        payload = {"title": title, "body": body}
+        if labels:
+            payload["labels"] = labels
+        try:
+            return self.api_request("POST", "issues", payload)
+        except urllib.error.HTTPError as e:
+            if e.code in (403, 404):
+                print(
+                    f"Hint: issue creation got {e.code} — does the GitHub App "
+                    "have the 'Issues: Read & write' permission, and has the "
+                    "installation accepted it?",
+                    file=sys.stderr,
+                )
+            raise
+
+    def find_open_issue_by_marker(self, marker):
+        """Return the first open issue whose body contains `marker`, else None.
+
+        Used to de-dup automated issues: each report carries a stable HTML
+        marker comment, so we never open a second issue for a drift that is
+        already tracked. The /issues endpoint returns pull requests too, so we
+        skip anything carrying a `pull_request` key.
+        """
+        issues = self.api_request("GET", "issues?state=open&per_page=100")
+        for it in issues:
+            if "pull_request" in it:
+                continue
+            if marker in (it.get("body") or ""):
+                return it
+        return None
+
     def _upload_blob(self, sha):
         """Upload a single blob by its local SHA, return the remote blob SHA.
         GitHub blob SHAs are content-addressed, so this is idempotent."""
@@ -358,6 +398,140 @@ class GitHubAppClient:
         tree_data = self.api_request("POST", "git/trees", {"tree": entries})
         self.remote_object_cache.add(tree_data["sha"])
         return tree_data["sha"]
+
+# =============================================================================
+# Wrapper-drift detection
+# -----------------------------------------------------------------------------
+# The installed copies in ~/.local/bin are meant to be symlinks into this repo.
+# When someone edits the installed copy in place (turning a symlink into a
+# regular, diverged file) the change is invisible to version control and lost
+# on the next install. report-drift surfaces that: it walks every tool in the
+# repo, compares each installed wrapper to its repo source, and (optionally)
+# opens a de-duplicated issue so the drift gets folded back in.
+# =============================================================================
+
+DRIFT_MARKER_FMT = "<!-- report-drift:{key} -->"
+
+
+def drift_marker(tool, script):
+    """Stable HTML-comment marker for one wrapper, used to de-dup issues."""
+    return DRIFT_MARKER_FMT.format(key=f"{tool}/{script}")
+
+
+def unified_drift(installed_text, repo_text, installed_label, repo_label):
+    """Return a unified diff (installed → repo) or "" if identical.
+
+    Pure function — takes the two file contents as strings, touches no
+    filesystem — so the drift logic is unit testable without a real install.
+    """
+    if installed_text == repo_text:
+        return ""
+    diff = difflib.unified_diff(
+        installed_text.splitlines(keepends=True),
+        repo_text.splitlines(keepends=True),
+        fromfile=installed_label,
+        tofile=repo_label,
+    )
+    return "".join(diff)
+
+
+def discover_tool_wrappers(repo_root):
+    """Yield (tool, script, abs_repo_path) for every installable wrapper.
+
+    An "installable" subproject is any immediate subdirectory of repo_root that
+    has both a bin/ directory and an install.sh — the same shape both current
+    tools share — so new tools are picked up automatically with no edit here.
+    Only regular files inside bin/ count (a tool's bin/ may hold a library or a
+    __pycache__ dir; those aren't wrappers, but comparing them is harmless if
+    install.sh symlinked them too).
+    """
+    out = []
+    try:
+        tools = sorted(os.listdir(repo_root))
+    except OSError:
+        return out
+    for tool in tools:
+        tool_dir = os.path.join(repo_root, tool)
+        bin_dir = os.path.join(tool_dir, "bin")
+        if not os.path.isdir(bin_dir):
+            continue
+        if not os.path.isfile(os.path.join(tool_dir, "install.sh")):
+            continue
+        for name in sorted(os.listdir(bin_dir)):
+            if name.startswith(".") or name == "__pycache__":
+                continue
+            path = os.path.join(bin_dir, name)
+            if os.path.isfile(path):
+                out.append((tool, name, path))
+    return out
+
+
+def classify_wrapper(repo_path, installed_path):
+    """Compare one installed wrapper against its repo source.
+
+    Returns (status, diff):
+      missing — nothing is installed at installed_path (tool not installed).
+      ok      — installed is a symlink resolving to repo_path, or a regular
+                file byte-identical to it.
+      foreign — installed is a symlink pointing somewhere else (not our repo);
+                we never touch or report on someone else's tool.
+      drift   — installed is a regular file whose contents differ from repo.
+    `diff` is non-empty only for status == "drift".
+    """
+    if not os.path.lexists(installed_path):
+        return "missing", ""
+    if os.path.islink(installed_path):
+        target = os.path.realpath(installed_path)
+        if target == os.path.realpath(repo_path):
+            return "ok", ""
+        # A dangling symlink (target gone) or one pointing elsewhere is not a
+        # diverged copy of our file — leave it alone.
+        return "foreign", ""
+    # Regular file with our name: compare contents.
+    try:
+        with open(installed_path, "r", errors="replace") as f:
+            installed_text = f.read()
+        with open(repo_path, "r", errors="replace") as f:
+            repo_text = f.read()
+    except OSError:
+        return "foreign", ""
+    if installed_text == repo_text:
+        return "ok", ""
+    return "drift", ""
+
+
+def scan_drift(repo_root, local_bin):
+    """Walk every repo wrapper and classify its installed copy.
+
+    Returns a list of records: {tool, script, repo_path, installed_path,
+    status, diff}. Pure orchestration over discover_tool_wrappers /
+    classify_wrapper — kept here (not in the CLI) so behaviour is one place.
+    """
+    records = []
+    for tool, script, repo_path in discover_tool_wrappers(repo_root):
+        installed_path = os.path.join(local_bin, script)
+        status, _ = classify_wrapper(repo_path, installed_path)
+        diff = ""
+        if status == "drift":
+            with open(installed_path, "r", errors="replace") as f:
+                installed_text = f.read()
+            with open(repo_path, "r", errors="replace") as f:
+                repo_text = f.read()
+            diff = unified_drift(
+                installed_text, repo_text,
+                f"installed: {installed_path}",
+                f"repo: {tool}/bin/{script}",
+            )
+        records.append({
+            "tool": tool,
+            "script": script,
+            "repo_path": repo_path,
+            "installed_path": installed_path,
+            "status": status,
+            "diff": diff,
+        })
+    return records
+
 
 def determine_push_strategy(local_sha, remote_sha, remote_known_locally, is_ancestor, branch_exists_remote, force=False):
     """Determine which commits to push and how.

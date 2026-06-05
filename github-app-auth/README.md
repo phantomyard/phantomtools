@@ -168,6 +168,25 @@ github-app-auth refresh
 sudo loginctl enable-linger "$USER"
 ```
 
+### Drift reporting (`report-drift`)
+
+The installed wrappers are symlinks into this repo, so the repo is the single
+source of truth. `report-drift` catches the case where an installed copy was
+edited *in place* — a diverged regular file instead of a symlink, invisible to
+git and lost on the next `install.sh`. It scans **every** phantomtools tool
+(anything with a `bin/` + `install.sh`), not just this one:
+
+```bash
+github-app-auth report-drift                       # scan all, file an issue per drift
+github-app-auth report-drift --dry-run             # show diffs, file nothing
+github-app-auth report-drift bot-inbox/bot-inbox   # limit to one wrapper
+```
+
+Each drift opens one de-duplicated issue on the repo (keyed by a stable
+`<!-- report-drift:<tool>/<script> -->` marker, so re-running won't pile up
+duplicates). It defaults to filing on the repo's `origin` remote — override with
+`--repo owner/repo`. Filing needs the App's **Issues: read + write** permission.
+
 ## Requirements
 
 - `openssl`, `python3`, `curl`, `git`
@@ -175,6 +194,7 @@ sudo loginctl enable-linger "$USER"
   - Contents: read + write
   - Installations: read
   - Pull requests: read + write *(only needed for `create-pr-as-app`)*
+  - Issues: read + write *(only needed for `report-drift`)*
   - Installed on the target repos
 - The App's private key file on disk
 

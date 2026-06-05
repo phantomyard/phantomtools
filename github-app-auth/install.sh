@@ -82,7 +82,8 @@ for bin in "$BIN_DIR"/*; do
         fi
     elif [[ -e "$target" ]]; then
         # A real file (not a symlink) with our name — don't silently clobber it.
-        die "refusing to overwrite $target — it's a regular file, not one of our symlinks. Remove it manually if intended."
+        # It may carry in-place edits worth keeping; report-drift surfaces them.
+        die "refusing to overwrite $target — it's a regular file, not one of our symlinks. It may hold in-place edits; check with: github-app-auth report-drift github-app-auth/$name — then remove it manually if intended."
     fi
     ln -s "$bin" "$target"
     info "  $name → $target"

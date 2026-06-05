@@ -28,7 +28,8 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from ghapplib import (  # noqa: E402
     get_token, get_token_expiry, refresh_token, ensure_user_systemd_env,
-    list_wrappers,
+    list_wrappers, ensure_token, get_real_git, run_git, GitHubAppClient,
+    parse_owner_repo, scan_drift, drift_marker,
 )
 
 TIMER_UNIT = "github-app-auth-refresh.timer"
@@ -235,6 +236,7 @@ def cmd_list(args):
         ("github-app-auth list", "Show this list of wrapper commands."),
         ("github-app-auth doctor", "Health-check auth and print fixes."),
         ("github-app-auth refresh", "Force a token refresh now."),
+        ("github-app-auth report-drift", "Report installed wrappers that drifted from the repo."),
     ]
     width = max([len(n) for n, _ in wrappers] + [len(n) for n, _ in builtins])
     for name, summary in wrappers:
@@ -259,6 +261,142 @@ def cmd_refresh(args):
     return 0
 
 
+DEFAULT_DRIFT_REPO = "phantomyard/phantomtools"
+
+
+def _repo_root():
+    """The repo this wrapper lives in. The installed copies are symlinks into
+    *this* checkout, so we resolve from the script's own location — not the
+    caller's cwd, which could be any repo."""
+    # .../<repo>/github-app-auth/bin/github-app-auth -> three dirnames up.
+    here = os.path.dirname(os.path.realpath(__file__))
+    return os.path.dirname(os.path.dirname(here))
+
+
+def _drift_repo(repo_root, override):
+    """Resolve owner/repo for filing drift issues: explicit --repo wins, else
+    the repo's own origin remote, else the phantomyard/phantomtools default."""
+    if override:
+        if "/" not in override:
+            return None
+        return tuple(override.split("/", 1))
+    git_bin = get_real_git(__file__)
+    if git_bin:
+        try:
+            url = run_git(
+                git_bin, ["-C", repo_root, "remote", "get-url", "origin"]
+            ).stdout.strip()
+            parsed = parse_owner_repo(url)
+            if parsed:
+                return parsed
+        except Exception:
+            pass
+    return tuple(DEFAULT_DRIFT_REPO.split("/", 1))
+
+
+def _build_issue_body(rec, marker):
+    return (
+        f"{marker}\n\n"
+        f"The installed copy of `{rec['script']}` (from the `{rec['tool']}` "
+        "tool) has drifted from its source in the repo.\n\n"
+        "It is a regular file that differs from the repo version, instead of a "
+        "symlink into the checkout — so the change was made *in place* on the "
+        "installed copy and is invisible to version control. It will be lost "
+        "the next time `install.sh` runs.\n\n"
+        f"- installed: `{rec['installed_path']}`\n"
+        f"- repo source: `{rec['tool']}/bin/{rec['script']}`\n\n"
+        "Fold the change back into the repo (edit the source, commit, re-run "
+        f"`{rec['tool']}/install.sh`) or discard it. Unified diff "
+        "(installed → repo):\n\n"
+        "```diff\n"
+        f"{rec['diff']}"
+        "```\n\n"
+        "_Filed automatically by `github-app-auth report-drift`._"
+    )
+
+
+def cmd_report_drift(args):
+    repo_root = _repo_root()
+    local_bin = os.path.expanduser(args.local_bin)
+    records = scan_drift(repo_root, local_bin)
+
+    target = args.target
+    if target:
+        # Accept either "tool/script" or a bare "script" name.
+        if "/" in target:
+            t_tool, t_script = target.split("/", 1)
+            records = [r for r in records
+                       if r["tool"] == t_tool and r["script"] == t_script]
+        else:
+            records = [r for r in records if r["script"] == target]
+        if not records:
+            print(f"report-drift: no installed wrapper matches '{target}'",
+                  file=sys.stderr)
+            return 2
+
+    drifts = [r for r in records if r["status"] == "drift"]
+
+    print("github-app-auth report-drift")
+    print(f"  repo:       {repo_root}")
+    print(f"  local bin:  {local_bin}")
+    print()
+    if not drifts:
+        scanned = sum(1 for r in records if r["status"] != "missing")
+        print(_c("32", f"no drift — {scanned} installed wrapper(s) match the repo."))
+        return 0
+
+    for r in drifts:
+        print(_c("31", f"  DRIFT  {r['tool']}/{r['script']}"))
+    print()
+
+    if args.dry_run:
+        for r in drifts:
+            print(f"--- {r['tool']}/{r['script']} ---")
+            print(r["diff"])
+        print(_c("33", "dry-run: no issue opened."))
+        return 1
+
+    # Filing mode: need a token + a target repo.
+    token = ensure_token()
+    if not token:
+        print("Error: no GitHub token (ensure ~/.github_env or run "
+              "`github-app-auth refresh`).", file=sys.stderr)
+        return 1
+    resolved = _drift_repo(repo_root, args.repo)
+    if not resolved:
+        print(f"Error: --repo must be owner/repo, got: {args.repo}",
+              file=sys.stderr)
+        return 1
+    owner, repo = resolved
+    git_bin = get_real_git(__file__)
+    client = GitHubAppClient(owner, repo, token, git_bin)
+
+    rc = 1
+    for r in drifts:
+        marker = drift_marker(r["tool"], r["script"])
+        try:
+            existing = client.find_open_issue_by_marker(marker)
+        except Exception as e:
+            print(f"  warn: could not check existing issues for "
+                  f"{r['tool']}/{r['script']}: {e}", file=sys.stderr)
+            existing = None
+        if existing:
+            print(f"  already tracked: {r['tool']}/{r['script']} → "
+                  f"{existing.get('html_url', '#' + str(existing.get('number')))}")
+            continue
+        title = f"Wrapper drift: {r['tool']}/{r['script']} differs from repo"
+        body = _build_issue_body(r, marker)
+        try:
+            resp = client.create_issue(title, body)
+        except Exception as e:
+            print(f"  error: failed to open issue for "
+                  f"{r['tool']}/{r['script']}: {e}", file=sys.stderr)
+            continue
+        print(f"  opened: {r['tool']}/{r['script']} → "
+              f"{resp.get('html_url', '#' + str(resp.get('number')))}")
+    return rc
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="github-app-auth",
@@ -268,6 +406,22 @@ def main():
                    help="List every wrapper command and what it does.")
     sub.add_parser("doctor", help="Run health checks with concrete fixes.")
     sub.add_parser("refresh", help="Force a token refresh now.")
+    p_drift = sub.add_parser(
+        "report-drift",
+        help="Report installed wrappers that have drifted from the repo.")
+    p_drift.add_argument(
+        "target", nargs="?",
+        help="Limit to one wrapper: 'tool/script' or a bare 'script' name.")
+    p_drift.add_argument(
+        "--dry-run", action="store_true",
+        help="Print drift diffs but don't open any issue.")
+    p_drift.add_argument(
+        "--repo",
+        help="owner/repo to file issues on (default: origin, else "
+             f"{DEFAULT_DRIFT_REPO}).")
+    p_drift.add_argument(
+        "--local-bin", default="~/.local/bin",
+        help="Directory holding the installed wrappers (default: ~/.local/bin).")
     args = parser.parse_args()
 
     if args.command in ("list", "help"):
@@ -276,6 +430,8 @@ def main():
         sys.exit(cmd_doctor(args))
     elif args.command == "refresh":
         sys.exit(cmd_refresh(args))
+    elif args.command == "report-drift":
+        sys.exit(cmd_report_drift(args))
     else:
         parser.print_help()
         sys.exit(2)
