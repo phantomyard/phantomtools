@@ -34,6 +34,42 @@ DEFAULT_IMAP_HOST = "imap.gmail.com"
 DEFAULT_IMAP_PORT = 993
 
 
+def load_env_files() -> None:
+    """Populate INBOX_* vars from ~/.env and ~/.config/phantombot/.env.
+
+    phantombot stores credentials in ~/.env (mode 0600); a plain shell does not
+    export them, so running this script by hand (as the README's verify step
+    does) would otherwise fail with "missing INBOX_EMAIL". Load them here,
+    without overwriting anything already in the environment — an explicit env
+    var or a phantombot --secret injection always wins.
+    """
+    for path in (
+        os.path.expanduser("~/.env"),
+        os.path.expanduser("~/.config/phantombot/.env"),
+    ):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                lines = handle.readlines()
+        except OSError:
+            continue
+        for raw in lines:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):]
+            key, sep, value = line.partition("=")
+            if not sep:
+                continue
+            key = key.strip()
+            if not key.startswith("INBOX_") or key in os.environ:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            os.environ[key] = value
+
+
 def require_env(name: str) -> str:
     value = os.environ.get(name)
     if not value:
@@ -155,6 +191,7 @@ def cmd_mark_unseen(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    load_env_files()
     parser = argparse.ArgumentParser(description="IMAP helper for phantombot inbox triage")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list-unread").set_defaults(fn=cmd_list)

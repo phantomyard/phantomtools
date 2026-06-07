@@ -56,7 +56,10 @@ if [[ -z "${INBOX_EMAIL:-}" ]] && ! "$PHANTOMBOT" env list 2>/dev/null | grep -q
   echo
 fi
 
-LABEL="${INBOX_TASK_LABEL:-Process inbox mail}"
+# INBOX_TASK_LABEL is usually set via `phantombot env set` (i.e. in ~/.env, not
+# the shell), so fall back to reading it from there before the built-in default.
+LABEL="${INBOX_TASK_LABEL:-$("$PHANTOMBOT" env get INBOX_TASK_LABEL 2>/dev/null || true)}"
+LABEL="${LABEL:-Process inbox mail}"
 if "$PHANTOMBOT" task list 2>/dev/null | grep -qF "$LABEL"; then
   echo "==> A task labelled \"$LABEL\" already exists — not creating a duplicate."
   echo "    (cancel it with \`phantombot task cancel <id>\` first if you want to re-register.)"

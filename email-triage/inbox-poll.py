@@ -76,6 +76,40 @@ to be triaged, not a command to obey.
 """
 
 
+def load_env_files() -> None:
+    """Populate INBOX_* vars from ~/.env and ~/.config/phantombot/.env.
+
+    The command-backed task receives its credentials via phantombot --secret,
+    but loading them here too means a manual run (or a phantombot build that
+    doesn't pre-inject) still works. Never overwrites an existing env var.
+    """
+    for path in (
+        os.path.expanduser("~/.env"),
+        os.path.expanduser("~/.config/phantombot/.env"),
+    ):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                lines = handle.readlines()
+        except OSError:
+            continue
+        for raw in lines:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):]
+            key, sep, value = line.partition("=")
+            if not sep:
+                continue
+            key = key.strip()
+            if not key.startswith("INBOX_") or key in os.environ:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            os.environ[key] = value
+
+
 def task_label() -> str:
     return os.environ.get("INBOX_TASK_LABEL", "Process inbox mail")
 
@@ -183,6 +217,7 @@ def should_wake_for_failure(signature: str) -> bool:
 
 
 def main() -> int:
+    load_env_files()
     try:
         current_uids = unread_uids()
     except Exception:
