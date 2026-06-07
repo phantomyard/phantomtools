@@ -45,14 +45,25 @@ mkdir -p "$HOME/.local/state/phantombot-inbox-poll"
 
 # Credentials the command-backed task must be able to see at fire time. The task
 # runs with a minimal env, so each must be exposed explicitly via --secret.
-SECRETS=(INBOX_EMAIL INBOX_APP_PASSWORD INBOX_IMAP_HOST INBOX_IMAP_PORT INBOX_TASK_LABEL INBOX_WAKE_PROMPT)
+# Covers both backends: the IMAP vars and the gog vars (harmless when unused).
+SECRETS=(
+  INBOX_EMAIL INBOX_APP_PASSWORD INBOX_IMAP_HOST INBOX_IMAP_PORT
+  INBOX_GOG_ACCOUNTS INBOX_GOG_BIN INBOX_GOG_QUERY GOG_KEYRING_PASSWORD
+  INBOX_TASK_LABEL INBOX_WAKE_PROMPT
+)
 
-if [[ -z "${INBOX_EMAIL:-}" ]] && ! "$PHANTOMBOT" env list 2>/dev/null | grep -q '^INBOX_EMAIL$'; then
+# Note: no `env list | grep` here — under `set -o pipefail`, grep -q closes the
+# pipe on first match, env list dies with SIGPIPE, and the pipeline reports
+# failure even on a match. `env get` has no pipe, so the check is deterministic.
+has_env() { [[ -n "${!1:-}" ]] || [[ -n "$("$PHANTOMBOT" env get "$1" 2>/dev/null)" ]]; }
+
+if ! has_env INBOX_EMAIL && ! has_env INBOX_GOG_ACCOUNTS; then
   echo
-  echo "!! INBOX_EMAIL is not set yet. Before the poller can work, run:"
-  echo "     phantombot env set INBOX_EMAIL        \"you@example.com\""
-  echo "     phantombot env set INBOX_APP_PASSWORD \"your-imap-app-password\""
-  echo "   (see .env.example for the optional vars)."
+  echo "!! No account configured yet. Set up at least one backend before the poller works:"
+  echo "   IMAP:  phantombot env set INBOX_EMAIL        \"you@example.com\""
+  echo "          phantombot env set INBOX_APP_PASSWORD \"your-imap-app-password\""
+  echo "   GOG:   phantombot env set INBOX_GOG_ACCOUNTS \"you@yourdomain.com\"   (must be authed in gog)"
+  echo "   (see .env.example for the optional vars; you can configure both.)"
   echo
 fi
 
@@ -60,7 +71,10 @@ fi
 # the shell), so fall back to reading it from there before the built-in default.
 LABEL="${INBOX_TASK_LABEL:-$("$PHANTOMBOT" env get INBOX_TASK_LABEL 2>/dev/null || true)}"
 LABEL="${LABEL:-Process inbox mail}"
-if "$PHANTOMBOT" task list 2>/dev/null | grep -qF "$LABEL"; then
+# Capture first (no pipe to grep -q) to avoid the same SIGPIPE/pipefail race —
+# a false "no match" here would register a DUPLICATE task, breaking idempotency.
+EXISTING_TASKS="$("$PHANTOMBOT" task list 2>/dev/null || true)"
+if grep -qF "$LABEL" <<<"$EXISTING_TASKS"; then
   echo "==> A task labelled \"$LABEL\" already exists — not creating a duplicate."
   echo "    (cancel it with \`phantombot task cancel <id>\` first if you want to re-register.)"
 else
@@ -77,5 +91,6 @@ fi
 
 echo
 echo "Done. Quick checks:"
-echo "  $INSTALL_DIR/inbox-mail.py list-unread     # verify IMAP creds work"
-echo "  phantombot task list                       # confirm the poll task is scheduled"
+echo "  $INSTALL_DIR/inbox-mail.py list-unread                       # IMAP account"
+echo "  $INSTALL_DIR/inbox-mail.py --account you@domain list-unread  # a gog account"
+echo "  phantombot task list                                         # confirm the poll task is scheduled"
