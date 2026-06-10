@@ -32,3 +32,11 @@ jobs:
 
       - name: Syntax check
         run: node --check server.js
+
+      - name: Syntax check (email-triage Python)
+        working-directory: email-triage
+        run: python3 -m py_compile inbox-poll.py inbox-mail.py
+
+      - name: Unit tests (email-triage)
+        working-directory: email-triage
+        run: python3 -m unittest test_inbox -v
