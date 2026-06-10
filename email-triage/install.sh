@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+#
+# email-triage installer for a phantombot persona.
+#
+# Copies the poller + mail helper into your local bin, drops an editable
+# wake-prompt next to them, creates the state dir, and registers the recurring
+# command-backed phantombot task that drives the whole thing.
+#
+# Idempotent: safe to re-run after editing. It will not create a second task if
+# one with the same label already exists.
+#
+# Usage:
+#   ./install.sh                 # install to ~/.local/bin, poll every 15m
+#   INSTALL_DIR=~/bin ./install.sh
+#   POLL_INTERVAL=10m ./install.sh
+#
+set -euo pipefail
+
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+POLL_INTERVAL="${POLL_INTERVAL:-15m}"
+
+PHANTOMBOT="$(command -v phantombot || echo "$HOME/.local/bin/phantombot")"
+if [[ ! -x "$PHANTOMBOT" ]]; then
+  echo "error: phantombot not found (looked for it on PATH and at ~/.local/bin/phantombot)." >&2
+  echo "email-triage is a phantombot add-on and needs it installed first." >&2
+  exit 1
+fi
+
+echo "==> Installing scripts to $INSTALL_DIR"
+mkdir -p "$INSTALL_DIR"
+install -m 0755 "$SRC_DIR/inbox-poll.py" "$INSTALL_DIR/inbox-poll.py"
+install -m 0755 "$SRC_DIR/inbox-mail.py" "$INSTALL_DIR/inbox-mail.py"
+
+WAKE_PROMPT="$INSTALL_DIR/wake-prompt.md"
+if [[ -e "$WAKE_PROMPT" ]]; then
+  echo "==> Keeping your existing $WAKE_PROMPT (edit it to tailor triage behaviour)"
+else
+  echo "==> Creating editable $WAKE_PROMPT from the example template"
+  cp "$SRC_DIR/wake-prompt.example.md" "$WAKE_PROMPT"
+fi
+
+echo "==> Creating state dir"
+mkdir -p "$HOME/.local/state/phantombot-inbox-poll"
+
+# Credentials the command-backed task must be able to see at fire time. The task
+# runs with a minimal env, so each must be exposed explicitly via --secret.
+# Covers both backends: the IMAP vars and the gog vars (harmless when unused).
+SECRETS=(
+  INBOX_EMAIL INBOX_APP_PASSWORD INBOX_IMAP_HOST INBOX_IMAP_PORT
+  INBOX_GOG_ACCOUNTS INBOX_GOG_BIN INBOX_GOG_QUERY GOG_KEYRING_PASSWORD
+  INBOX_TASK_LABEL INBOX_WAKE_PROMPT
+)
+
+# Note: no `env list | grep` here — under `set -o pipefail`, grep -q closes the
+# pipe on first match, env list dies with SIGPIPE, and the pipeline reports
+# failure even on a match. `env get` has no pipe, so the check is deterministic.
+has_env() { [[ -n "${!1:-}" ]] || [[ -n "$("$PHANTOMBOT" env get "$1" 2>/dev/null)" ]]; }
+
+if ! has_env INBOX_EMAIL && ! has_env INBOX_GOG_ACCOUNTS; then
+  echo
+  echo "!! No account configured yet. Set up at least one backend before the poller works:"
+  echo "   IMAP:  phantombot env set INBOX_EMAIL        \"you@example.com\""
+  echo "          phantombot env set INBOX_APP_PASSWORD \"your-imap-app-password\""
+  echo "   GOG:   phantombot env set INBOX_GOG_ACCOUNTS \"you@yourdomain.com\"   (must be authed in gog)"
+  echo "   (see .env.example for the optional vars; you can configure both.)"
+  echo
+fi
+
+# INBOX_TASK_LABEL is usually set via `phantombot env set` (i.e. in ~/.env, not
+# the shell), so fall back to reading it from there before the built-in default.
+LABEL="${INBOX_TASK_LABEL:-$("$PHANTOMBOT" env get INBOX_TASK_LABEL 2>/dev/null || true)}"
+LABEL="${LABEL:-Process inbox mail}"
+# Capture first (no pipe to grep -q) to avoid the same SIGPIPE/pipefail race —
+# a false "no match" here would register a DUPLICATE task, breaking idempotency.
+EXISTING_TASKS="$("$PHANTOMBOT" task list 2>/dev/null || true)"
+if grep -qF "$LABEL" <<<"$EXISTING_TASKS"; then
+  echo "==> A task labelled \"$LABEL\" already exists — not creating a duplicate."
+  echo "    (cancel it with \`phantombot task cancel <id>\` first if you want to re-register.)"
+else
+  echo "==> Registering recurring poll task (every $POLL_INTERVAL)"
+  SECRET_FLAGS=()
+  for s in "${SECRETS[@]}"; do SECRET_FLAGS+=(--secret "$s"); done
+  "$PHANTOMBOT" task add \
+    "Poll my inbox for new mail and wake a triage turn when there is any. Audit context only; the real work runs via --command." \
+    "$LABEL" \
+    --every "$POLL_INTERVAL" \
+    --command "$INSTALL_DIR/inbox-poll.py" \
+    "${SECRET_FLAGS[@]}"
+fi
+
+echo
+echo "Done. Quick checks:"
+echo "  $INSTALL_DIR/inbox-mail.py list-unread                       # IMAP account"
+echo "  $INSTALL_DIR/inbox-mail.py --account you@domain list-unread  # a gog account"
+echo "  phantombot task list                                         # confirm the poll task is scheduled"

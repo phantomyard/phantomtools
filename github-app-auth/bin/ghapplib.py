@@ -47,9 +47,16 @@ def run_git(git_bin, args, text=True, **kwargs):
     return result
 
 def get_token():
+    # ~/.github_env is the source of truth and wins over the process
+    # environment. A long-lived process (e.g. phantombot) loads GITHUB_TOKEN
+    # once at startup, so its env copy goes stale while refresh-github-env.sh
+    # keeps rewriting the file with a fresh token. Reading the file first means
+    # a refreshed token takes effect on the next call instead of losing to the
+    # stale startup value (which dead-ends in a 401 on every wrapper call).
+    # The environment is the fallback for fresh installs / CI where no file has
+    # been written yet.
     env_file = os.path.expanduser("~/.github_env")
-    token = os.environ.get("GITHUB_TOKEN", "")
-    if not token and os.path.exists(env_file):
+    if os.path.exists(env_file):
         # The token file holds a live credential. If it's group/world-readable
         # something has loosened the permissions refresh-github-env.sh sets
         # (umask 077) — refuse to read it rather than trust a leaked token.
@@ -62,10 +69,10 @@ def get_token():
             for line in f:
                 if line.startswith('export GITHUB_TOKEN='):
                     m = re.search(r'export GITHUB_TOKEN="([^"]+)"', line)
-                    if m:
-                        token = m.group(1)
+                    if m and m.group(1):
+                        return m.group(1)
                     break
-    return token
+    return os.environ.get("GITHUB_TOKEN", "")
 
 def _bin_dir():
     """Directory holding this module and its sibling shell scripts."""
@@ -73,25 +80,29 @@ def _bin_dir():
 
 def get_token_expiry():
     """Return the token's expiry as a timezone-aware datetime, or None if
-    unknown. Reads GITHUB_TOKEN_EXPIRES_AT from the environment or, failing
-    that, from ~/.github_env. 'Unknown' (None) is deliberate: an old env file
-    written before expiry was persisted has no field, and callers must treat
-    that as 'can't tell' rather than 'expired'."""
-    raw = os.environ.get("GITHUB_TOKEN_EXPIRES_AT", "")
+    unknown. Reads GITHUB_TOKEN_EXPIRES_AT from ~/.github_env (the source of
+    truth), falling back to the environment for fresh installs / CI without a
+    file. File-wins matches get_token(): a long-lived process holds a stale
+    env copy while the file stays fresh, so the file's expiry is the one that
+    pairs with the token get_token() returns. 'Unknown' (None) is deliberate:
+    an old env file written before expiry was persisted has no field, and
+    callers must treat that as 'can't tell' rather than 'expired'."""
+    raw = ""
+    env_file = os.path.expanduser("~/.github_env")
+    if os.path.exists(env_file):
+        try:
+            with open(env_file) as f:
+                for line in f:
+                    if line.startswith("export GITHUB_TOKEN_EXPIRES_AT="):
+                        m = re.search(
+                            r'export GITHUB_TOKEN_EXPIRES_AT="([^"]*)"', line)
+                        if m:
+                            raw = m.group(1)
+                        break
+        except OSError:
+            raw = ""
     if not raw:
-        env_file = os.path.expanduser("~/.github_env")
-        if os.path.exists(env_file):
-            try:
-                with open(env_file) as f:
-                    for line in f:
-                        if line.startswith("export GITHUB_TOKEN_EXPIRES_AT="):
-                            m = re.search(
-                                r'export GITHUB_TOKEN_EXPIRES_AT="([^"]*)"', line)
-                            if m:
-                                raw = m.group(1)
-                            break
-            except OSError:
-                return None
+        raw = os.environ.get("GITHUB_TOKEN_EXPIRES_AT", "")
     if not raw:
         return None
     # GitHub emits RFC 3339 like "2026-06-02T13:45:00Z". Python <3.11 chokes on
