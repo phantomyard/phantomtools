@@ -68,6 +68,15 @@ mkdir -p "$LOCAL_BIN"
 
 for bin in "$BIN_DIR"/*; do
     name=$(basename "$bin")
+    # Only ever install real wrapper files. Skip directories (e.g. __pycache__,
+    # created when the Python wrappers import ghapplib) and transient junk that
+    # tooling drops into bin/ — bytecode, editor swap/backup files, macOS
+    # metadata. Without this guard the loop tries to symlink __pycache__ into
+    # ~/.local/bin and then dies on the next run when it finds it there.
+    [[ -f "$bin" ]] || continue
+    case "$name" in
+        __pycache__|*.pyc|*.pyo|.DS_Store|*~|*.swp|*.swo|*.bak|*.bak*) continue ;;
+    esac
     target="$LOCAL_BIN/$name"
     if [[ -L "$target" ]]; then
         # Only reclaim a symlink that already points into this repo's bin dir.

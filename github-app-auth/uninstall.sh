@@ -14,6 +14,12 @@ info() { echo "→ $*"; }
 info "Removing symlinks from $LOCAL_BIN..."
 for bin in "$BIN_DIR"/*; do
     name=$(basename "$bin")
+    # Mirror install.sh: only ever touched real wrapper files, so skip
+    # directories (__pycache__) and transient junk here too.
+    [[ -f "$bin" ]] || continue
+    case "$name" in
+        __pycache__|*.pyc|*.pyo|.DS_Store|*~|*.swp|*.swo|*.bak|*.bak*) continue ;;
+    esac
     target="$LOCAL_BIN/$name"
     if [[ -L "$target" && "$(readlink -f "$target")" == "$(readlink -f "$bin")" ]]; then
         rm -f "$target"
