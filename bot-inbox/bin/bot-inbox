@@ -49,6 +49,11 @@ import uuid
 from datetime import datetime, timezone
 
 DEFAULT_ROOT = "/mnt/shared-data/bots/inbox"
+# setgid + group-writable, matching install.sh's `chmod 2775` on the root.
+# Inboxes are shared between bots that may run under different uids (separate
+# LXCs / uid-mappings), so dirs must be group-writable for a peer to drop a
+# message. setgid makes files/dirs created inside inherit the inbox group.
+INBOX_DIR_MODE = 0o2775
 VALID_TYPES = ("request", "response", "notice")
 # Required keys in every message payload.
 REQUIRED_FIELDS = ("from", "to", "type", "subject", "ts")
@@ -110,7 +115,7 @@ def ensure_registered(name):
     `list`/`read`. The directory simply won't exist, same as before.
     """
     try:
-        os.makedirs(inbox_path(name), exist_ok=True)
+        ensure_dir(inbox_path(name))
     except OSError:
         pass
 
@@ -133,6 +138,31 @@ def fs_timestamp():
 
 def inbox_path(recipient):
     return os.path.join(root_dir(), recipient)
+
+
+def ensure_dir(path, mode=INBOX_DIR_MODE):
+    """Create an inbox directory group-writable so peer bots can drop messages.
+
+    os.makedirs' `mode` argument is masked by the process umask, and the setgid
+    bit is dropped entirely — so a dir created at runtime by a daemon with a
+    restrictive umask (e.g. 0077, common under systemd) comes out 0700/root and
+    a peer bot running under a *different* uid then can't write to it. That's
+    the "folder is owned by root, I can't write" failure. install.sh chmods the
+    root explicitly for the same reason; runtime-created subdirs need the same
+    treatment, so we chmod after creating to defeat the umask.
+
+    Only chmod dirs we actually create: a pre-existing dir may be owned by
+    another bot (our chmod would fail with EPERM) or deliberately tightened by
+    an admin — either way it's not ours to re-permission. Best-effort: a failed
+    chmod is non-fatal (the makedirs already succeeded).
+    """
+    created = not os.path.isdir(path)
+    os.makedirs(path, exist_ok=True)
+    if created:
+        try:
+            os.chmod(path, mode)
+        except OSError:
+            pass
 
 
 def validate_payload(msg):
@@ -221,7 +251,7 @@ def cmd_send(args):
 
     box = inbox_path(recipient)
     try:
-        os.makedirs(box, exist_ok=True)
+        ensure_dir(box)
     except OSError as e:
         die(f"cannot create inbox {box}: {e}")
 
@@ -352,7 +382,7 @@ def _do_ack(box, name, fatal=True):
     """
     processed = os.path.join(box, "processed")
     try:
-        os.makedirs(processed, exist_ok=True)
+        ensure_dir(processed)
         os.rename(os.path.join(box, name), os.path.join(processed, name))
     except OSError as e:
         if fatal:
@@ -431,7 +461,7 @@ def cmd_register(args):
 def cmd_watch(args):
     me = self_name(args)
     box = inbox_path(me)
-    os.makedirs(box, exist_ok=True)
+    ensure_dir(box)
     # On start, suppress what's already pending — unless we're explicitly
     # replaying, or doing a one-shot drain (--once with a primed `seen` set
     # would emit nothing, a silent no-op for the common "drain now" use).
