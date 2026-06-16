@@ -40,3 +40,13 @@ jobs:
       - name: Unit tests (email-triage)
         working-directory: email-triage
         run: python3 -m unittest test_inbox -v
+
+      - name: Syntax check (bot-inbox Python)
+        working-directory: bot-inbox
+        run: python3 -m py_compile bin/bot-inbox
+
+      - name: Unit tests (bot-inbox)
+        working-directory: bot-inbox
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest tests -v
