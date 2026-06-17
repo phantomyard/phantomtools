@@ -345,3 +345,71 @@ def test_send_missing_args_prints_example(root, capsys):
     assert "required" in err               # the real reason
     assert "example:" in err               # ... plus a fix to copy
     assert 'send --to maeve --subject "hi"' in err
+
+
+# --------------------------------------------------------------------------- #
+# directory permissions (peer bots run under different uids; inbox dirs must be
+# group-writable or a peer can't drop a message — see ensure_dir)
+# --------------------------------------------------------------------------- #
+
+def _setgid_and_group_writable(path):
+    mode = os.stat(path).st_mode
+    return bool(mode & 0o2000) and bool(mode & 0o020)
+
+
+def test_send_creates_group_writable_inbox_despite_restrictive_umask(root):
+    # A daemon under systemd often runs with umask 0077, which would otherwise
+    # mask group/other bits off every os.makedirs and lock peers out.
+    old = os.umask(0o077)
+    try:
+        run(["--from", "me", "send", "--to", "maeve", "--subject", "hi"])
+    finally:
+        os.umask(old)
+    box = bi.inbox_path("maeve")
+    assert os.path.isdir(box)
+    assert _setgid_and_group_writable(box), oct(os.stat(box).st_mode)
+
+
+def test_ack_creates_group_writable_processed_dir(root):
+    old = os.umask(0o077)
+    try:
+        run(["--from", "me", "send", "--to", "me", "--subject", "hi"])
+        run(["--from", "me", "ack", ""])  # acks the only pending message
+    finally:
+        os.umask(old)
+    processed = os.path.join(bi.inbox_path("me"), "processed")
+    assert os.path.isdir(processed)
+    assert _setgid_and_group_writable(processed), oct(os.stat(processed).st_mode)
+
+
+def test_send_writes_group_readable_message_despite_restrictive_umask(root):
+    # Fixing dir perms isn't enough: under umask 0077 the delivered JSON would
+    # inherit 0600 and a group peer could enter the inbox but not read or ack
+    # the message. The file must come out group-readable.
+    old = os.umask(0o077)
+    try:
+        run(["--from", "me", "send", "--to", "maeve", "--subject", "hi"])
+    finally:
+        os.umask(old)
+    msg = next((root / "maeve").glob("*.json"))
+    mode = os.stat(msg).st_mode
+    assert mode & 0o040, oct(mode)  # group-readable
+
+
+def test_register_creates_group_writable_inbox(root):
+    old = os.umask(0o077)
+    try:
+        run(["--from", "me", "register"])
+    finally:
+        os.umask(old)
+    assert _setgid_and_group_writable(bi.inbox_path("me"))
+
+
+def test_ensure_dir_does_not_clobber_existing_dir(root):
+    # A pre-existing dir (maybe owned/tightened by another bot) keeps its mode;
+    # we only set perms on dirs we create ourselves.
+    box = bi.inbox_path("peer")
+    os.makedirs(box)
+    os.chmod(box, 0o700)
+    bi.ensure_dir(box)
+    assert (os.stat(box).st_mode & 0o777) == 0o700
