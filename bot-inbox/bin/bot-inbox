@@ -54,6 +54,12 @@ DEFAULT_ROOT = "/mnt/shared-data/bots/inbox"
 # LXCs / uid-mappings), so dirs must be group-writable for a peer to drop a
 # message. setgid makes files/dirs created inside inherit the inbox group.
 INBOX_DIR_MODE = 0o2775
+# Message files must be group-readable so a peer bot can read and ack the
+# message. The sender's umask (e.g. 0077 under systemd) would otherwise leave
+# the delivered JSON at 0600 — readable only by the sender — defeating the
+# whole point of a shared inbox. We chmod the temp file before the atomic
+# rename so the published file is group-readable from the moment it appears.
+INBOX_FILE_MODE = 0o664
 VALID_TYPES = ("request", "response", "notice")
 # Required keys in every message payload.
 REQUIRED_FIELDS = ("from", "to", "type", "subject", "ts")
@@ -265,6 +271,13 @@ def cmd_send(args):
             fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
+        # chmod before the rename: the sender's umask may have stripped group
+        # read off the temp file, but the inbox is shared, so peers must be
+        # able to read/ack the published message. Non-fatal if it fails.
+        try:
+            os.chmod(tmp, INBOX_FILE_MODE)
+        except OSError:
+            pass
         os.rename(tmp, final)  # atomic on same filesystem
         # fsync the directory so the rename itself survives a host crash,
         # not just the file contents. Best-effort: not every FS supports it.

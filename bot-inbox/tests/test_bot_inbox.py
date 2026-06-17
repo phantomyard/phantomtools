@@ -382,6 +382,20 @@ def test_ack_creates_group_writable_processed_dir(root):
     assert _setgid_and_group_writable(processed), oct(os.stat(processed).st_mode)
 
 
+def test_send_writes_group_readable_message_despite_restrictive_umask(root):
+    # Fixing dir perms isn't enough: under umask 0077 the delivered JSON would
+    # inherit 0600 and a group peer could enter the inbox but not read or ack
+    # the message. The file must come out group-readable.
+    old = os.umask(0o077)
+    try:
+        run(["--from", "me", "send", "--to", "maeve", "--subject", "hi"])
+    finally:
+        os.umask(old)
+    msg = next((root / "maeve").glob("*.json"))
+    mode = os.stat(msg).st_mode
+    assert mode & 0o040, oct(mode)  # group-readable
+
+
 def test_register_creates_group_writable_inbox(root):
     old = os.umask(0o077)
     try:
