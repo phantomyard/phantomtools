@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""
+Clone a GitHub repo using App-installation auth.
+Plain `git clone https://github.com/owner/repo` already works once
+git-credential-github-app is registered as the github.com credential helper
+(install.sh does this). This wrapper is the discoverable *-as-app entry point
+for that operation, and it also works *without* the global helper: it injects
+the ghs_* token for the clone only.
+Usage: git-clone-as-app <repo-url|owner/repo> [dir] [git clone flags...]
+"""
+
+import sys
+import os
+import re
+import base64
+from ghapplib import get_real_git, ensure_token, parse_owner_repo
+
+GIT = get_real_git(__file__)
+if not GIT:
+    print("Error: could not locate real git binary (set GITHUB_APP_REAL_GIT)",
+          file=sys.stderr)
+    sys.exit(1)
+
+
+def repo_kind(arg):
+    """Classify a clone argument as the source spec, or None if it isn't one."""
+    if arg.startswith("git@") or arg.startswith("ssh://"):
+        return "ssh"
+    if re.match(r'^https?://', arg):
+        return "url"
+    if re.match(r'^[\w.-]+/[\w.-]+$', arg):
+        return "shorthand"
+    return None
+
+
+def find_source_arg(args):
+    """Index of the first positional that looks like a clone source.
+
+    Flag *values* (`-b main`, `--depth 1`, `-c k=v`) don't match a URL or an
+    owner/repo shape, so a simple non-flag + pattern scan finds the real source
+    without having to track which flags consume a following value.
+    """
+    for i, arg in enumerate(args):
+        if arg.startswith("-"):
+            continue
+        if repo_kind(arg):
+            return i
+    return -1
+
+
+def main():
+    args = sys.argv[1:]
+
+    if "-h" in args or "--help" in args:
+        print(__doc__.strip())
+        return
+
+    idx = find_source_arg(args)
+    if idx == -1:
+        # No recognisable source — let real git produce its own usage error.
+        os.execv(GIT, [GIT, "clone"] + args)
+
+    source = args[idx]
+    kind = repo_kind(source)
+
+    # SSH clones authenticate via ssh-agent, not the App token — leave them be.
+    if kind == "ssh":
+        os.execv(GIT, [GIT, "clone"] + args)
+
+    if kind == "shorthand":
+        owner, repo = source.split("/", 1)
+        repo = re.sub(r'\.git$', '', repo)
+    else:  # url
+        parsed = parse_owner_repo(source)
+        if not parsed:
+            # Not a github.com URL (e.g. GHES, GitLab) — not ours to auth.
+            os.execv(GIT, [GIT, "clone"] + args)
+        owner, repo = parsed
+
+    token = ensure_token()
+    if not token:
+        print("Error: no GitHub token (run `github-app-auth refresh`)",
+              file=sys.stderr)
+        sys.exit(1)
+
+    clean_url = f"https://github.com/{owner}/{repo}.git"
+    new_args = list(args)
+    new_args[idx] = clean_url
+
+    # Authenticate via an HTTP extraheader rather than embedding the token in
+    # the clone URL: the URL becomes origin and would persist the token in the
+    # new repo's .git/config. A `-c http.<host>.extraheader=` is command-line
+    # only — it never lands in the cloned config. (Like git-fetch-as-app, the
+    # secret is briefly visible in `ps` for the clone's lifetime.) Future
+    # fetch/push in the clone use the global credential helper.
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    extraheader = f"http.https://github.com/.extraheader=AUTHORIZATION: basic {basic}"
+
+    os.execv(GIT, [GIT, "-c", extraheader, "clone"] + new_args)
+
+
+if __name__ == "__main__":
+    main()

@@ -59,6 +59,7 @@ github-token.sh  (JWT → installation token)
 | `bin/git-push-as-app` | Push via GitHub API with `--dry-run` and `-f`/`--force` support; refuses history rewrites on the default branch |
 | `bin/git-fetch-as-app` | Fetch via temporary authenticated remote; auto-cleans stale `__app_fetch_*` remotes on crash |
 | `bin/git-pull-as-app` | Fetch + merge/rebase |
+| `bin/git-clone-as-app` | Clone a GitHub repo with App auth; the discoverable entry point for clone (plain `git clone` also works via the credential helper) |
 | `bin/list-repos-as-app` | List repositories accessible to the installation |
 | `bin/create-pr-as-app` | Open a pull request via the REST API with the App identity |
 | `bin/github-app-auth` | Control & diagnostics: `list` (discover commands), `doctor` (health checks with fixes), `refresh` (force a token refresh) |
@@ -111,6 +112,29 @@ git push --force origin feat/x    # fine — feature branch
 # Deliberate override for the rare legitimate case:
 GITHUB_APP_ALLOW_FORCE_DEFAULT=1 git-push-as-app origin develop
 ```
+
+### Cloning a repo
+
+`install.sh` registers `git-credential-github-app` as the github.com credential
+helper, so a **plain clone just works** — no special command:
+
+```bash
+git clone https://github.com/owner/repo
+```
+
+There is also a `git-clone-as-app` entry point. It exists mainly for
+discoverability (it matches the `*-as-app` family bots look for) and works even
+where the global credential helper isn't registered — it injects the App token
+for the clone only, via an HTTP header, so the token never persists into the
+cloned repo's `.git/config`:
+
+```bash
+git-clone-as-app owner/repo                       # shorthand → https://github.com/owner/repo
+git-clone-as-app https://github.com/owner/repo target-dir
+```
+
+SSH URLs (`git@github.com:owner/repo.git`) and non-GitHub URLs pass straight
+through to real git — those authenticate themselves.
 
 ### Discover accessible repos
 
