@@ -42,6 +42,7 @@ pass "no App token → real gh, no injection"
 
 # 2. App token in ~/.github_env → injected as GH_TOKEN for `gh api`.
 echo 'export GITHUB_TOKEN="ghs_dummy_install_token"' > "$TMP_DIR/.github_env"
+chmod 600 "$TMP_DIR/.github_env"   # match the 0600 refresh-github-env.sh writes
 OUT=$("$BIN_DIR/gh" api repos/o/r 2>&1)
 [[ "$OUT" == *"REAL GH CALLED: api repos/o/r"* ]] || fail "api with token" "$OUT"
 [[ "$OUT" == *"GH_TOKEN=ghs_dummy_install_token"* ]] || fail "App token must be injected" "$OUT"
@@ -49,6 +50,7 @@ pass "App token from ~/.github_env injected as GH_TOKEN"
 
 # 3. A PAT (not ghs_*) must NOT be hijacked — real gh keeps its own auth.
 echo 'export GITHUB_TOKEN="ghp_a_personal_token"' > "$TMP_DIR/.github_env"
+chmod 600 "$TMP_DIR/.github_env"
 unset GITHUB_TOKEN GH_TOKEN
 OUT=$("$BIN_DIR/gh" api user 2>&1)
 [[ "$OUT" == *"GH_TOKEN=<unset>"* ]] || fail "PAT must not be injected as GH_TOKEN" "$OUT"
@@ -56,6 +58,7 @@ pass "PAT is left alone (no override)"
 
 # 4. `gh pr create` under an App token → redirected, real gh NOT called.
 echo 'export GITHUB_TOKEN="ghs_dummy_install_token"' > "$TMP_DIR/.github_env"
+chmod 600 "$TMP_DIR/.github_env"
 set +e
 OUT=$("$BIN_DIR/gh" pr create --title x 2>&1); RC=$?
 set -e
@@ -81,5 +84,15 @@ OUT=$("$BIN_DIR/gh" auth status 2>&1)
 [[ "$OUT" == *"REAL GH CALLED: auth status"* ]] || fail "auth should pass through" "$OUT"
 [[ "$OUT" == *"GH_TOKEN=<unset>"* ]] || fail "auth must not get App token" "$OUT"
 pass "gh auth passes through without token injection"
+
+# 8. Without the GITHUB_APP_REAL_GH override, the wrapper must discover the real
+#    gh by walking $PATH (skipping itself) — exercises resolve_real_gh's
+#    PATH-discovery branch, the fiddliest part of the shim.
+echo 'export GITHUB_TOKEN="ghs_dummy_install_token"' > "$TMP_DIR/.github_env"
+chmod 600 "$TMP_DIR/.github_env"
+OUT=$(unset GITHUB_APP_REAL_GH; "$BIN_DIR/gh" api user 2>&1)
+[[ "$OUT" == *"REAL GH CALLED: api user"* ]] || fail "PATH discovery should find real gh" "$OUT"
+[[ "$OUT" == *"GH_TOKEN=ghs_dummy_install_token"* ]] || fail "PATH-discovered gh should get token" "$OUT"
+pass "real gh discovered via \$PATH when no override is set"
 
 echo "ALL GH WRAPPER TESTS PASSED"

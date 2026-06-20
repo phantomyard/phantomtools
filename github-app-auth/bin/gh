@@ -36,14 +36,20 @@ resolve_real_gh() {
         echo "$GITHUB_APP_REAL_GH"
         return 0
     fi
-    local self candidate
+    # Walk $PATH by hand for the first gh that isn't this shim. We can't use
+    # `command -v -a` / `type -a` portably (the `-a` listing form differs across
+    # bash 3.2 and 4+, and `command -v` has no `-a`), so iterate PATH directly.
+    local self candidate dir
     self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
-    while IFS= read -r candidate; do
-        [[ -n "$candidate" ]] || continue
+    local IFS=:
+    for dir in $PATH; do
+        [[ -n "$dir" ]] || continue
+        candidate="$dir/gh"
+        [[ -x "$candidate" ]] || continue
         [[ "$(readlink -f "$candidate" 2>/dev/null || echo "$candidate")" == "$self" ]] && continue
         echo "$candidate"
         return 0
-    done < <(command -v -a gh 2>/dev/null || true)
+    done
     return 1
 }
 
