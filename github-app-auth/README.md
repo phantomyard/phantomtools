@@ -55,7 +55,7 @@ github-token.sh  (JWT → installation token)
 | File | Purpose |
 |------|---------|
 | `bin/git` | Wrapper placed in `~/.local/bin`; routes GitHub repos to `-as-app` variants |
-| `bin/gh` | Wrapper that injects the App token as `GH_TOKEN` so `gh api`/`gh issue`/`gh repo`… work; redirects `gh pr create` to `create-pr-as-app` and passes `gh auth` straight through |
+| `bin/gh` | Wrapper that injects the App token as `GH_TOKEN` so `gh api`/`gh issue`/`gh repo`… work; refuses `gh pr create` with a pointer to `create-pr-as-app` and passes `gh auth` straight through |
 | `bin/git-push-as-app` | Push via GitHub API with `--dry-run` and `-f`/`--force` support; refuses history rewrites on the default branch |
 | `bin/git-fetch-as-app` | Fetch via temporary authenticated remote; auto-cleans stale `__app_fetch_*` remotes on crash |
 | `bin/git-pull-as-app` | Fetch + merge/rebase |
@@ -182,7 +182,7 @@ gh repo view OWNER/REPO
 
 What it deliberately does **not** do:
 
-- `gh pr create` is redirected to `create-pr-as-app` (an App token has no user to resolve the author/HEAD). Override with `GITHUB_APP_GH_ALLOW_PR_CREATE=1` if you really want raw `gh`.
+- `gh pr create` is refused with a usage message pointing to `create-pr-as-app` (an App token has no user to resolve the author/HEAD); it does not forward your arguments. Override with `GITHUB_APP_GH_ALLOW_PR_CREATE=1` if you really want raw `gh`.
 - `gh auth …` passes straight through, untouched and **without** token injection, so a human can still log in normally — App auth lives in `~/.github_env`, not in gh's keyring (check it with `github-app-auth doctor`).
 - If no App (`ghs_*`) token is loadable, the wrapper touches nothing: real `gh` runs with whatever auth you already have (a PAT, `gh auth login`, SSH). It never degrades a machine with a real login.
 
