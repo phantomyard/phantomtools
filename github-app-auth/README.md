@@ -55,6 +55,7 @@ github-token.sh  (JWT → installation token)
 | File | Purpose |
 |------|---------|
 | `bin/git` | Wrapper placed in `~/.local/bin`; routes GitHub repos to `-as-app` variants |
+| `bin/gh` | Wrapper that injects the App token as `GH_TOKEN` so `gh api`/`gh issue`/`gh repo`… work; redirects `gh pr create` to `create-pr-as-app` and passes `gh auth` straight through |
 | `bin/git-push-as-app` | Push via GitHub API with `--dry-run` and `-f`/`--force` support; refuses history rewrites on the default branch |
 | `bin/git-fetch-as-app` | Fetch via temporary authenticated remote; auto-cleans stale `__app_fetch_*` remotes on crash |
 | `bin/git-pull-as-app` | Fetch + merge/rebase |
@@ -144,6 +145,24 @@ create-pr-as-app "WIP: refactor" --body-file pr-body.md --draft --json
 ```
 
 A `403`/`404` here almost always means the App is missing the **Pull requests: Read & write** permission — `git push` works with only `Contents: write`, so a successful push followed by a failing PR points straight at it. The tool prints that hint instead of leaving you guessing.
+
+### Using `gh` under the App
+
+The `gh` wrapper makes the GitHub CLI usable on a bot host that has no `gh auth login`. It reads the installation token from `~/.github_env` and injects it as `GH_TOKEN`, so API-backed commands just work:
+
+```bash
+gh api repos/OWNER/REPO/pulls          # authenticated as the App
+gh issue list --repo OWNER/REPO
+gh repo view OWNER/REPO
+```
+
+What it deliberately does **not** do:
+
+- `gh pr create` is redirected to `create-pr-as-app` (an App token has no user to resolve the author/HEAD). Override with `GITHUB_APP_GH_ALLOW_PR_CREATE=1` if you really want raw `gh`.
+- `gh auth …` passes straight through, untouched and **without** token injection, so a human can still log in normally — App auth lives in `~/.github_env`, not in gh's keyring (check it with `github-app-auth doctor`).
+- If no App (`ghs_*`) token is loadable, the wrapper touches nothing: real `gh` runs with whatever auth you already have (a PAT, `gh auth login`, SSH). It never degrades a machine with a real login.
+
+This only takes effect when `~/.local/bin` is **earlier** on `$PATH` than the system `gh` (same requirement as the `git` wrapper).
 
 ### Diagnose & refresh
 

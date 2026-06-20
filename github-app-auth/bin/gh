@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# =============================================================================
+# gh wrapper — makes the GitHub CLI usable under a GitHub App installation.
+#
+# Why this exists: an App *installation* token (ghs_*) authenticates API calls
+# fine, but it isn't a user login. So `gh api …` works once the token is in the
+# environment, while a couple of subcommands assume a logged-in *user* and break
+# (or do the wrong thing) under an App token. This shim:
+#
+#   1. Injects the App token as GH_TOKEN for commands that benefit from it, so
+#      `gh api`, `gh issue list`, `gh repo view`, … just work on a bot host that
+#      has no `gh auth login`.
+#   2. Redirects the subcommands that don't work with an App token to the
+#      dedicated *-as-app wrappers, with a clear message instead of a cryptic
+#      failure.
+#
+# Fail-safe, not fail-blunt (same philosophy as the `git` shim):
+#   - If no App (ghs_*) token is loadable, we touch NOTHING — real gh runs with
+#     whatever auth the user already has (a PAT, `gh auth login`, SSH). This
+#     wrapper never degrades a machine that has a real login.
+#   - The `auth` subcommands always pass straight through, untouched and without
+#     token injection, so a human can still `gh auth login` on this box.
+#
+# Install: symlinked into ~/.local/bin by install.sh, earlier on $PATH than the
+# system gh. Override the real gh path with GITHUB_APP_REAL_GH if needed.
+# =============================================================================
+set -euo pipefail
+
+ENV_FILE="${HOME}/.github_env"
+
+# --- Locate the real gh ------------------------------------------------------
+# Prefer an explicit override; otherwise walk $PATH for the first gh that isn't
+# this shim. Works regardless of where gh lives (/usr/bin, /opt/homebrew/bin…).
+resolve_real_gh() {
+    if [[ -n "${GITHUB_APP_REAL_GH:-}" ]]; then
+        echo "$GITHUB_APP_REAL_GH"
+        return 0
+    fi
+    local self candidate
+    self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" ]] || continue
+        [[ "$(readlink -f "$candidate" 2>/dev/null || echo "$candidate")" == "$self" ]] && continue
+        echo "$candidate"
+        return 0
+    done < <(command -v -a gh 2>/dev/null || true)
+    return 1
+}
+
+REAL_GH="$(resolve_real_gh || true)"
+if [[ -z "$REAL_GH" ]]; then
+    echo "gh wrapper: could not find the real gh binary." >&2
+    echo "  Install GitHub CLI, or set GITHUB_APP_REAL_GH=/path/to/gh." >&2
+    exit 127
+fi
+export GITHUB_APP_REAL_GH="$REAL_GH"   # so any child sees the same real gh
+
+# --- Load the App installation token (file wins, matching ghapplib) ----------
+# ~/.github_env is the source of truth (refreshed by the systemd timer). A
+# long-lived process holds a stale env copy, so the file beats the environment.
+load_app_token() {
+    local tok=""
+    if [[ -f "$ENV_FILE" ]]; then
+        tok=$(grep '^export GITHUB_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d'"' -f2 || true)
+    fi
+    [[ -z "$tok" ]] && tok="${GITHUB_TOKEN:-}"
+    echo "$tok"
+}
+
+# Only an *installation* token (ghs_*) is ours to manage. A PAT (ghp_*,
+# github_pat_*) or empty means "let real gh use its own auth" — we stay out.
+APP_TOKEN="$(load_app_token)"
+have_app_token() { [[ "${APP_TOKEN:-}" == ghs_* ]]; }
+
+subcmd="${1:-}"
+arg2="${2:-}"
+
+# --- Subcommands that an App token can't (or shouldn't) drive ----------------
+case "$subcmd" in
+    auth)
+        # `gh auth login/refresh` is an interactive user-login flow and refuses
+        # to run with GH_TOKEN set. Pass everything under `auth` straight to the
+        # real gh, untouched and without injecting our token, so a human can
+        # still log in on this machine. App auth lives in ~/.github_env, not in
+        # gh's keyring — `github-app-auth doctor` is the status check for it.
+        exec "$REAL_GH" "$@"
+        ;;
+    pr)
+        if [[ "$arg2" == "create" ]] && have_app_token \
+                && [[ "${GITHUB_APP_GH_ALLOW_PR_CREATE:-}" != "1" ]]; then
+            cat >&2 <<'MSG'
+gh wrapper: `gh pr create` doesn't work reliably under a GitHub App token —
+it needs a logged-in user to resolve the author/HEAD. Use the App wrapper:
+
+    create-pr-as-app "<title>" [--head <branch>] [--base <branch>] [--body <text>]
+
+(If you really mean to call real gh anyway, set GITHUB_APP_GH_ALLOW_PR_CREATE=1.)
+MSG
+            exit 64   # EX_USAGE
+        fi
+        ;;
+esac
+
+# --- Default path: inject the App token (if we have one) and run real gh -----
+# Setting GH_TOKEN makes gh authenticate as the App for this invocation. We only
+# do it when an App token is loadable; otherwise real gh keeps its own auth so a
+# PAT / `gh auth login` / SSH user is never overridden. gh reads GH_TOKEN ahead
+# of GITHUB_TOKEN and ahead of stored creds, so this wins cleanly for the call.
+if have_app_token; then
+    export GH_TOKEN="$APP_TOKEN"
+fi
+
+exec "$REAL_GH" "$@"
