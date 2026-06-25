@@ -95,4 +95,22 @@ OUT=$(unset GITHUB_APP_REAL_GH; "$BIN_DIR/gh" api user 2>&1)
 [[ "$OUT" == *"GH_TOKEN=ghs_dummy_install_token"* ]] || fail "PATH-discovered gh should get token" "$OUT"
 pass "real gh discovered via \$PATH when no override is set"
 
+# 9. `gh auth` with an App token already in the env (a bot process, or a shell
+#    exporting GITHUB_TOKEN=ghs_*) must have it STRIPPED before reaching real
+#    gh — otherwise `gh auth login` refuses and `auth status` reports the App
+#    instead of the human keyring.
+echo 'export GITHUB_TOKEN="ghs_dummy_install_token"' > "$TMP_DIR/.github_env"
+chmod 600 "$TMP_DIR/.github_env"
+OUT=$(GH_TOKEN=ghs_dummy_install_token GITHUB_TOKEN=ghs_dummy_install_token \
+    "$BIN_DIR/gh" auth status 2>&1)
+[[ "$OUT" == *"REAL GH CALLED: auth status"* ]] || fail "auth should pass through" "$OUT"
+[[ "$OUT" == *"GH_TOKEN=<unset>"* ]] || fail "auth must strip App-shaped GH_TOKEN" "$OUT"
+pass "gh auth strips App-shaped env tokens before real gh"
+
+# 10. A human's own PAT in the env must survive `gh auth` (not ours to strip),
+#     so `gh auth status` still sees it.
+OUT=$(GH_TOKEN=ghp_a_personal_token "$BIN_DIR/gh" auth status 2>&1)
+[[ "$OUT" == *"GH_TOKEN=ghp_a_personal_token"* ]] || fail "auth must keep a human PAT" "$OUT"
+pass "gh auth leaves a human PAT in the env untouched"
+
 echo "ALL GH WRAPPER TESTS PASSED"

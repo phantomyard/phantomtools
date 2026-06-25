@@ -33,15 +33,46 @@ def repo_kind(arg):
     return None
 
 
+# git clone flags that consume the FOLLOWING argument in their separated form
+# (`-b main`, `--depth 1`). Their `--flag=value` form is a single token that
+# already starts with "-", so it's skipped by the flag check below and needs no
+# entry here. Boolean flags (--bare, --mirror, -q, …) consume nothing and are
+# likewise not listed.
+VALUE_FLAGS = {
+    "-o", "--origin",
+    "-b", "--branch",
+    "-u", "--upload-pack",
+    "--reference", "--reference-if-able",
+    "--separate-git-dir",
+    "--depth",
+    "--shallow-since", "--shallow-exclude",
+    "-c", "--config",
+    "--server-option",
+    "-j", "--jobs",
+    "--template",
+    "--filter",
+    "--bundle-uri",
+}
+
+
 def find_source_arg(args):
     """Index of the first positional that looks like a clone source.
 
-    Flag *values* (`-b main`, `--depth 1`, `-c k=v`) don't match a URL or an
-    owner/repo shape, so a simple non-flag + pattern scan finds the real source
-    without having to track which flags consume a following value.
+    A naive "first non-flag matching owner/repo or a URL" scan misfires on flag
+    *values* with slashes: `-b feature/foo` matches the shorthand regex and gets
+    taken as the repo. So we track flags that consume a following argument and
+    skip their value before applying the source pattern.
     """
+    skip_next = False
     for i, arg in enumerate(args):
+        if skip_next:
+            skip_next = False
+            continue
         if arg.startswith("-"):
+            # A separated value flag (`-b main`) consumes the next token; the
+            # `--flag=value` form is self-contained and needs no skip.
+            if arg in VALUE_FLAGS:
+                skip_next = True
             continue
         if repo_kind(arg):
             return i

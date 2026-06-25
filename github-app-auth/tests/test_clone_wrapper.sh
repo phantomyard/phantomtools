@@ -90,4 +90,19 @@ OUT=$(python3 "$WRAPPER" --help 2>&1)
 [[ "$OUT" != *"REAL GIT:"* ]] || fail "help must not call git" "$OUT"
 pass "--help prints usage"
 
+# 9. A branch name with a slash (`-b feature/foo`) must NOT be misread as the
+#    repo source. The real owner/repo following it is what gets expanded.
+OUT=$(python3 "$WRAPPER" -b feature/foo owner/repo 2>&1)
+[[ "$OUT" == *"clone -b feature/foo https://github.com/owner/repo.git"* ]] \
+    || fail "slashed branch value must not be taken as the source" "$OUT"
+[[ "$OUT" != *"github.com/feature/foo"* ]] \
+    || fail "branch value must never become the clone URL" "$OUT"
+pass "slashed -b branch value not misclassified as source"
+
+# 10. Same trap via a long flag taking a slash-shaped value (`--reference`).
+OUT=$(python3 "$WRAPPER" --reference some/path owner/repo 2>&1)
+[[ "$OUT" == *"clone --reference some/path https://github.com/owner/repo.git"* ]] \
+    || fail "--reference value must not be taken as the source" "$OUT"
+pass "--reference value not misclassified as source"
+
 echo "ALL CLONE WRAPPER TESTS PASSED"

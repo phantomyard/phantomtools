@@ -85,10 +85,20 @@ arg2="${2:-}"
 case "$subcmd" in
     auth)
         # `gh auth login/refresh` is an interactive user-login flow and refuses
-        # to run with GH_TOKEN set. Pass everything under `auth` straight to the
-        # real gh, untouched and without injecting our token, so a human can
-        # still log in on this machine. App auth lives in ~/.github_env, not in
-        # gh's keyring — `github-app-auth doctor` is the status check for it.
+        # to run with a token in the environment. Pass everything under `auth`
+        # straight to real gh so a human can still log in / check status on this
+        # machine — but first STRIP any App token (ghs_*) we (or a long-lived bot
+        # context) may be carrying in GH_TOKEN/GITHUB_TOKEN. Otherwise a stale
+        # GITHUB_TOKEN=ghs_* makes `gh auth login` refuse and `gh auth status`
+        # report the App instead of the human keyring. A human's own PAT
+        # (ghp_*/github_pat_*) in the env is NOT ours to strip — leave it be.
+        # App auth lives in ~/.github_env; `github-app-auth doctor` checks it.
+        unset_args=()
+        [[ "${GH_TOKEN:-}" == ghs_* ]] && unset_args+=(-u GH_TOKEN)
+        [[ "${GITHUB_TOKEN:-}" == ghs_* ]] && unset_args+=(-u GITHUB_TOKEN)
+        if [[ ${#unset_args[@]} -gt 0 ]]; then
+            exec env "${unset_args[@]}" "$REAL_GH" "$@"
+        fi
         exec "$REAL_GH" "$@"
         ;;
     pr)
