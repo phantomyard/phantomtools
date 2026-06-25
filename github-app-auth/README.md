@@ -55,9 +55,11 @@ github-token.sh  (JWT → installation token)
 | File | Purpose |
 |------|---------|
 | `bin/git` | Wrapper placed in `~/.local/bin`; routes GitHub repos to `-as-app` variants |
+| `bin/gh` | Wrapper that injects the App token as `GH_TOKEN` so `gh api`/`gh issue`/`gh repo`… work; refuses `gh pr create` with a pointer to `create-pr-as-app` and passes `gh auth` straight through |
 | `bin/git-push-as-app` | Push via GitHub API with `--dry-run` and `-f`/`--force` support; refuses history rewrites on the default branch |
 | `bin/git-fetch-as-app` | Fetch via temporary authenticated remote; auto-cleans stale `__app_fetch_*` remotes on crash |
 | `bin/git-pull-as-app` | Fetch + merge/rebase |
+| `bin/git-clone-as-app` | Clone a GitHub repo with App auth; the discoverable entry point for clone (plain `git clone` also works via the credential helper) |
 | `bin/list-repos-as-app` | List repositories accessible to the installation |
 | `bin/create-pr-as-app` | Open a pull request via the REST API with the App identity |
 | `bin/github-app-auth` | Control & diagnostics: `list` (discover commands), `doctor` (health checks with fixes), `refresh` (force a token refresh) |
@@ -111,6 +113,29 @@ git push --force origin feat/x    # fine — feature branch
 GITHUB_APP_ALLOW_FORCE_DEFAULT=1 git-push-as-app origin develop
 ```
 
+### Cloning a repo
+
+`install.sh` registers `git-credential-github-app` as the github.com credential
+helper, so a **plain clone just works** — no special command:
+
+```bash
+git clone https://github.com/owner/repo
+```
+
+There is also a `git-clone-as-app` entry point. It exists mainly for
+discoverability (it matches the `*-as-app` family bots look for) and works even
+where the global credential helper isn't registered — it injects the App token
+for the clone only, via an HTTP header, so the token never persists into the
+cloned repo's `.git/config`:
+
+```bash
+git-clone-as-app owner/repo                       # shorthand → https://github.com/owner/repo
+git-clone-as-app https://github.com/owner/repo target-dir
+```
+
+SSH URLs (`git@github.com:owner/repo.git`) and non-GitHub URLs pass straight
+through to real git — those authenticate themselves.
+
 ### Discover accessible repos
 
 Check which repositories your App installation has access to:
@@ -144,6 +169,24 @@ create-pr-as-app "WIP: refactor" --body-file pr-body.md --draft --json
 ```
 
 A `403`/`404` here almost always means the App is missing the **Pull requests: Read & write** permission — `git push` works with only `Contents: write`, so a successful push followed by a failing PR points straight at it. The tool prints that hint instead of leaving you guessing.
+
+### Using `gh` under the App
+
+The `gh` wrapper makes the GitHub CLI usable on a bot host that has no `gh auth login`. It reads the installation token from `~/.github_env` and injects it as `GH_TOKEN`, so API-backed commands just work:
+
+```bash
+gh api repos/OWNER/REPO/pulls          # authenticated as the App
+gh issue list --repo OWNER/REPO
+gh repo view OWNER/REPO
+```
+
+What it deliberately does **not** do:
+
+- `gh pr create` is refused with a usage message pointing to `create-pr-as-app` (an App token has no user to resolve the author/HEAD); it does not forward your arguments. Override with `GITHUB_APP_GH_ALLOW_PR_CREATE=1` if you really want raw `gh`.
+- `gh auth …` passes straight through, untouched and **without** token injection, so a human can still log in normally — App auth lives in `~/.github_env`, not in gh's keyring (check it with `github-app-auth doctor`).
+- If no App (`ghs_*`) token is loadable, the wrapper touches nothing: real `gh` runs with whatever auth you already have (a PAT, `gh auth login`, SSH). It never degrades a machine with a real login.
+
+This only takes effect when `~/.local/bin` is **earlier** on `$PATH` than the system `gh` (same requirement as the `git` wrapper).
 
 ### Diagnose & refresh
 
