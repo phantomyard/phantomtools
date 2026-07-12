@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # GitHub App Token Generator
-# Reads config from environment / ~/.env
+# Reads config from environment / ~/.config/github-app-auth/config
 # Sets: GITHUB_TOKEN, GITHUB_INSTALLATION_ID, GITHUB_JWT
 #
 # Required env:
@@ -11,6 +11,16 @@
 # Requirements: openssl, python3, curl
 # =============================================================================
 set -euo pipefail
+
+# Load config file if env vars are not already set
+if [[ -z "${GITHUB_APP_ID:-}" || -z "${GITHUB_APP_PRIVATE_KEY_PATH:-}" ]]; then
+    if [[ -f "$HOME/.config/github-app-auth/config" ]]; then
+        set -a
+        # shellcheck source=/dev/null
+        source "$HOME/.config/github-app-auth/config"
+        set +a
+    fi
+fi
 
 : "${GITHUB_APP_ID:?GITHUB_APP_ID is not set}"
 : "${GITHUB_APP_PRIVATE_KEY_PATH:?GITHUB_APP_PRIVATE_KEY_PATH is not set}"

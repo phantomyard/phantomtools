@@ -56,4 +56,4 @@ rm -f "$HOME/.github_env"
 
 echo ""
 echo "✓ github-app-auth uninstalled."
-echo "  ~/.env entries (GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY_PATH) were NOT removed."
+echo "  ~/.config/github-app-auth/config (GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY_PATH) was NOT removed."

@@ -7,15 +7,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
-# Load credentials from ~/.env (guard the existence check — under `set -u`
-# a missing file would otherwise abort with an opaque error).
-if [[ -f "$HOME/.env" ]]; then
+# Load credentials from ~/.config/github-app-auth/config
+if [[ -f "$HOME/.config/github-app-auth/config" ]]; then
     set -a
     # shellcheck source=/dev/null
-    source "$HOME/.env"
+    source "$HOME/.config/github-app-auth/config"
     set +a
 else
-    echo "Error: $HOME/.env not found — cannot load GitHub App credentials" >&2
+    echo "Error: $HOME/.config/github-app-auth/config not found — cannot load GitHub App credentials" >&2
     exit 1
 fi
 

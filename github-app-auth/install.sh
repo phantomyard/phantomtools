@@ -27,29 +27,37 @@ if ! command -v python3 &>/dev/null; then die "python3 is required"; fi
 if ! command -v curl &>/dev/null; then die "curl is required"; fi
 
 # Credentials are validated separately — install proceeds without them so
-# binaries + timer can be put in place before ~/.env is filled in.
+# binaries + timer can be put in place before the config is filled in.
 CREDS_OK=1
 CREDS_REASON=""
 
+CONFIG_FILE="$HOME/.config/github-app-auth/config"
+
+# Ensure the config directory exists so users can create the file immediately
+# after install without an intermediate mkdir step.
+mkdir -p "$(dirname "$CONFIG_FILE")"
+
 check_credentials() {
-    if [[ ! -f "$HOME/.env" ]]; then
+    if [[ ! -f "$CONFIG_FILE" ]]; then
         CREDS_OK=0
-        CREDS_REASON="~/.env not found"
+        CREDS_REASON="$CONFIG_FILE not found"
         return
     fi
     # shellcheck source=/dev/null
-    set -a; source "$HOME/.env"; set +a
+    set -a; source "$CONFIG_FILE"; set +a
     if [[ -z "${GITHUB_APP_ID:-}" ]]; then
         CREDS_OK=0
-        CREDS_REASON="GITHUB_APP_ID not set in ~/.env"
+        CREDS_REASON="GITHUB_APP_ID not set in $CONFIG_FILE"
         return
     fi
     if [[ -z "${GITHUB_APP_PRIVATE_KEY_PATH:-}" ]]; then
         CREDS_OK=0
-        CREDS_REASON="GITHUB_APP_PRIVATE_KEY_PATH not set in ~/.env"
+        CREDS_REASON="GITHUB_APP_PRIVATE_KEY_PATH not set in $CONFIG_FILE"
         return
     fi
-    if [[ ! -f "$GITHUB_APP_PRIVATE_KEY_PATH" ]]; then
+    local _key_path
+    _key_path="${GITHUB_APP_PRIVATE_KEY_PATH/#\~/$HOME}"
+    if [[ ! -f "$_key_path" ]]; then
         CREDS_OK=0
         CREDS_REASON="Private key not found at $GITHUB_APP_PRIVATE_KEY_PATH"
         return
@@ -149,7 +157,7 @@ else
         systemctl --user start github-app-auth-refresh.timer
         info "  Timer installed and started: github-app-auth-refresh.timer"
     else
-        info "  Timer installed and enabled (not started — fill ~/.env first, then:"
+        info "  Timer installed and enabled (not started — fill $CONFIG_FILE first, then:"
         info "    systemctl --user start github-app-auth-refresh.timer)"
     fi
 fi
@@ -212,7 +220,7 @@ if [[ $CREDS_OK -eq 1 ]]; then
     echo "  - Run 'git push', 'git pull', 'git fetch' — the wrapper handles GitHub repos automatically"
 else
     echo -e "${YELLOW}Next steps (credentials still needed):${NC}"
-    echo "  1. Add to ~/.env:"
+    echo "  1. Create $CONFIG_FILE with:"
     echo "       GITHUB_APP_ID=<your-app-id>"
     echo "       GITHUB_APP_PRIVATE_KEY_PATH=<path-to-private-key.pem>"
     echo "  2. Verify token generation:"

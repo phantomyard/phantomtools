@@ -6,7 +6,6 @@ After=network-online.target
 Type=oneshot
 ExecStart=%h/.local/bin/refresh-github-env.sh
 Environment="PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-EnvironmentFile=-%h/.config/phantombot/.env
-EnvironmentFile=-%h/.env
+EnvironmentFile=%h/.config/github-app-auth/config
 StandardOutput=journal
 StandardError=journal
