@@ -21,13 +21,17 @@ cd ~/repos/phantomtools/github-app-auth
 
 The repo is public, so no token is needed to clone.
 
-Prerequisites in `~/.env`:
+Prerequisites in `~/.config/github-app-auth/config`:
+
 ```bash
+mkdir -p ~/.config/github-app-auth
+cat > ~/.config/github-app-auth/config <<'EOF'
 GITHUB_APP_ID=123456
 GITHUB_APP_PRIVATE_KEY_PATH=/home/you/.ssh/my-app.private-key.pem
+EOF
 ```
 
-`install.sh` lays down the binaries and the timer regardless, so you can install first and fill in `~/.env` afterwards.
+`install.sh` lays down the binaries and the timer regardless, so you can install first and fill in the config afterwards.
 
 ## How it works
 

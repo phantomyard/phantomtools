@@ -65,16 +65,18 @@ class Doctor:
 
 
 def read_env_value(name):
-    """Return the value of `name` from the process env, else from ~/.env.
+    """Return the value of `name` from the process env, else from
+    ~/.config/github-app-auth/config.
+
     Used for config checks (GITHUB_APP_ID etc.) — not for the token, which
     ghapplib reads with its own permission guard."""
     val = os.environ.get(name, "")
     if val:
         return val
-    env_file = os.path.expanduser("~/.env")
-    if os.path.exists(env_file):
+    config_file = os.path.expanduser("~/.config/github-app-auth/config")
+    if os.path.exists(config_file):
         try:
-            with open(env_file) as f:
+            with open(config_file) as f:
                 for line in f:
                     line = line.strip()
                     if line.startswith("export "):
@@ -94,15 +96,15 @@ def check_config(doc):
     key_path = read_env_value("GITHUB_APP_PRIVATE_KEY_PATH")
     if not app_id:
         doc.fail("App config", "GITHUB_APP_ID not set",
-                 "add GITHUB_APP_ID=<id> to ~/.env")
+                 "add GITHUB_APP_ID=<id> to ~/.config/github-app-auth/config")
     else:
         doc.ok("App ID", app_id)
     if not key_path:
         doc.fail("App config", "GITHUB_APP_PRIVATE_KEY_PATH not set",
-                 "add GITHUB_APP_PRIVATE_KEY_PATH=/path/to/key.pem to ~/.env")
+                 "add GITHUB_APP_PRIVATE_KEY_PATH=/path/to/key.pem to ~/.config/github-app-auth/config")
     elif not os.path.isfile(os.path.expanduser(key_path)):
         doc.fail("Private key", f"file not found at {key_path}",
-                 f"place the App private key at {key_path}, or fix the path in ~/.env")
+                 f"place the App private key at {key_path}, or fix the path in ~/.config/github-app-auth/config")
     else:
         doc.ok("Private key", key_path)
 
