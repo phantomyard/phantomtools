@@ -3,7 +3,8 @@ import sys
 import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'bin')))
-from ghapplib import determine_push_strategy, force_push_to_default_blocked
+from ghapplib import (determine_push_strategy, force_push_to_default_blocked,
+                      select_unmerged_commits)
 
 class TestPushStrategy(unittest.TestCase):
 
@@ -96,6 +97,67 @@ class TestDefaultBranchForceGuard(unittest.TestCase):
     def test_override_bypasses_block(self):
         self.assertFalse(force_push_to_default_blocked(
             "develop", self.DEFAULT, force=True, needs_force=True, override=True))
+
+
+class TestSelectUnmergedCommits(unittest.TestCase):
+    # The 377ed77 bug: pushing a rebased branch recreated already-merged
+    # commits as duplicates because `--not --remotes` dedupes by SHA only.
+
+    def test_no_dupes_keeps_everything(self):
+        # Genuinely new branch, nothing merged yet — every commit survives so
+        # the caller keeps preserve_parents/orphan-safety behaviour.
+        commits = ["a", "b", "c"]
+        trees = {"a": "ta", "b": "tb", "c": "tc"}
+        self.assertEqual(
+            select_unmerged_commits(commits, trees, merged_trees=set()),
+            commits,
+        )
+
+    def test_squash_merge_drops_merged_prefix(self):
+        # c15,c16,c17 were squash-merged into one commit whose tree == tree(c17);
+        # intermediate commits match neither tree nor patch-id. Everything up to
+        # and including the deepest tree match is dropped; new work survives.
+        commits = ["c15", "c16", "c17", "newA", "newB"]
+        trees = {"c15": "t15", "c16": "t16", "c17": "tSquash",
+                 "newA": "tA", "newB": "tB"}
+        merged_trees = {"tSquash"}
+        self.assertEqual(
+            select_unmerged_commits(commits, trees, merged_trees),
+            ["newA", "newB"],
+        )
+
+    def test_squash_merge_of_whole_branch_drops_all(self):
+        commits = ["c15", "c16", "c17"]
+        trees = {"c15": "t15", "c16": "t16", "c17": "tSquash"}
+        self.assertEqual(
+            select_unmerged_commits(commits, trees, {"tSquash"}),
+            [],
+        )
+
+    def test_rebase_merge_drops_by_patch_id(self):
+        # Rebase/ordinary merge keeps per-commit patch-ids upstream; git cherry
+        # flags them ('-') and we drop them wherever they sit.
+        commits = ["c1", "c2", "newA"]
+        trees = {"c1": "t1", "c2": "t2", "newA": "tA"}
+        survivors = select_unmerged_commits(
+            commits, trees, merged_trees=set(),
+            patch_dup_shas={"c1", "c2"},
+        )
+        self.assertEqual(survivors, ["newA"])
+
+    def test_non_linear_skips_squash_cut(self):
+        # A merge commit in the range disables the tree-based squash cut (the
+        # "deepest match ⇒ prefix" guarantee needs linear history); only the
+        # explicit patch-id dupes are dropped, never a tree coincidence.
+        commits = ["c15", "c16", "c17", "newA"]
+        trees = {"c15": "t15", "c16": "t16", "c17": "tSquash", "newA": "tA"}
+        survivors = select_unmerged_commits(
+            commits, trees, merged_trees={"tSquash"}, linear=False
+        )
+        self.assertEqual(survivors, commits)
+
+    def test_empty_input(self):
+        self.assertEqual(select_unmerged_commits([], {}, {"x"}), [])
 
 
 if __name__ == '__main__':

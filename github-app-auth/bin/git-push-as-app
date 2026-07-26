@@ -9,13 +9,97 @@ import subprocess
 import sys
 import os
 import urllib.error
-from ghapplib import get_real_git, run_git, ensure_token, GitHubAppClient, parse_owner_repo
+from ghapplib import (get_real_git, run_git, ensure_token, GitHubAppClient,
+                      parse_owner_repo, select_unmerged_commits)
 
 GIT = get_real_git(__file__)
 if not GIT:
     print("Error: could not locate real git binary (set GITHUB_APP_REAL_GIT)",
           file=sys.stderr)
     sys.exit(1)
+
+
+def drop_already_merged(git, client, remote, commits, parent_for_first,
+                        preserve_parents):
+    """Filter commits already integrated on the remote default branch.
+
+    The `--not --remotes` fallback picks commits by SHA reachability, which
+    can't see squash/rebase merges (they rewrote our commits into new SHAs
+    upstream). Detect those by tree-equality (squash) and patch-id (rebase)
+    against the default branch; when we drop any, replant the survivors onto the
+    live default-branch tip so they land on top of the merged history instead of
+    resurrecting duplicates.
+
+    Returns (commits, parent_for_first, preserve_parents). On any missing
+    prerequisite (default branch not fetched locally, non-linear range, git
+    error) it returns the inputs unchanged — conservative: never drop work we
+    can't prove is already merged.
+    """
+    if not commits:
+        return commits, parent_for_first, preserve_parents
+
+    try:
+        default_branch = client.get_default_branch()
+    except Exception:
+        return commits, parent_for_first, preserve_parents
+
+    try:
+        default_tip = run_git(
+            git, ["rev-parse", "--verify", f"{remote}/{default_branch}"]
+        ).stdout.strip()
+    except subprocess.CalledProcessError:
+        # Default branch not known locally — can't compare, leave untouched.
+        return commits, parent_for_first, preserve_parents
+
+    # A merge commit in the pushed range breaks the "deepest tree match ⇒
+    # merged prefix" guarantee, so skip dedup entirely rather than risk work.
+    linear = True
+    for c in commits:
+        parents = run_git(git, ["log", "-1", "--format=%P", c]).stdout.split()
+        if len(parents) > 1:
+            linear = False
+            break
+    if not linear:
+        return commits, parent_for_first, preserve_parents
+
+    # Trees introduced on the default branch since we diverged.
+    try:
+        base = run_git(git, ["merge-base", default_tip, commits[-1]]).stdout.strip()
+    except subprocess.CalledProcessError:
+        base = ""
+    merged_range = f"{base}..{default_tip}" if base else default_tip
+    merged_trees = set()
+    for c in run_git(git, ["rev-list", merged_range]).stdout.split():
+        merged_trees.add(
+            run_git(git, ["rev-parse", f"{c}^{{tree}}"]).stdout.strip()
+        )
+
+    tree_of = {
+        c: run_git(git, ["rev-parse", f"{c}^{{tree}}"]).stdout.strip()
+        for c in commits
+    }
+
+    # `git cherry <upstream> <head>` marks '-' the head commits whose patch-id
+    # already exists upstream — catches rebase / ordinary merges.
+    patch_dup = set()
+    try:
+        for line in run_git(git, ["cherry", default_tip, commits[-1]]).stdout.splitlines():
+            line = line.strip()
+            if line.startswith("- "):
+                patch_dup.add(line[2:].strip())
+    except subprocess.CalledProcessError:
+        pass
+
+    survivors = select_unmerged_commits(
+        commits, tree_of, merged_trees, patch_dup, linear=linear
+    )
+    if survivors == commits:
+        return commits, parent_for_first, preserve_parents
+
+    dropped = len(commits) - len(survivors)
+    print(f"Skipping {dropped} commit(s) already merged into '{default_branch}' "
+          f"(squash/rebase); replanting {len(survivors)} onto {default_tip[:7]}")
+    return survivors, default_tip, False
 
 def main():
     args = sys.argv[1:]
@@ -152,6 +236,15 @@ def main():
             commits = rev_list.split("\n")
         else:
             commits = []
+
+        if not remote_known_locally:
+            # SHA reachability alone can't dedupe squash/rebase-merged commits
+            # (they were rewritten into new SHAs upstream), so drop the ones
+            # already integrated on the default branch and replant survivors on
+            # its tip — otherwise we recreate them as duplicates.
+            commits, parent_for_first, preserve_parents = drop_already_merged(
+                GIT, client, remote, commits, parent_for_first, preserve_parents
+            )
 
         if commits and not remote_sha:
             # Sanity check: every commit's parents must either be in this push
