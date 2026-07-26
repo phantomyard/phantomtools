@@ -577,6 +577,52 @@ def determine_push_strategy(local_sha, remote_sha, remote_known_locally, is_ance
     # commit as an orphan, severing it from main.
     return (None, "", False, True)
 
+def select_unmerged_commits(ordered_commits, tree_of, merged_trees,
+                            patch_dup_shas=None, linear=True):
+    """Drop commits already integrated on the remote DEFAULT branch.
+
+    The pusher rebuilds commits via the API, so a squash- or rebase-merge
+    rewrites our work into new SHAs upstream. SHA reachability
+    (`git rev-list ... --not --remotes`) can't see that: the originals still
+    look "new" and get recreated as duplicates (the 377ed77-style dupes that
+    show up when you push a rebased branch). We need content-based detection.
+
+    `ordered_commits` is the oldest→newest range the pusher would rebuild.
+    `tree_of` maps each commit SHA → its tree SHA. `merged_trees` is the set of
+    tree SHAs introduced on the default branch since the branch point.
+    `patch_dup_shas` is the set of local SHAs whose patch-id already exists
+    upstream (from `git cherry`).
+
+    Two detectors, because a merge can be either shape:
+
+      * squash-merge — GitHub squashes C1..Cn into ONE commit whose tree equals
+        tree(Cn); the intermediate commits match neither tree nor patch-id. So a
+        local commit whose tree is already upstream means everything up to and
+        INCLUDING the deepest such commit is merged. On linear history that
+        deepest match is, by construction, the end of the merged prefix (every
+        earlier commit is its ancestor), so cutting there drops exactly the
+        already-merged base and never a commit that carries new work.
+
+      * rebase / ordinary merge — individual commits keep their patch-id
+        upstream; `patch_dup_shas` drops them.
+
+    `linear=False` (the pushed range contains a merge commit) disables the
+    squash cut — the "deepest match ⇒ prefix" guarantee only holds for a linear
+    range, and we will not risk dropping real work on a branch with merges.
+    Returns the survivors, order preserved.
+    """
+    patch_dup_shas = patch_dup_shas or set()
+    remaining = list(ordered_commits)
+    if linear and merged_trees:
+        cut = -1
+        for i, sha in enumerate(remaining):
+            if tree_of.get(sha) in merged_trees:
+                cut = i
+        if cut >= 0:
+            remaining = remaining[cut + 1:]
+    return [s for s in remaining if s not in patch_dup_shas]
+
+
 def force_push_to_default_blocked(branch, default_branch, force, needs_force,
                                   override=False):
     """Whether this push must be refused to protect the repo's default branch.
