@@ -4,8 +4,11 @@ Push commits via GitHub API using the GitHub App identity.
 Fallback for when HTTPS push is refused (ghs_* tokens normally work over
 HTTPS as x-access-token; the git wrapper tries that first).
 
-NOTE: this re-creates commits through the REST API, so they land upstream
-with NEW SHAs. Content is identical, history objects are not shared.
+NOTE: this re-creates commits through the REST API. Every field is copied
+byte-for-byte (message included, trailing newline and all), so an unsigned
+commit whose parents don't change keeps its original SHA. A SHA still moves
+when the commit was signed (the API cannot carry a signature) or when the
+push replants commits onto a different parent (force push, squashed upstream).
 Usage: git-push-as-app [remote] [branch]  (defaults to origin HEAD)
 """
 
@@ -14,7 +17,8 @@ import sys
 import os
 import urllib.error
 from ghapplib import (get_real_git, run_git, ensure_token, GitHubAppClient,
-                      parse_owner_repo, select_unmerged_commits)
+                      parse_owner_repo, select_unmerged_commits,
+                      commit_message)
 
 GIT = get_real_git(__file__)
 if not GIT:
@@ -288,7 +292,19 @@ def main():
     current_parent = parent_for_first
     for commit_sha in commits:
         tree_sha = run_git(GIT, ["rev-parse", f"{commit_sha}^{{tree}}"]).stdout.strip()
-        msg = run_git(GIT, ["log", "-1", "--format=%B", commit_sha]).stdout.strip()
+        # Byte-exact, trailing newline intact -- see commit_message(): a
+        # .strip() here is what made this route recreate commits under new SHAs.
+        msg = commit_message(GIT, commit_sha)
+
+        # The REST API has no way to carry a commit signature, so a signed
+        # commit necessarily comes out with a different SHA. Say so rather than
+        # let the user discover it as mysterious history drift.
+        header = run_git(GIT, ["cat-file", "commit", commit_sha],
+                         text=False).stdout.split(b"\n\n", 1)[0]
+        if b"\ngpgsig" in header:
+            print(f"  Warning: {commit_sha[:7]} is signed; the API cannot carry "
+                  "the signature, so the pushed commit gets a new SHA",
+                  file=sys.stderr)
         author_name = run_git(GIT, ["log", "-1", "--format=%an", commit_sha]).stdout.strip()
         author_email = run_git(GIT, ["log", "-1", "--format=%ae", commit_sha]).stdout.strip()
         author_date = run_git(GIT, ["log", "-1", "--format=%aI", commit_sha]).stdout.strip()

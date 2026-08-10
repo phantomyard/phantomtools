@@ -155,10 +155,10 @@ if grep -q "git-push-as-app origin main" "$HELPER_LOG"; then
 else
     ko "no fallback; output: $OUTPUT"
 fi
-if [[ "$OUTPUT" == *"new SHAs"* ]]; then
-    ok "fallback warns that the API route rewrites SHAs"
+if [[ "$OUTPUT" == *"re-creates commits"* ]]; then
+    ok "fallback warns that the API route re-creates commits"
 else
-    ko "no SHA-rewrite warning; output: $OUTPUT"
+    ko "no re-created-commits warning; output: $OUTPUT"
 fi
 
 # --- 6. non-auth failure does NOT fall back ---------------------------------

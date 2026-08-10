@@ -8,7 +8,8 @@
 #      and it pushes your commits byte-for-byte — same SHAs.
 #   2. Only if that fails with an authentication error, fall back to the
 #      API-based -as-app variants. That route re-creates commits through the
-#      REST API, which gives them NEW SHAs — correct content, different history.
+#      REST API; it copies every field byte-for-byte so unsigned commits with
+#      unchanged parents keep their SHA, but a signature cannot survive it.
 #
 # Everything else falls through to /usr/bin/git untouched.
 #
@@ -135,7 +136,7 @@ case "$subcmd" in
 
             rm -f "$ERR_FILE"
             echo "github-app-auth: HTTPS auth failed, retrying via the GitHub API" >&2
-            echo "github-app-auth: note — the API route re-creates commits with new SHAs" >&2
+            echo "github-app-auth: note — the API route re-creates commits; any commit signature is dropped" >&2
             exec "${SCRIPT_DIR}/git-${subcmd}-as-app" "$@"
         fi
         ;;

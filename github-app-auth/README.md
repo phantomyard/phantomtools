@@ -4,7 +4,7 @@ Use a **GitHub App** for `git push`, `git fetch`, and `git pull`.
 
 GitHub App installation tokens (`ghs_*`) **do** work over HTTPS git operations, as `x-access-token:<token>` — so the normal path is plain git with a credential helper. This tool wires that up, and keeps an API-based route as a fallback for when HTTPS auth is refused.
 
-> **Earlier versions of this README claimed `ghs_*` tokens don't work over HTTPS.** That was wrong, and the API detour it justified rewrites your commits with new SHAs (see [Push routing](#push-routing-https-first-api-fallback)). HTTPS is now the primary path.
+> **Earlier versions of this README claimed `ghs_*` tokens don't work over HTTPS.** That was wrong, and the API detour it justified re-creates your commits — historically under new SHAs (see [Push routing](#push-routing-https-first-api-fallback)). HTTPS is now the primary path.
 
 ## Why?
 
@@ -64,7 +64,7 @@ github-token.sh  (JWT → installation token)
 |------|---------|
 | `bin/git` | Wrapper placed in `~/.local/bin`; pushes/fetches GitHub repos over HTTPS with the App credential pinned, falling back to the `-as-app` variants only on an auth failure |
 | `bin/gh` | Wrapper that injects the App token as `GH_TOKEN` so `gh api`/`gh issue`/`gh repo`… work; refuses `gh pr create` with a pointer to `create-pr-as-app` and passes `gh auth` straight through |
-| `bin/git-push-as-app` | Fallback push via GitHub API with `--dry-run` and `-f`/`--force` support; refuses history rewrites on the default branch. **Re-creates commits, so they get new SHAs** |
+| `bin/git-push-as-app` | Fallback push via GitHub API with `--dry-run` and `-f`/`--force` support; refuses history rewrites on the default branch. **Re-creates commits; SHA is preserved only when unsigned and parents are unchanged** |
 | `bin/git-fetch-as-app` | Fetch via temporary authenticated remote; auto-cleans stale `__app_fetch_*` remotes on crash |
 | `bin/git-pull-as-app` | Fetch + merge/rebase |
 | `bin/git-clone-as-app` | Clone a GitHub repo with App auth; the discoverable entry point for clone (plain `git clone` also works via the credential helper) |
@@ -115,13 +115,26 @@ through `git-push-as-app`. Any other failure — non-fast-forward, hook
 rejection, bad refspec, network — is passed straight back to you with git's own
 exit code, because the API route can't fix those.
 
-> ⚠️ **The API route rewrites SHAs.** `git-push-as-app` re-creates each commit
-> through the REST API (blobs → trees → commits), so the commits that land
-> upstream have different hashes than the ones in your local history. The
-> content is identical, but your local branch and the remote branch no longer
-> share commit objects — which makes a PR look like it contains foreign
-> commits, and a later `git pull` produce duplicates. This is why HTTPS is the
-> primary path and the API is a fallback.
+> ⚠️ **The API route re-creates commits, so it can change SHAs.**
+> `git-push-as-app` rebuilds every commit through the REST API (blobs → trees →
+> commits). It now reproduces the *identical* SHA when the commit is unsigned
+> and its parents are unchanged — author, committer, both dates and the message
+> are copied byte-for-byte. The SHA still moves when:
+>
+> * the commit is **GPG/SSH-signed** — the REST API cannot carry a signature, so
+>   it is dropped and the object changes;
+> * the wrapper **replants** commits (force push, replaying onto a squashed or
+>   rebased upstream tip), because the parent changes by design.
+>
+> When a SHA does move, your local branch and the remote branch stop sharing
+> commit objects — which makes a PR look like it contains foreign commits, and a
+> later `git pull` produce duplicates. That is why HTTPS stays the primary path.
+>
+> Historical note: until the trailing newline of the commit message was
+> preserved, this route changed *every* SHA by one byte. Invisible in
+> `git cat-file -p`, and not detectable via `GET git/commits/:sha` either — the
+> API strips the trailing newline on read even for plain-git-pushed commits. To
+> compare, reconstruct the object locally and hash it.
 
 Two escapes:
 
@@ -130,9 +143,9 @@ GITHUB_APP_FORCE_API=1 git push origin main   # always use the API route
 GITHUB_APP_NO_API=1    git push origin main   # never fall back; fail loudly
 ```
 
-`GITHUB_APP_NO_API=1` is the useful one in CI and scripts: it guarantees your
-SHAs are preserved, and turns a broken App credential into a visible failure
-rather than a silent history rewrite.
+`GITHUB_APP_NO_API=1` is the useful one in CI and scripts: only plain git ever
+touches the remote, so signatures and SHAs are guaranteed intact, and a broken
+App credential becomes a visible failure instead of a silent re-created history.
 
 ### Discover what the wrapper can do
 

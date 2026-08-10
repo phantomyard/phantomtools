@@ -46,6 +46,38 @@ def run_git(git_bin, args, text=True, **kwargs):
     result = subprocess.run(cmd, capture_output=True, text=text, check=True, **kwargs)
     return result
 
+def commit_message(git_bin, sha, **kwargs):
+    """Return a commit's message byte-exactly, trailing newline included.
+
+    The obvious `run_git(git, ["log", "-1", "--format=%B", sha]).stdout.strip()`
+    is wrong in a way that is invisible in `git cat-file -p` output and costs
+    exactly one byte:
+
+      * git appends its own record separator (a newline) AFTER the format
+        output, so %B yields "<message>\\n" + "\\n" for a normal commit;
+      * .strip() removes both newlines, i.e. the separator AND the message's
+        own trailing newline (git's own commit path always writes one).
+
+    A message that is one byte shorter hashes to a different commit SHA, and
+    the REST API stores what we send verbatim -- so the API push route
+    recreated every commit under a new SHA even when tree, parents, author and
+    committer were all identical. Upstream then sees a stranger's commit and
+    marks the PR dirty.
+
+    `-z` makes the record separator a NUL instead of a newline, so the message
+    bytes come back untouched; text=False additionally avoids universal-newline
+    translation mangling a CRLF message body.
+
+    (Note for future debugging: you cannot verify this against
+    `GET git/commits/:sha` -- the API strips the trailing newline on READ, for
+    plain-git-pushed commits too. Reconstruct the object and hash it instead.)
+    """
+    out = run_git(git_bin, ["log", "-1", "-z", "--format=%B", sha],
+                  text=False, **kwargs).stdout
+    if out.endswith(b"\0"):
+        out = out[:-1]
+    return out.decode("utf-8")
+
 def get_token():
     # ~/.github_env is the source of truth and wins over the process
     # environment. A long-lived process (e.g. phantombot) loads GITHUB_TOKEN
