@@ -1,0 +1,35 @@
+# Shared truth table for "does this `git push` argument list rewrite history?"
+#
+# The default-branch guard is only as good as this classification, and it has
+# to be made twice: in bash (bin/git, to know whether to consult the guard
+# before pushing over HTTPS) and in python (ghapplib.is_force_arg, used by
+# git-push-as-app). Two implementations drifting apart is exactly how
+# --force-with-lease slipped through the first time, so both read this file:
+# tests/test_force_args.py and tests/test_wrapper.sh.
+#
+# Format: <force|plain><TAB>arguments to `git push`, space separated.
+
+force	--force origin main
+force	-f origin main
+force	origin main --force
+force	--force-with-lease origin main
+force	--force-with-lease=main:abc123 origin main
+force	--mirror origin
+force	-fu origin main
+force	-qf origin main
+force	origin +main
+force	origin +main:main
+force	origin +refs/heads/main:refs/heads/main
+force	--force --dry-run origin main
+force	--force --all origin
+plain	origin main
+plain	-u origin main
+plain	--dry-run origin main
+plain	--all origin
+plain	--tags origin
+plain	--force-if-includes origin main
+plain	origin main:main
+plain	origin HEAD:refs/heads/main
+plain	-q origin main
+plain	--set-upstream origin feature
+plain	origin :old-branch

@@ -11,6 +11,10 @@
 #      REST API; it copies every field byte-for-byte so unsigned commits with
 #      unchanged parents keep their SHA, but a signature cannot survive it.
 #
+# Either way a force push is first put to the default-branch guard
+# (git-push-as-app --guard-check), so the protection does not depend on which
+# route the push ends up taking.
+#
 # Everything else falls through to /usr/bin/git untouched.
 #
 # Escapes:
@@ -90,6 +94,24 @@ run_real_git_as_app() {
 # Did real git fail because of authentication/authorization, as opposed to a
 # non-fast-forward, a hook rejection, a network blip, or a bad refspec? Only an
 # auth failure is worth retrying through the API route.
+# Does this push rewrite history? Must stay in step with is_force_arg() in
+# ghapplib.py — tests/test_wrapper.sh and tests/test_force_args.py run the same
+# case list against both. `--mirror` counts on its own (it force-updates and
+# deletes refs); `--force-if-includes` does not (it only qualifies a force).
+is_force_push() {
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --force|--force-with-lease|--force-with-lease=*|--mirror) return 0 ;;
+            --*) continue ;;
+            -*f*) return 0 ;;
+            -*) continue ;;
+            +?*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
 is_auth_failure() {
     local file="$1"
     [[ -f "$file" ]] || return 1
@@ -116,6 +138,17 @@ case "$subcmd" in
         if [[ "$url" == https://*github.com/* ]] && has_ghs_token; then
             if [[ "${GITHUB_APP_FORCE_API:-0}" == "1" ]]; then
                 exec "${SCRIPT_DIR}/git-${subcmd}-as-app" "$@"
+            fi
+
+            # The default-branch force-push guard lives in git-push-as-app, so
+            # routing pushes through plain git skipped it entirely: a
+            # `git push --force origin main` went straight out over HTTPS. Ask
+            # the guard first, in check-only mode — it touches nothing and
+            # answers 0 allowed / non-zero refuse.
+            if [[ "$subcmd" == "push" ]] && is_force_push "$@"; then
+                guard_rc=0
+                "${SCRIPT_DIR}/git-push-as-app" --guard-check "$@" || guard_rc=$?
+                [[ "$guard_rc" -eq 0 ]] || exit "$guard_rc"
             fi
 
             rc=0

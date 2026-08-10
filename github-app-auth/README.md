@@ -64,7 +64,7 @@ github-token.sh  (JWT → installation token)
 |------|---------|
 | `bin/git` | Wrapper placed in `~/.local/bin`; pushes/fetches GitHub repos over HTTPS with the App credential pinned, falling back to the `-as-app` variants only on an auth failure |
 | `bin/gh` | Wrapper that injects the App token as `GH_TOKEN` so `gh api`/`gh issue`/`gh repo`… work; refuses `gh pr create` with a pointer to `create-pr-as-app` and passes `gh auth` straight through |
-| `bin/git-push-as-app` | Fallback push via GitHub API with `--dry-run` and `-f`/`--force` support; refuses history rewrites on the default branch. **Re-creates commits; SHA is preserved only when unsigned and parents are unchanged** |
+| `bin/git-push-as-app` | Fallback push via GitHub API with `--dry-run` and `-f`/`--force` support; refuses history rewrites on the default branch (also on behalf of the HTTPS route, via `--guard-check`). **Re-creates commits; SHA is preserved only when unsigned and parents are unchanged** |
 | `bin/git-fetch-as-app` | Fetch via temporary authenticated remote; auto-cleans stale `__app_fetch_*` remotes on crash |
 | `bin/git-pull-as-app` | Fetch + merge/rebase |
 | `bin/git-clone-as-app` | Clone a GitHub repo with App auth; the discoverable entry point for clone (plain `git clone` also works via the credential helper) |
@@ -171,13 +171,25 @@ it is named — `main`, `master`, `trunk`, `develop`, … no configuration neede
 Force-pushing **feature** branches is untouched, and ordinary fast-forwards to
 the default branch always pass.
 
+The guard applies to **both** routes. HTTPS is the normal path and never
+reaches the API code where the check lives, so the wrapper asks it up front
+(`git-push-as-app --guard-check`, read-only) before handing the push to plain
+git. All the spellings count — `-f`, `--force`, `--force-with-lease`, a
+`+refspec`, and `--mirror`, which force-updates every ref on its own. A
+refspec is judged by its **destination**: `git push -f origin HEAD:main`
+rewrites main, whatever the local ref is called.
+
 ```bash
 git push --force origin develop   # refused if develop is the default branch
 git push --force origin feat/x    # fine — feature branch
 
 # Deliberate override for the rare legitimate case:
-GITHUB_APP_ALLOW_FORCE_DEFAULT=1 git-push-as-app origin develop
+GITHUB_APP_ALLOW_FORCE_DEFAULT=1 git push --force origin develop
 ```
+
+If the guard cannot reach the API to find out what the default branch *is*,
+it refuses rather than guesses — an unverifiable force push fails closed. The
+override above is the way through.
 
 ### Cloning a repo
 

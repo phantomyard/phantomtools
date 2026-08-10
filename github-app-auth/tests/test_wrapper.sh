@@ -19,6 +19,7 @@ mkdir -p "$BIN_DIR" "$REAL_GIT_DIR"
 FAKE_GIT="$REAL_GIT_DIR/git"
 GIT_ARGS_LOG="$TMP_DIR/git-args.log"
 HELPER_LOG="$TMP_DIR/helper.log"
+GUARD_LOG="$TMP_DIR/guard.log"
 
 cp "$WRAPPER_SRC" "$BIN_DIR/git"
 chmod +x "$BIN_DIR/git"
@@ -76,6 +77,10 @@ write_as_app_helpers() {
     for sub in fetch pull push; do
         cat > "$BIN_DIR/git-$sub-as-app" <<EOF
 #!/bin/bash
+if [[ "\$1" == "--guard-check" ]]; then
+    printf 'guard-check %s\n' "\$*" >> "$GUARD_LOG"
+    exit \${GUARD_RC:-0}
+fi
 printf 'git-$sub-as-app %s\n' "\$*" >> "$HELPER_LOG"
 echo "AS-APP CALLED (REAL_GIT is \$REAL_GIT)"
 EOF
@@ -83,7 +88,7 @@ EOF
     done
 }
 
-reset_logs() { : > "$GIT_ARGS_LOG"; : > "$HELPER_LOG"; }
+reset_logs() { : > "$GIT_ARGS_LOG"; : > "$HELPER_LOG"; : > "$GUARD_LOG"; }
 
 write_fake_git
 write_as_app_helpers
@@ -243,6 +248,86 @@ if [[ "$OUTPUT" == *"REAL_GIT is $FAKE_GIT"* ]]; then
     ok "REAL_GIT was exported to the child"
 else
     ko "wrapper output: $OUTPUT"
+fi
+
+# --- 11. the default-branch force guard survives the HTTPS route ------------
+# The regression this suite exists for: the guard lives in git-push-as-app, so
+# making plain git the primary path let `git push --force origin main` bypass
+# it completely. The wrapper must consult the guard BEFORE it pushes.
+
+echo "Testing force-push guard..."
+reset_logs
+set +e
+OUTPUT=$(GUARD_RC=1 MODE=ok "$BIN_DIR/git" push --force origin main 2>&1)
+RC=$?
+set -e
+if [[ ! -s "$GUARD_LOG" ]]; then
+    ko "guard was never consulted on a force push"
+elif grep -q -- "^push --force origin main" "$GIT_ARGS_LOG"; then
+    ko "refused push still reached real git; log: $(cat "$GIT_ARGS_LOG")"
+elif [[ "$RC" -ne 1 ]]; then
+    ko "expected exit 1 from a refused force push, got $RC"
+else
+    ok "force push to the default branch is blocked before it leaves"
+fi
+
+reset_logs
+OUTPUT=$(GUARD_RC=0 MODE=ok "$BIN_DIR/git" push --force origin feat/x 2>&1)
+if [[ ! -s "$GUARD_LOG" ]]; then
+    ko "guard was not consulted for a feature-branch force push"
+elif grep -q -- "push --force origin feat/x" "$GIT_ARGS_LOG"; then
+    ok "allowed force push proceeds over HTTPS"
+else
+    ko "allowed force push never reached real git; log: $(cat "$GIT_ARGS_LOG")"
+fi
+
+# An undecidable guard (no token, API unreachable) must fail closed: a force
+# push is destructive, so "I could not check" cannot mean "go ahead".
+reset_logs
+set +e
+OUTPUT=$(GUARD_RC=2 MODE=ok "$BIN_DIR/git" push --force origin main 2>&1)
+RC=$?
+set -e
+if grep -q -- "^push --force" "$GIT_ARGS_LOG"; then
+    ko "push proceeded although the guard could not decide"
+elif [[ "$RC" -eq 2 ]]; then
+    ok "an undecidable guard fails closed"
+else
+    ko "expected exit 2, got $RC; output: $OUTPUT"
+fi
+
+# Ordinary pushes must not pay for the guard's API call.
+reset_logs
+MODE=ok "$BIN_DIR/git" push origin main >/dev/null 2>&1
+if [[ -s "$GUARD_LOG" ]]; then
+    ko "guard ran on a non-force push: $(cat "$GUARD_LOG")"
+else
+    ok "non-force push skips the guard entirely"
+fi
+
+# --- 12. bash and python agree on what "force" means ------------------------
+# is_force_push() in bin/git and is_force_arg() in ghapplib.py are separate
+# implementations of the same rule; drift means a spelling of --force that the
+# wrapper waves through. Both are run against tests/force_cases.txt.
+
+echo "Testing force detection against the shared case list..."
+CASES_FILE="$REPO_ROOT/github-app-auth/tests/force_cases.txt"
+mismatch=""
+while IFS=$'\t' read -r expect argv; do
+    [[ -z "${expect// }" || "$expect" == \#* ]] && continue
+    reset_logs
+    # shellcheck disable=SC2086
+    GUARD_RC=0 MODE=ok "$BIN_DIR/git" push $argv >/dev/null 2>&1 || true
+    consulted="plain"
+    [[ -s "$GUARD_LOG" ]] && consulted="force"
+    if [[ "$consulted" != "$expect" ]]; then
+        mismatch+="  '$argv' → wrapper says $consulted, expected $expect"$'\n'
+    fi
+done < "$CASES_FILE"
+if [[ -z "$mismatch" ]]; then
+    ok "bash force detection matches the shared case list"
+else
+    ko "force detection drifted:"$'\n'"$mismatch"
 fi
 
 # --- summary ----------------------------------------------------------------

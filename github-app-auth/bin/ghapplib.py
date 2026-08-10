@@ -672,6 +672,67 @@ def force_push_to_default_blocked(branch, default_branch, force, needs_force,
         return False
     return branch == default_branch
 
+
+def is_force_arg(arg):
+    """Is this single `git push` argument a request to rewrite history?
+
+    git spells force half a dozen ways and the old parser knew only two of
+    them, so `--force-with-lease` and `+refspec` slipped past the
+    default-branch guard. Recognised here, in one place, because the `git`
+    wrapper has to make the same judgement in bash — the two are kept in step
+    by tests/test_force_args.py and tests/test_wrapper.sh sharing a case list.
+
+    `--mirror` counts even without an explicit force: it force-updates and
+    deletes refs by itself. `--force-if-includes` does not — it is a safety
+    qualifier on a force that must appear separately.
+    """
+    if not arg:
+        return False
+    if arg in ("--force", "--force-with-lease", "--mirror"):
+        return True
+    if arg.startswith("--force-with-lease="):
+        return True
+    if arg.startswith("--"):
+        return False
+    if arg.startswith("-"):
+        # Short option cluster: -f, -fu, -qf ...
+        return "f" in arg[1:]
+    # A refspec whose '+' prefix means "update even if it is not a
+    # fast-forward" — a force push wearing a different hat.
+    return arg.startswith("+") and len(arg) > 1
+
+
+def push_refspec_dst(refspec):
+    """Remote-side branch name that a push refspec updates.
+
+    The guard compares against the default branch, so it has to look at the
+    *destination* of a refspec, not the source: `git push -f origin HEAD:main`
+    rewrites main even though the local ref is HEAD. Handles the leading '+'
+    force marker, `src:dst`, the delete form `:dst`, and a fully qualified
+    `refs/heads/dst`. Pure function so the guard's parsing is unit-testable.
+    """
+    if not refspec:
+        return ""
+    spec = refspec.lstrip("+").strip()
+    if ":" in spec:
+        spec = spec.split(":", 1)[1].strip()
+    if spec.startswith("refs/heads/"):
+        spec = spec[len("refs/heads/"):]
+    return spec
+
+
+def push_targets_every_branch(args):
+    """Does this push update every branch, the default one included?
+
+    `--all` and `--mirror` don't name a branch, so refspec parsing sees nothing
+    to compare and the guard would wave a default-branch rewrite through.
+    Combined with a force (and --mirror forces on its own) they are exactly the
+    "wiped a collaborator's work" case, so treat them as hitting the default
+    branch.
+    """
+    return any(a in ("--all", "--mirror") for a in args)
+
+
 def ensure_user_systemd_env(env=None, runtime_dir=None, uid=None, dir_exists=None):
     """Make the user-level systemd bus reachable for `systemctl --user`.
 
