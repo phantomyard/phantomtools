@@ -50,3 +50,24 @@ jobs:
         run: |
           python3 -m pip install --quiet pytest
           python3 -m pytest tests -v
+
+      - name: Syntax check (github-app-auth)
+        working-directory: github-app-auth
+        run: |
+          bash -n bin/git bin/git-pull-as-app bin/gh \
+            bin/git-credential-github-app bin/github-token.sh \
+            bin/refresh-github-env.sh install.sh uninstall.sh
+          python3 -m py_compile bin/ghapplib.py bin/github-app-auth \
+            bin/git-push-as-app bin/git-fetch-as-app bin/git-clone-as-app \
+            bin/create-pr-as-app bin/list-repos-as-app
+
+      - name: Unit tests (github-app-auth, Python)
+        working-directory: github-app-auth
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Wrapper tests (github-app-auth, shell)
+        working-directory: ${{ github.workspace }}
+        run: |
+          bash github-app-auth/tests/test_wrapper.sh
+          bash github-app-auth/tests/test_clone_wrapper.sh
+          bash github-app-auth/tests/test_gh_wrapper.sh

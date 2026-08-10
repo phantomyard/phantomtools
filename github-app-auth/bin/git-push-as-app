@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
 Push commits via GitHub API using the GitHub App identity.
-Works around ghs_* tokens not working for git push over HTTPS.
+Fallback for when HTTPS push is refused (ghs_* tokens normally work over
+HTTPS as x-access-token; the git wrapper tries that first).
+
+NOTE: this re-creates commits through the REST API, so they land upstream
+with NEW SHAs. Content is identical, history objects are not shared.
 Usage: git-push-as-app [remote] [branch]  (defaults to origin HEAD)
 """
 

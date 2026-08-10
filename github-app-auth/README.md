@@ -2,7 +2,9 @@
 
 Use a **GitHub App** for `git push`, `git fetch`, and `git pull`.
 
-GitHub App installation tokens (`ghs_*`) do not work over HTTPS git operations. This tool wraps the GitHub API so normal git commands work transparently.
+GitHub App installation tokens (`ghs_*`) **do** work over HTTPS git operations, as `x-access-token:<token>` — so the normal path is plain git with a credential helper. This tool wires that up, and keeps an API-based route as a fallback for when HTTPS auth is refused.
+
+> **Earlier versions of this README claimed `ghs_*` tokens don't work over HTTPS.** That was wrong, and the API detour it justified rewrites your commits with new SHAs (see [Push routing](#push-routing-https-first-api-fallback)). HTTPS is now the primary path.
 
 ## Why?
 
@@ -38,8 +40,10 @@ EOF
 ```
 git push origin main
     ↓
-~/.local/bin/git (wrapper) sees github.com remote
+~/.local/bin/git (wrapper) sees an https://github.com remote + a ghs_ token
     ↓
+/usr/bin/git push, with the App credential helper pinned      ← normal path
+    ↓  (only on 401/403)
 git-push-as-app  →  GitHub API (blobs → trees → commits → ref update)
 ```
 
@@ -58,9 +62,9 @@ github-token.sh  (JWT → installation token)
 
 | File | Purpose |
 |------|---------|
-| `bin/git` | Wrapper placed in `~/.local/bin`; routes GitHub repos to `-as-app` variants |
+| `bin/git` | Wrapper placed in `~/.local/bin`; pushes/fetches GitHub repos over HTTPS with the App credential pinned, falling back to the `-as-app` variants only on an auth failure |
 | `bin/gh` | Wrapper that injects the App token as `GH_TOKEN` so `gh api`/`gh issue`/`gh repo`… work; refuses `gh pr create` with a pointer to `create-pr-as-app` and passes `gh auth` straight through |
-| `bin/git-push-as-app` | Push via GitHub API with `--dry-run` and `-f`/`--force` support; refuses history rewrites on the default branch |
+| `bin/git-push-as-app` | Fallback push via GitHub API with `--dry-run` and `-f`/`--force` support; refuses history rewrites on the default branch. **Re-creates commits, so they get new SHAs** |
 | `bin/git-fetch-as-app` | Fetch via temporary authenticated remote; auto-cleans stale `__app_fetch_*` remotes on crash |
 | `bin/git-pull-as-app` | Fetch + merge/rebase |
 | `bin/git-clone-as-app` | Clone a GitHub repo with App auth; the discoverable entry point for clone (plain `git clone` also works via the credential helper) |
@@ -84,6 +88,51 @@ git push origin main
 git fetch origin
 git pull origin main
 ```
+
+### Push routing (HTTPS first, API fallback)
+
+For an `https://github.com/...` remote with a `ghs_*` token loadable, the `git`
+wrapper tries **real git over HTTPS** first:
+
+```bash
+/usr/bin/git \
+  -c credential.helper= \
+  -c 'credential.https://github.com.helper=!~/.local/bin/git-credential-github-app' \
+  push origin main
+```
+
+Two details matter there. `credential.helper=` (empty) clears every helper
+inherited from system/global config *before* the URL-scoped App helper is added
+back — otherwise an ambient helper (`osxkeychain`, `manager-core`, `store`)
+holding a personal PAT can answer first and you silently push as the wrong
+identity. And because that would *succeed*, the App fallback would never fire
+and nothing would look broken. `GIT_TERMINAL_PROMPT=0` is set too, so a missing
+credential fails immediately instead of hanging a bot on a username prompt.
+
+Only when that fails with an **authentication** error (401/403, "Authentication
+failed", "Write access to repository not granted", …) does the wrapper retry
+through `git-push-as-app`. Any other failure — non-fast-forward, hook
+rejection, bad refspec, network — is passed straight back to you with git's own
+exit code, because the API route can't fix those.
+
+> ⚠️ **The API route rewrites SHAs.** `git-push-as-app` re-creates each commit
+> through the REST API (blobs → trees → commits), so the commits that land
+> upstream have different hashes than the ones in your local history. The
+> content is identical, but your local branch and the remote branch no longer
+> share commit objects — which makes a PR look like it contains foreign
+> commits, and a later `git pull` produce duplicates. This is why HTTPS is the
+> primary path and the API is a fallback.
+
+Two escapes:
+
+```bash
+GITHUB_APP_FORCE_API=1 git push origin main   # always use the API route
+GITHUB_APP_NO_API=1    git push origin main   # never fall back; fail loudly
+```
+
+`GITHUB_APP_NO_API=1` is the useful one in CI and scripts: it guarantees your
+SHAs are preserved, and turns a broken App credential into a visible failure
+rather than a silent history rewrite.
 
 ### Discover what the wrapper can do
 
