@@ -240,7 +240,9 @@ def main():
     remote_sha = ""
     branch_exists_remote = False
     try:
-        ref_data = client.api_request("GET", f"git/refs/heads/{branch}")
+        # A brand-new branch legitimately 404s here — that is how we detect it.
+        ref_data = client.api_request("GET", f"git/refs/heads/{branch}",
+                                      quiet_codes=(404,))
         remote_sha = ref_data.get("object", {}).get("sha", "")
         branch_exists_remote = bool(remote_sha)
     except urllib.error.HTTPError as e:
@@ -427,7 +429,12 @@ def main():
         # rather than clobber their work. A real force push (-f) skips this.
         if not (force or needs_force):
             try:
-                current = client.api_request("GET", f"git/refs/heads/{branch}")
+                # 404 = the branch was deleted under us; nothing to clobber, so
+                # treat it as "unchanged" quietly. Any other status is NOT
+                # expected: it still prints, even though we degrade to the
+                # pre-upload SHA rather than abort the push.
+                current = client.api_request("GET", f"git/refs/heads/{branch}",
+                                             quiet_codes=(404,))
                 latest_remote_sha = current.get("object", {}).get("sha", "")
             except urllib.error.HTTPError:
                 latest_remote_sha = remote_sha

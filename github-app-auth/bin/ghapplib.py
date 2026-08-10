@@ -206,7 +206,17 @@ class GitHubAppClient:
         self.api_base = f"https://api.github.com/repos/{owner}/{repo}"
         self.remote_object_cache = set()
 
-    def api_request(self, method, endpoint, data=None, _allow_refresh=True):
+    def api_request(self, method, endpoint, data=None, quiet_codes=(),
+                    _allow_refresh=True):
+        """Call the REST API and return the decoded JSON body.
+
+        quiet_codes lists HTTP statuses the CALLER expects and handles itself
+        (existence probes, for instance, treat 404/422 as "not there yet").
+        For those the exception is still raised — only the `API error: …`
+        diagnostic is suppressed, so a routine miss does not print a scary
+        error that trains the reader to ignore the real ones. Any status NOT
+        in quiet_codes still prints in full.
+        """
         if endpoint.startswith("http"):
             url = endpoint
         elif endpoint:
@@ -238,7 +248,13 @@ class GitHubAppClient:
                 if new_token and new_token != self.token:
                     self.token = new_token
                     return self.api_request(method, endpoint, data,
+                                            quiet_codes=quiet_codes,
                                             _allow_refresh=False)
+            # An expected status is the caller's business, not the user's: raise
+            # without the diagnostic. The body is left unread on purpose — the
+            # caller only inspects e.code, and reading it here would be waste.
+            if e.code in quiet_codes:
+                raise
             # Re-read body for error reporting
             try:
                 body = e.read().decode("utf-8")
@@ -336,7 +352,8 @@ class GitHubAppClient:
         if tree_sha in self.remote_object_cache:
             return tree_sha
         try:
-            self.api_request("GET", f"git/trees/{tree_sha}?recursive=0")
+            self.api_request("GET", f"git/trees/{tree_sha}?recursive=0",
+                             quiet_codes=(404, 422))
             self.remote_object_cache.add(tree_sha)
             return tree_sha
         except urllib.error.HTTPError as e:
@@ -364,7 +381,10 @@ class GitHubAppClient:
 
     def _upload_tree_incremental(self, tree_sha, base_tree_sha):
         # Base must already exist on the remote; raises (caught by caller) if not.
-        self.api_request("GET", f"git/trees/{base_tree_sha}?recursive=0")
+        # A miss here is routine — the caller falls back to a full rebuild — so
+        # 404/422 stay quiet.
+        self.api_request("GET", f"git/trees/{base_tree_sha}?recursive=0",
+                         quiet_codes=(404, 422))
 
         # -z gives NUL-separated records, immune to path-quoting surprises.
         raw = run_git(self.git_bin,
