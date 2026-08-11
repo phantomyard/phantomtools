@@ -1,8 +1,22 @@
 #!/usr/bin/env python3
 """
 Push commits via GitHub API using the GitHub App identity.
-Works around ghs_* tokens not working for git push over HTTPS.
+Fallback for when HTTPS push is refused (ghs_* tokens normally work over
+HTTPS as x-access-token; the git wrapper tries that first).
+
+NOTE: this re-creates commits through the REST API. Every field is copied
+byte-for-byte (message included, trailing newline and all), so an unsigned
+commit whose parents don't change keeps its original SHA. A SHA still moves
+when the commit was signed (the API cannot carry a signature) or when the
+push replants commits onto a different parent (force push, squashed upstream).
 Usage: git-push-as-app [remote] [branch]  (defaults to origin HEAD)
+       git-push-as-app --guard-check ...  check-only: may this force push go
+                                          ahead? Touches nothing; exits 0
+                                          allowed / 1 refused / 2 undecidable.
+                                          Used by the git wrapper before it
+                                          pushes over HTTPS, so the
+                                          default-branch guard applies to that
+                                          route too.
 """
 
 import subprocess
@@ -10,13 +24,69 @@ import sys
 import os
 import urllib.error
 from ghapplib import (get_real_git, run_git, ensure_token, GitHubAppClient,
-                      parse_owner_repo, select_unmerged_commits)
+                      parse_owner_repo, select_unmerged_commits,
+                      commit_message, is_force_arg, push_refspec_dst,
+                      push_targets_every_branch, force_push_to_default_blocked)
 
 GIT = get_real_git(__file__)
 if not GIT:
     print("Error: could not locate real git binary (set GITHUB_APP_REAL_GIT)",
           file=sys.stderr)
     sys.exit(1)
+
+
+def refusal(owner, repo, default_branch):
+    return (f"Error: refusing to force-push to the default branch "
+            f"'{default_branch}' of {owner}/{repo}. This rewrites shared "
+            f"history and can drop commits other people pushed. Open a PR "
+            f"from a feature branch, or rebase onto the current "
+            f"{default_branch} so the push fast-forwards. To override "
+            f"deliberately: GITHUB_APP_ALLOW_FORCE_DEFAULT=1 git push --force ...")
+
+
+def guard_check_exit(remote, branch, args):
+    """Answer "may this force push proceed?" without touching the remote.
+
+    Return code is the whole contract: 0 allowed, 1 refused, 2 undecidable.
+    The `git` wrapper aborts on anything non-zero, so an undecidable answer
+    fails closed — a force push is destructive and rare enough that refusing
+    on a broken token or an unreachable API beats guessing. The override env
+    var is honoured first, which also keeps it usable when the API is down.
+    """
+    if os.environ.get("GITHUB_APP_ALLOW_FORCE_DEFAULT"):
+        return 0
+
+    try:
+        repo_url = run_git(GIT, ["remote", "get-url", remote]).stdout.strip()
+    except subprocess.CalledProcessError:
+        return 0  # no such remote: let git report it in its own words
+    parsed = parse_owner_repo(repo_url)
+    if not parsed:
+        return 0  # not a GitHub remote, not ours to guard
+    owner, repo = parsed
+
+    token = ensure_token()
+    if not token:
+        print("Error: refusing a force push — GITHUB_TOKEN is not set, so the "
+              "default branch cannot be checked. Set GITHUB_APP_ALLOW_FORCE_DEFAULT=1 "
+              "if you are sure.", file=sys.stderr)
+        return 2
+
+    client = GitHubAppClient(owner, repo, token, GIT)
+    try:
+        default_branch = client.get_default_branch()
+    except Exception as e:
+        print(f"Error: refusing a force push — could not read the default branch "
+              f"of {owner}/{repo} ({e}). Set GITHUB_APP_ALLOW_FORCE_DEFAULT=1 if "
+              f"you are sure.", file=sys.stderr)
+        return 2
+
+    target = (default_branch if push_targets_every_branch(args)
+              else push_refspec_dst(branch))
+    if force_push_to_default_blocked(target, default_branch, True, False):
+        print(refusal(owner, repo, default_branch), file=sys.stderr)
+        return 1
+    return 0
 
 
 def drop_already_merged(git, client, remote, commits, parent_for_first,
@@ -111,16 +181,21 @@ def main():
     # Parse flags and positional args
     force = False
     dry_run = False
+    guard_check = False
     remote = None
     branch = None
 
     i = 0
     while i < len(args):
         a = args[i]
-        if a in ("-f", "--force"):
+        if is_force_arg(a):
             force = True
+            if not a.startswith("-") and remote is not None and branch is None:
+                branch = a          # a '+refspec' positional, not a flag
         elif a == "--dry-run":
             dry_run = True
+        elif a == "--guard-check":
+            guard_check = True
         elif a.startswith("-"):
             pass  # ignore unknown flags
         elif remote is None:
@@ -131,6 +206,15 @@ def main():
 
     remote = remote or "origin"
     branch = branch or run_git(GIT, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+
+    if guard_check:
+        # Check-only mode, used by the `git` wrapper before it hands a force
+        # push to plain git over HTTPS. That route never reaches the code
+        # below, so without this the default-branch guard simply would not run.
+        # Touches nothing: one read-only GET for the default branch, then exit
+        # 0 (allowed) or 1 (refused). The caller only invokes it for pushes it
+        # already classified as history-rewriting, so force is a given here.
+        sys.exit(guard_check_exit(remote, branch, args))
 
     if dry_run:
         print(f"[dry-run] Would push {branch} to {remote}")
@@ -156,7 +240,9 @@ def main():
     remote_sha = ""
     branch_exists_remote = False
     try:
-        ref_data = client.api_request("GET", f"git/refs/heads/{branch}")
+        # A brand-new branch legitimately 404s here — that is how we detect it.
+        ref_data = client.api_request("GET", f"git/refs/heads/{branch}",
+                                      quiet_codes=(404,))
         remote_sha = ref_data.get("object", {}).get("sha", "")
         branch_exists_remote = bool(remote_sha)
     except urllib.error.HTTPError as e:
@@ -203,16 +289,11 @@ def main():
     override = bool(os.environ.get("GITHUB_APP_ALLOW_FORCE_DEFAULT"))
     if (force or needs_force) and not override:
         default_branch = client.get_default_branch()
-        from ghapplib import force_push_to_default_blocked
-        if force_push_to_default_blocked(branch, default_branch, force,
+        target = (default_branch if push_targets_every_branch(args)
+                  else push_refspec_dst(branch))
+        if force_push_to_default_blocked(target, default_branch, force,
                                          needs_force, override):
-            print(f"Error: refusing to force-push to the default branch "
-                  f"'{default_branch}' of {owner}/{repo}. This rewrites shared "
-                  f"history and can drop commits other people pushed. Open a PR "
-                  f"from a feature branch, or rebase onto the current "
-                  f"{default_branch} so the push fast-forwards. To override "
-                  f"deliberately: GITHUB_APP_ALLOW_FORCE_DEFAULT=1 git-push-as-app ...",
-                  file=sys.stderr)
+            print(refusal(owner, repo, default_branch), file=sys.stderr)
             sys.exit(1)
 
     if commits is None:
@@ -284,7 +365,19 @@ def main():
     current_parent = parent_for_first
     for commit_sha in commits:
         tree_sha = run_git(GIT, ["rev-parse", f"{commit_sha}^{{tree}}"]).stdout.strip()
-        msg = run_git(GIT, ["log", "-1", "--format=%B", commit_sha]).stdout.strip()
+        # Byte-exact, trailing newline intact -- see commit_message(): a
+        # .strip() here is what made this route recreate commits under new SHAs.
+        msg = commit_message(GIT, commit_sha)
+
+        # The REST API has no way to carry a commit signature, so a signed
+        # commit necessarily comes out with a different SHA. Say so rather than
+        # let the user discover it as mysterious history drift.
+        header = run_git(GIT, ["cat-file", "commit", commit_sha],
+                         text=False).stdout.split(b"\n\n", 1)[0]
+        if b"\ngpgsig" in header:
+            print(f"  Warning: {commit_sha[:7]} is signed; the API cannot carry "
+                  "the signature, so the pushed commit gets a new SHA",
+                  file=sys.stderr)
         author_name = run_git(GIT, ["log", "-1", "--format=%an", commit_sha]).stdout.strip()
         author_email = run_git(GIT, ["log", "-1", "--format=%ae", commit_sha]).stdout.strip()
         author_date = run_git(GIT, ["log", "-1", "--format=%aI", commit_sha]).stdout.strip()
@@ -336,7 +429,12 @@ def main():
         # rather than clobber their work. A real force push (-f) skips this.
         if not (force or needs_force):
             try:
-                current = client.api_request("GET", f"git/refs/heads/{branch}")
+                # 404 = the branch was deleted under us; nothing to clobber, so
+                # treat it as "unchanged" quietly. Any other status is NOT
+                # expected: it still prints, even though we degrade to the
+                # pre-upload SHA rather than abort the push.
+                current = client.api_request("GET", f"git/refs/heads/{branch}",
+                                             quiet_codes=(404,))
                 latest_remote_sha = current.get("object", {}).get("sha", "")
             except urllib.error.HTTPError:
                 latest_remote_sha = remote_sha

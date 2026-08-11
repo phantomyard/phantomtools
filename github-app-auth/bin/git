@@ -1,7 +1,25 @@
 #!/usr/bin/env bash
 # =============================================================================
-# git wrapper — routes fetch/pull/push for GitHub remotes through App-auth variants
-# Falls back to /usr/bin/git for everything else
+# git wrapper — makes fetch/pull/push work on GitHub remotes under a GitHub App
+#
+# Strategy (see README "How it works"):
+#   1. Real git over HTTPS, with the App credential helper forced. ghs_* tokens
+#      DO work over HTTPS as x-access-token:<token>, so this is the normal path
+#      and it pushes your commits byte-for-byte — same SHAs.
+#   2. Only if that fails with an authentication error, fall back to the
+#      API-based -as-app variants. That route re-creates commits through the
+#      REST API; it copies every field byte-for-byte so unsigned commits with
+#      unchanged parents keep their SHA, but a signature cannot survive it.
+#
+# Either way a force push is first put to the default-branch guard
+# (git-push-as-app --guard-check), so the protection does not depend on which
+# route the push ends up taking.
+#
+# Everything else falls through to /usr/bin/git untouched.
+#
+# Escapes:
+#   GITHUB_APP_FORCE_API=1   always use the API route (skip step 1)
+#   GITHUB_APP_NO_API=1      never use the API route (fail instead of step 2)
 #
 # Install: place earlier in $PATH than system git (e.g. ~/.local/bin/git)
 # =============================================================================
@@ -12,6 +30,7 @@ set -euo pipefail
 # if /usr/bin/git is not the canonical path (e.g. /opt/homebrew/bin/git on macOS).
 export REAL_GIT="${GITHUB_APP_REAL_GIT:-/usr/bin/git}"
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+CRED_HELPER="${SCRIPT_DIR}/git-credential-github-app"
 
 subcmd="${1:-}"
 shift 2>/dev/null || true
@@ -31,7 +50,7 @@ get_remote_from_args() {
 # Only intercept when a GitHub App installation token (ghs_*) is actually
 # loadable. PATs (ghp_*, github_pat_*), SSH remotes, and missing tokens fall
 # through to the real git: the standard credential helper / ssh-agent handles
-# them correctly without the App-API detour.
+# them correctly without the App detour.
 has_ghs_token() {
     case "${GITHUB_TOKEN:-}" in
         ghs_*) return 0 ;;
@@ -43,15 +62,114 @@ has_ghs_token() {
     return 1
 }
 
+# Run real git with the App credential pinned.
+#
+# `credential.helper=` (empty) clears every helper inherited from
+# system/global/local config, then the URL-scoped entry re-adds ours. Without
+# the reset, an ambient helper (osxkeychain, manager-core, store) holding a
+# user PAT could answer first and we'd silently push as the wrong identity —
+# and, because that succeeds, never reach the App fallback.
+#
+# GIT_TERMINAL_PROMPT=0 turns "no usable credential" into an immediate error
+# instead of a username prompt that hangs a bot forever.
+#
+# stderr is teed so the user still sees progress live while we keep a copy to
+# classify the failure. Returns git's own exit code; stderr copy in $ERR_FILE.
+ERR_FILE=""
+run_real_git_as_app() {
+    ERR_FILE=$(mktemp "${TMPDIR:-/tmp}/github-app-auth-git.XXXXXX")
+    local rc=0
+    set +e
+    {
+        GIT_TERMINAL_PROMPT=0 "$REAL_GIT" \
+            -c credential.helper= \
+            -c "credential.https://github.com.helper=!${CRED_HELPER}" \
+            "$@" 2>&1 1>&3 | tee "$ERR_FILE" >&2
+    } 3>&1
+    rc=${PIPESTATUS[0]}
+    set -e
+    return "$rc"
+}
+
+# Did real git fail because of authentication/authorization, as opposed to a
+# non-fast-forward, a hook rejection, a network blip, or a bad refspec? Only an
+# auth failure is worth retrying through the API route.
+# Does this push rewrite history? Must stay in step with is_force_arg() in
+# ghapplib.py — tests/test_wrapper.sh and tests/test_force_args.py run the same
+# case list against both. `--mirror` counts on its own (it force-updates and
+# deletes refs); `--force-if-includes` does not (it only qualifies a force).
+is_force_push() {
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --force|--force-with-lease|--force-with-lease=*|--mirror) return 0 ;;
+            --*) continue ;;
+            -*f*) return 0 ;;
+            -*) continue ;;
+            +?*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+is_auth_failure() {
+    local file="$1"
+    [[ -f "$file" ]] || return 1
+    grep -qiE \
+        -e 'authentication failed' \
+        -e 'invalid username or password' \
+        -e 'could not read (username|password)' \
+        -e 'terminal prompts disabled' \
+        -e 'no anonymous write access' \
+        -e 'write access to repository not granted' \
+        -e 'permission to .* denied' \
+        -e 'error: 40[13]' \
+        "$file"
+}
+
 case "$subcmd" in
     fetch|pull|push)
         remote=$(get_remote_from_args "$@")
         url=$("$REAL_GIT" remote get-url "$remote" 2>/dev/null || true)
-        # HTTPS GitHub remotes are the only ones that need the App-API path
+        # HTTPS GitHub remotes are the only ones that need App credentials
         # (SSH bypasses credential helpers entirely). And even then, only when
         # a ghs_* token is around — otherwise the user has a PAT or no token,
         # and plain git handles that fine.
         if [[ "$url" == https://*github.com/* ]] && has_ghs_token; then
+            if [[ "${GITHUB_APP_FORCE_API:-0}" == "1" ]]; then
+                exec "${SCRIPT_DIR}/git-${subcmd}-as-app" "$@"
+            fi
+
+            # The default-branch force-push guard lives in git-push-as-app, so
+            # routing pushes through plain git skipped it entirely: a
+            # `git push --force origin main` went straight out over HTTPS. Ask
+            # the guard first, in check-only mode — it touches nothing and
+            # answers 0 allowed / non-zero refuse.
+            if [[ "$subcmd" == "push" ]] && is_force_push "$@"; then
+                guard_rc=0
+                "${SCRIPT_DIR}/git-push-as-app" --guard-check "$@" || guard_rc=$?
+                [[ "$guard_rc" -eq 0 ]] || exit "$guard_rc"
+            fi
+
+            rc=0
+            run_real_git_as_app "$subcmd" "$@" || rc=$?
+            if [[ "$rc" -eq 0 ]]; then
+                rm -f "$ERR_FILE"
+                exit 0
+            fi
+
+            if [[ "${GITHUB_APP_NO_API:-0}" == "1" ]] \
+                    || ! is_auth_failure "$ERR_FILE"; then
+                # Not an auth problem (or the API route is disabled): git has
+                # already printed the real reason; retrying via the API would
+                # only rewrite SHAs and fail the same way.
+                rm -f "$ERR_FILE"
+                exit "$rc"
+            fi
+
+            rm -f "$ERR_FILE"
+            echo "github-app-auth: HTTPS auth failed, retrying via the GitHub API" >&2
+            echo "github-app-auth: note — the API route re-creates commits; any commit signature is dropped" >&2
             exec "${SCRIPT_DIR}/git-${subcmd}-as-app" "$@"
         fi
         ;;

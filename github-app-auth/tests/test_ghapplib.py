@@ -736,5 +736,122 @@ class TestDrift(unittest.TestCase):
         self.assertEqual(args[2]["labels"], ["drift"])
 
 
+def _http_error(code, body=b'{"message":"boom"}'):
+    return urllib.error.HTTPError(
+        "https://api.github.com/x", code, "Reason", {}, io.BytesIO(body))
+
+
+class TestQuietProbeCodes(unittest.TestCase):
+    """Expected-miss probes must raise without printing `API error: …`.
+
+    The noise is not cosmetic: git-push-as-app probes for a tree, a base tree
+    and a not-yet-existing ref on every push, so an unconditional diagnostic
+    prints errors on a completely healthy run — and trains the reader to skim
+    past the one that actually matters.
+    """
+
+    def _client(self):
+        return ghapplib.GitHubAppClient("o", "r", "ghs_x", "/usr/bin/git")
+
+    def _call(self, code, **kwargs):
+        """Run api_request against a urlopen that raises `code`; return stderr."""
+        client = self._client()
+        err = io.StringIO()
+        with mock.patch('urllib.request.urlopen', side_effect=_http_error(code)), \
+             mock.patch('sys.stderr', err):
+            with self.assertRaises(urllib.error.HTTPError):
+                client.api_request("GET", "git/trees/deadbeef", **kwargs)
+        return err.getvalue()
+
+    def test_quiet_code_is_silent(self):
+        for code in (404, 422):
+            with self.subTest(code=code):
+                self.assertEqual(self._call(code, quiet_codes=(404, 422)), "")
+
+    def test_unexpected_code_still_shouts(self):
+        # The whole point: quieting the probes must not quiet a real failure.
+        out = self._call(500, quiet_codes=(404, 422))
+        self.assertIn("API error: 500", out)
+        self.assertIn("boom", out)
+
+    def test_403_not_quieted_by_404_probe(self):
+        # A permission problem on a probe is real news — App lacks Contents:read.
+        self.assertIn("API error: 403", self._call(403, quiet_codes=(404,)))
+
+    def test_default_is_loud(self):
+        # Callers that pass nothing keep the old behaviour verbatim.
+        self.assertIn("API error: 404", self._call(404))
+
+    def test_quiet_leaves_body_unread_for_caller(self):
+        # We skip e.read() on a quiet code; prove the body survives so a caller
+        # that wants to inspect it still can.
+        client = self._client()
+        exc = _http_error(422, b'{"message":"unresolvable"}')
+        with mock.patch('urllib.request.urlopen', side_effect=exc), \
+             mock.patch('sys.stderr', io.StringIO()):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                client.api_request("GET", "git/trees/x", quiet_codes=(422,))
+        self.assertIn(b"unresolvable", ctx.exception.read())
+
+    def test_quiet_codes_survive_token_refresh(self):
+        # A 401 refreshes the token and retries once; the retry must inherit
+        # quiet_codes or the second attempt goes loud for no reason.
+        client = self._client()
+        err = io.StringIO()
+        with mock.patch('urllib.request.urlopen',
+                        side_effect=[_http_error(401), _http_error(404)]), \
+             mock.patch.object(ghapplib, 'refresh_token', return_value="ghs_new"), \
+             mock.patch('sys.stderr', err):
+            with self.assertRaises(urllib.error.HTTPError):
+                client.api_request("GET", "git/refs/heads/new", quiet_codes=(404,))
+        self.assertNotIn("API error: 404", err.getvalue())
+
+    # --- the call sites, so the wiring cannot silently regress -------------
+
+    def test_tree_existence_probe_is_quiet(self):
+        """upload_tree's fast-path probe 422s for any local-only tree SHA."""
+        client = self._client()
+        err = io.StringIO()
+        with mock.patch.object(client, 'api_request',
+                              side_effect=_http_error(422)) as api, \
+             mock.patch.object(client, '_upload_tree_full',
+                              return_value="rebuilt") as full, \
+             mock.patch('sys.stderr', err):
+            self.assertEqual(client.upload_tree("deadbeef"), "rebuilt")
+        full.assert_called_once()
+        _, kwargs = api.call_args
+        self.assertEqual(kwargs.get("quiet_codes"), (404, 422))
+
+    def test_base_tree_probe_is_quiet(self):
+        client = self._client()
+        with mock.patch.object(client, 'api_request',
+                              side_effect=_http_error(404)) as api:
+            with self.assertRaises(urllib.error.HTTPError):
+                client._upload_tree_incremental("tree", "base")
+        _, kwargs = api.call_args
+        self.assertEqual(kwargs.get("quiet_codes"), (404, 422))
+
+    def test_push_wrapper_ref_probes_are_quiet(self):
+        """Both `git/refs/heads/{branch}` probes in git-push-as-app pass 404.
+
+        Source-level assertion, not behavioural: those two calls live inside
+        main() behind argv parsing and a live token, so a unit test cannot
+        reach them. Crude, but it fails loudly if someone drops the kwarg and
+        brings back `API error: 404` on every push to a new branch.
+        """
+        path = os.path.join(os.path.dirname(__file__), '..', 'bin',
+                            'git-push-as-app')
+        with open(path) as fh:
+            src = fh.read()
+        probes = [ln for ln in src.splitlines()
+                  if 'api_request("GET", f"git/refs/heads/' in ln]
+        self.assertEqual(len(probes), 2, f"probe count changed: {probes}")
+        for ln in probes:
+            idx = src.index(ln)
+            # quiet_codes may sit on the following continuation line.
+            window = src[idx:idx + len(ln) + 120]
+            self.assertIn("quiet_codes=(404,)", window)
+
+
 if __name__ == '__main__':
     unittest.main()

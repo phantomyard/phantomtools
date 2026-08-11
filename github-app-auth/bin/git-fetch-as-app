@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Fetch from GitHub via API-authenticated URL.
-Works around ghs_* tokens not working for git fetch over HTTPS.
+Fallback for when HTTPS fetch is refused (ghs_* tokens normally work over
+HTTPS as x-access-token; the git wrapper tries that first).
 Usage: git-fetch-as-app [remote] [refspec...]  (defaults to origin)
 """
 
