@@ -64,6 +64,12 @@ class TestSessionManifest(unittest.TestCase):
                         str(tmp / "personas-archive/alma-2026-08-09T00-00-00-000Z"),
                     )
                 ],
+                scopes_written=True,
+                scopes_backup=str(tmp / "personas-archive/._pf_data_scopes.json-x"),
+                scopes_created=False,
+                humans_written=True,
+                humans_backup=None,
+                humans_created=True,
             )
             record_session(
                 target,
@@ -83,6 +89,15 @@ class TestSessionManifest(unittest.TestCase):
             self.assertEqual(s["archive_root_pre_existed"], False)
             self.assertEqual(s["target_pre_existed"], False)
             self.assertEqual(s["archived"][0]["name"], "alma")
+            # Data-file backup info round-trips into the manifest.
+            self.assertEqual(s["scopes_written"], True)
+            self.assertEqual(
+                s["scopes_backup"],
+                str(tmp / "personas-archive/._pf_data_scopes.json-x"),
+            )
+            self.assertEqual(s["scopes_created"], False)
+            self.assertEqual(s["humans_written"], True)
+            self.assertEqual(s["humans_created"], True)
 
     def test_multiple_sessions_stack(self):
         with tempfile.TemporaryDirectory() as t:
@@ -181,6 +196,158 @@ class TestRollbackExecute(unittest.TestCase):
 
             self.assertEqual(sorted(rb.removed_created), sorted(result.created))
             self.assertFalse(target.exists())  # target did not pre-exist -> deleted
+
+    def test_rollback_restores_pre_existing_data_files(self):
+        """Data-dir derived files (scopes.json / HUMANS.md) that existed
+        before a deploy are snapshotted into personas-archive/ and restored
+        byte-for-byte on rollback (option (a): rollback IS authoritative
+        over the derived data dir)."""
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            out = _build_au(tmp)
+            target = tmp / "personas"
+            scopes = target.parent / "scopes.json"
+            humans = target.parent / "HUMANS.md"
+
+            # v1: fresh deploy -- creates scopes.json + HUMANS.md in the
+            # data dir. They did not pre-exist.
+            r1 = deploy(out, target)
+            self.assertTrue(scopes.exists())
+            self.assertTrue(humans.exists())
+            self.assertTrue(r1.scopes_created)
+            self.assertTrue(r1.humans_created)
+            self.assertIsNone(r1.scopes_backup)
+            self.assertIsNone(r1.humans_backup)
+
+            # Customize the data-dir files so a later restore is meaningful:
+            # the pre-deploy state is distinct from anything the build
+            # regenerates.
+            scopes.write_text('{"custom": "pre-deploy scopes"}', encoding="utf-8")
+            humans.write_text("# Pre-deploy HUMANS\n", encoding="utf-8")
+
+            # v2: overwrite -- archives the custom pre-existing files.
+            r2 = deploy(out, target)
+            record_session(
+                target,
+                r2,
+                command="deploy",
+                orgs=["aquaponics-united"],
+                archive_root_pre_existed=False,
+                target_pre_existed=True,
+            )
+            self.assertIsNotNone(r2.scopes_backup)
+            self.assertIsNotNone(r2.humans_backup)
+            self.assertFalse(r2.scopes_created)
+            self.assertFalse(r2.humans_created)
+
+            archive_root = archives_dir(target)
+            plan = plan_rollback(archive_root, target)
+            self.assertTrue(plan.restore_data)
+            rb = execute_rollback(plan)
+
+            # The exact pre-deploy content is back.
+            self.assertEqual(
+                scopes.read_text(encoding="utf-8"), '{"custom": "pre-deploy scopes"}'
+            )
+            self.assertEqual(
+                humans.read_text(encoding="utf-8"), "# Pre-deploy HUMANS\n"
+            )
+            self.assertEqual(
+                rb.restored_data, [str(scopes.resolve()), str(humans.resolve())]
+            )
+            # The consumed backups are gone.
+            self.assertEqual(list(archive_root.glob("._pf_data_*")), [])
+
+    def test_rollback_removes_data_files_created_by_fresh_deploy(self):
+        """A deploy that CREATED scopes.json / HUMANS.md (they did not
+        pre-exist) has its data dir returned to the exact pre-deploy state
+        on rollback: the files are removed (option (a), remove-if-not-
+        pre-existing)."""
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            out = _build_au(tmp)
+            target = tmp / "personas"
+            scopes = target.parent / "scopes.json"
+            humans = target.parent / "HUMANS.md"
+
+            r1 = deploy(out, target)  # fresh: creates the data files
+            self.assertTrue(r1.scopes_created)
+            self.assertTrue(r1.humans_created)
+            record_session(
+                target,
+                r1,
+                command="deploy",
+                orgs=["aquaponics-united"],
+                archive_root_pre_existed=False,
+                target_pre_existed=False,
+            )
+
+            archive_root = archives_dir(target)
+            plan = plan_rollback(archive_root, target)
+            self.assertTrue(plan.remove_data)
+            rb = execute_rollback(plan)
+
+            # The files did not pre-exist: the exact pre-deploy state is
+            # absent, so rollback removes them.
+            self.assertFalse(scopes.exists())
+            self.assertFalse(humans.exists())
+            self.assertEqual(
+                sorted(rb.removed_data),
+                sorted([str(scopes.resolve()), str(humans.resolve())]),
+            )
+
+    def test_rollback_data_files_backcompat_old_session(self):
+        """A session recorded BEFORE data-file backup support (no
+        scopes_backup / scopes_created / humans_* keys) must still roll
+        back cleanly: the data files are left untouched and the user is
+        warned via data_skipped (their pre-deploy state is unknowable)."""
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            out = _build_au(tmp)
+            target = tmp / "personas"
+            scopes = target.parent / "scopes.json"
+
+            deploy(out, target)  # v1: creates the data files
+            result = deploy(out, target)  # v2: archives v1 personas
+            record_session(
+                target,
+                result,
+                command="deploy",
+                orgs=["aquaponics-united"],
+                archive_root_pre_existed=False,
+                target_pre_existed=True,
+            )
+            archive_root = archives_dir(target)
+
+            # Simulate an old-format session: strip ALL data-file keys the
+            # manifest would have gained with backup support.
+            manifest = archive_root / ".phantomorg-manifest.json"
+            import json
+
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            for s in data["sessions"]:
+                for k in (
+                    "scopes_written",
+                    "scopes_backup",
+                    "scopes_created",
+                    "humans_written",
+                    "humans_backup",
+                    "humans_created",
+                ):
+                    s.pop(k, None)
+            manifest.write_text(json.dumps(data), encoding="utf-8")
+
+            plan = plan_rollback(archive_root, target)
+            # No restore/remove, and the pre-deploy state is unknowable.
+            self.assertEqual(plan.restore_data, [])
+            self.assertEqual(plan.remove_data, [])
+            self.assertTrue(plan.data_skipped)
+            rb = execute_rollback(plan)
+            self.assertTrue(rb.data_skipped)
+            # The data file is left UNTOUCHED (v1-generated bytes remain).
+            self.assertTrue(scopes.exists())
+            # The persona rollback itself still completes.
+            self.assertTrue(rb.restored or rb.removed_created)
 
     def test_rollback_restores_pruned_personas(self):
         """Deploy with an actor, then deploy --prune after removing it from
@@ -773,8 +940,12 @@ class TestRollbackExecute(unittest.TestCase):
             archive_root = archives_dir(target)
             # An interrupted rollback consumed EVERY archive (moved each
             # persona back into the target) and left its trash behind.
+            # Only archive DIRECTORIES are removed here: the deploy-time
+            # data-file backups (._pf_data_* plain files, added with
+            # data-file rollback support) are not personas and are left
+            # in place.
             for d in list(archive_root.glob("*-*-*-*-*-*")):
-                if d.name.startswith(TRASH_PREFIX):
+                if d.name.startswith(TRASH_PREFIX) or not d.is_dir():
                     continue
                 shutil.rmtree(d)
             trash = archive_root / f"{TRASH_PREFIX}{_archive_stamp()}"
@@ -1087,9 +1258,7 @@ class TestManifestCorruption(unittest.TestCase):
                 )
             self.assertIn("corrupt", str(ctx.exception))
             # The corrupt file was preserved, not overwritten.
-            quarantined = list(
-                archive_root.glob(".phantomorg-manifest.json.corrupt-*")
-            )
+            quarantined = list(archive_root.glob(".phantomorg-manifest.json.corrupt-*"))
             self.assertEqual(len(quarantined), 1, str(ctx.exception))
             self.assertFalse((archive_root / ".phantomorg-manifest.json").exists())
 

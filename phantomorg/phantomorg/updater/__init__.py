@@ -405,16 +405,23 @@ def _write_pending_marker(root: Path, tag: str) -> None:
     marker, otherwise the next ``po update`` would never repair the stale
     venv. Plain ``write_text`` has no fsync — the very window the marker
     exists to close.
+
+    Fail-closed (HIGH, post-audit): if the marker cannot be created
+    durably (read-only root, disk full, permission denied), raise
+    ``UpdateError`` so the caller aborts BEFORE the merge. A merge that
+    proceeds without a durable marker would leave an unrecoverable
+    "new code / stale venv" state after a crash.
     """
     marker = root / PENDING_MARKER
     try:
         fd, tmp_name = tempfile.mkstemp(
             dir=str(root), prefix=PENDING_MARKER + ".", suffix=".tmp"
         )
-    except OSError:
-        # Best-effort: a read-only repo root must not block the update
-        # itself; the marker is only a repair hint.
-        return
+    except OSError as exc:
+        # Fail-closed: the marker is the only thing that makes a crashed
+        # merge (new code / stale venv) recoverable. If we cannot create it
+        # durably, we must NOT proceed to merge.
+        raise UpdateError(f"cannot create durable update marker: {exc}") from exc
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(tag + "\n")
@@ -422,12 +429,12 @@ def _write_pending_marker(root: Path, tag: str) -> None:
             os.fsync(fh.fileno())
         os.replace(tmp_name, marker)
         _fsync_dir(root)
-    except OSError:
-        # Best-effort (read-only root, disk full): never block the update.
+    except OSError as exc:
         try:
             os.unlink(tmp_name)
         except OSError:
             pass
+        raise UpdateError(f"cannot create durable update marker: {exc}") from exc
 
 
 def _clear_pending_marker(root: Path) -> None:
@@ -627,7 +634,5 @@ def run_update(
         _clear_pending_marker(root)
 
     new_local = read_local_version(root)
-    out.write(
-        f"PhantomOrg updated: {local_version} → {new_local or release.version}\n"
-    )
+    out.write(f"PhantomOrg updated: {local_version} → {new_local or release.version}\n")
     return EXIT_OK

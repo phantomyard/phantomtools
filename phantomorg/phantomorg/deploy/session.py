@@ -76,6 +76,14 @@ TRANSACTION_LOCK_NAME = ".phantomorg.lock"
 # rollback discards, until the rollback has fully succeeded. A dotfile
 # directory so phantombot's archive listing ignores it.
 TRASH_PREFIX = "._pf_trash_"
+# Backup files for data-dir derived artifacts (scopes.json / HUMANS.md),
+# snapshotted into the archive root at deploy time so `po rollback` can
+# restore them. Named ._pf_data_<filename>-<stamp>; plain FILES (never
+# directories), so the archive scan (which only touches directories)
+# ignores them entirely. They are disposable in-house artifacts: they
+# only matter while their owning session exists, and are swept when that
+# session is rolled back or the root is removed.
+DATA_BACKUP_PREFIX = "._pf_data_"
 
 # Archive dirs are named <name>-<stamp> (or <name>-<stamp>-<N> for
 # same-millisecond collisions), where <stamp> is phantombot's archive
@@ -85,6 +93,12 @@ TRASH_PREFIX = "._pf_trash_"
 _ARCHIVE_NAME_RE = re.compile(
     r"^(?P<name>.+)-(?P<stamp>\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)(?:-(?P<suffix>\d+))?$"
 )
+
+# Stamp embedded in a data-file backup name (._pf_data_<filename>-<stamp>
+# or ...-<stamp>-<N>). The filename part never contains the stamp, so we
+# just find every timestamp-shaped token in the tail to compare against
+# the session base id.
+_DATA_STAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z")
 
 # Internal dotfiles that live inside the archive root but are not
 # phantombot archives; the "is the archive root empty?" check must
@@ -264,9 +278,12 @@ def _empty_after_internals(archive_root: Path) -> bool:
             continue
         if p.name.startswith(TRASH_PREFIX):
             continue
-        if p.name.endswith(".tmp"):
-            # Leftover from a crashed _save_sessions: never a persona,
-            # never a reason to keep the root alive.
+        if p.name.endswith(".tmp") or p.name.startswith(DATA_BACKUP_PREFIX):
+            # Leftover from a crashed _save_sessions (*.tmp) or a
+            # deploy-time data-file backup (._pf_data_*): never a persona,
+            # never a reason to keep the root alive. Data backups only
+            # matter while their owning session exists, and load_sessions
+            # below is the guard against removing a live session's backup.
             continue
         return False
     # Only internal dotfiles (or nothing) left — but a manifest that
@@ -588,6 +605,10 @@ def record_session(
             ],
             "scopes_written": result.scopes_written,
             "humans_written": result.humans_written,
+            "scopes_backup": result.scopes_backup,
+            "scopes_created": result.scopes_created,
+            "humans_backup": result.humans_backup,
+            "humans_created": result.humans_created,
         }
         sessions = existing
         sessions.append(session)
@@ -606,6 +627,40 @@ def _is_safe_name(name: object) -> bool:
     if name in (".", ".."):
         return False
     return name == Path(name).name
+
+
+def _validate_data_backup(
+    backup_raw: object,
+    archive_root_resolved: Path,
+    label: str,
+) -> Path:
+    """Validate a recorded data-file backup path with the same safety
+    rules as persona archives: it must be an absolute path to a regular
+    file (not a symlink) that lives inside the archive root. Returns the
+    resolved path, or raises RollbackError on any violation (nothing
+    changed)."""
+    if not isinstance(backup_raw, str) or not backup_raw:
+        raise RollbackError(
+            f"refusing to roll back: corrupt manifest ({label} backup is "
+            "not a path). Nothing was changed."
+        )
+    backup = Path(backup_raw)
+    if not backup.is_absolute():
+        raise RollbackError(
+            f"refusing to roll back: {label} backup path is not absolute "
+            f"({backup_raw}). Nothing was changed."
+        )
+    if backup.is_symlink():
+        raise RollbackError(
+            f"refusing to roll back: {label} backup is a symlink "
+            f"({backup}). Nothing was changed."
+        )
+    if backup.resolve().parent != archive_root_resolved:
+        raise RollbackError(
+            f"refusing to roll back: {label} backup escapes the archive "
+            f"root ({backup_raw}). Nothing was changed."
+        )
+    return backup
 
 
 def begin_session(
@@ -694,6 +749,10 @@ def commit_session(target: Path, session_id: str, result: DeployResult) -> dict:
         ],
         "scopes_written": result.scopes_written,
         "humans_written": result.humans_written,
+        "scopes_backup": result.scopes_backup,
+        "scopes_created": result.scopes_created,
+        "humans_backup": result.humans_backup,
+        "humans_created": result.humans_created,
     }
     with _manifest_lock(archive_root):
         try:
@@ -848,6 +907,25 @@ class RollbackPlan:
     warned. """
     spec_drift: list[str] = field(default_factory=list)
     """Paths of org.yaml files that changed since the deploy was recorded."""
+    restore_data: list[tuple[str, str]] = field(default_factory=list)
+    """(dest_abs, backup_abs) data-dir files to restore to their exact
+    pre-deploy state: the pre-overwrite backup (snapshotted at deploy
+    into personas-archive/) is copied back over the current version.
+
+    Only populated for committed sessions: the backup path is recorded
+    in the manifest at commit time. An interrupted (in_progress) deploy
+    has no recorded backup path, so its data files are left untouched
+    (see ``data_skipped``)."""
+    remove_data: list[str] = field(default_factory=list)
+    """Absolute data-dir file paths the deploy created (they did not
+    exist pre-deploy). On rollback they are removed to return to the
+    exact pre-deploy state (absent)."""
+    data_skipped: bool = False
+    """True when this session's data files (scopes.json / HUMANS.md)
+    were NOT restored because their pre-deploy state is unknown (an
+    interrupted in_progress deploy, or an old session recorded before
+    data-file backup support). The user is warned that the data dir may
+    not be byte-for-byte restored."""
     cleanup_only: bool = False
     """True when every archive was already consumed by a previous (partial)
     rollback: nothing to restore, only created-persona removal, trash
@@ -872,6 +950,15 @@ class RollbackResult:
     artifacts of an interrupted deploy)."""
     removed_created: list[str] = field(default_factory=list)
     """Persona names the deploy created, now removed."""
+    restored_data: list[str] = field(default_factory=list)
+    """Data-dir file paths (scopes.json / HUMANS.md) restored to their
+    pre-overwrite bytes from the deploy-time backup."""
+    removed_data: list[str] = field(default_factory=list)
+    """Data-dir file paths the deploy created, now removed (they did not
+    pre-exist)."""
+    data_skipped: bool = False
+    """True when the session's data files were not restored (unknown
+    pre-deploy state: interrupted deploy or pre-backup session)."""
     archive_root_deleted: bool = False
     """True if personas-archive/ was removed (it did not pre-exist)."""
     target_deleted: bool = False
@@ -1076,6 +1163,11 @@ def plan_rollback(archive_root: Path, target: Path) -> RollbackPlan:
         plan.cleanup_only = (
             not present and not plan.remove_created and not plan.discard_archives
         )
+        # An interrupted (in_progress) deploy has no recorded data-file
+        # backup paths (they are only persisted at commit time): the
+        # pre-deploy state of scopes.json / HUMANS.md is unknowable, so
+        # they are left untouched and the user is warned.
+        plan.data_skipped = True
         return plan
 
     # Committed session: the manifest records exactly what the deploy
@@ -1219,6 +1311,41 @@ def plan_rollback(archive_root: Path, target: Path) -> RollbackPlan:
         if digest != entry.get("sha256"):
             plan.spec_drift.append(str(org_yaml))
 
+    # Data-dir derived files (scopes.json / HUMANS.md): recorded only on
+    # committed sessions. If a pre-existing file was overwritten, its
+    # backup lives in personas-archive/ (restore it); if the file was
+    # CREATED by this deploy (did not pre-exist), remove it. Old sessions
+    # recorded before data-file backup support have none of these keys
+    # and are handled as a back-compat skip (data_skipped warning).
+    for backup_key, created_key, label in (
+        ("scopes_backup", "scopes_created", "scopes.json"),
+        ("humans_backup", "humans_created", "HUMANS.md"),
+    ):
+        created = session.get(created_key) is True
+        if created:
+            # The deploy CREATED the file (it did not exist at the start
+            # of the session — e.g. the first org of a deploy-all wrote
+            # it fresh even if a later org backed it up): the exact
+            # pre-session state is ABSENT, so remove it on rollback.
+            plan.remove_data.append(str((target.parent / label).resolve()))
+            continue
+        backup_raw = session.get(backup_key)
+        if isinstance(backup_raw, str) and backup_raw:
+            backup = _validate_data_backup(backup_raw, archive_root_resolved, label)
+            if backup.is_file():
+                plan.restore_data.append(
+                    (str((target.parent / label).resolve()), str(backup))
+                )
+            else:
+                # Backup missing (consumed by a previous interrupted
+                # rollback or removed by hand). Not fatal: the derived
+                # file still exists; the user is warned via data_skipped.
+                plan.data_skipped = True
+        elif not isinstance(backup_raw, str):
+            # Old session (pre-backup support) or an interrupted entry:
+            # pre-deploy state unknowable.
+            plan.data_skipped = True
+
     return plan
 
 
@@ -1235,11 +1362,14 @@ def execute_rollback(plan: RollbackPlan) -> RollbackResult:
     ones, and the manifest entry is dropped LAST:
 
     1. archived personas are moved back (their backups are consumed);
-    2. personas the deploy created are removed (to the trash);
-    3. the trash (our own temporary dir) is deleted;
-    4. personas-archive/ and the target are deleted if they did not
+    2. data-dir derived files (scopes.json / HUMANS.md) are restored to
+       their pre-deploy state (backup copied back) or removed (if the
+       deploy created them);
+    3. personas the deploy created are removed (to the trash);
+    4. the trash (our own temporary dir) is deleted;
+    5. personas-archive/ and the target are deleted if they did not
        pre-exist and are now empty;
-    5. ONLY THEN the session entry is removed from the manifest.
+    6. ONLY THEN the session entry is removed from the manifest.
 
     Because the manifest is dropped last, a failure in any step leaves
     the session recorded: if the failure happened after the archives
@@ -1314,6 +1444,7 @@ def _execute_rollback_locked(plan: RollbackPlan, target: Path) -> RollbackResult
     # v0.5.8 #1).
     _cleanup_stale_internals(archive_root)
     result = RollbackResult(session_id=plan.session_id)
+    result.data_skipped = plan.data_skipped
 
     # Trash dir: created lazily, inside the archive root (a dotfile dir
     # phantombot ignores).
@@ -1365,6 +1496,54 @@ def _execute_rollback_locked(plan: RollbackPlan, target: Path) -> RollbackResult
             if archive.is_dir():
                 _discard(archive)
                 result.discarded_archives.append(archive.name)
+
+        # Data-dir derived files (scopes.json / HUMANS.md): restore the
+        # pre-deploy backup over the current version, or remove a file
+        # the deploy created (it did not pre-exist). These are derived,
+        # regenerable files — not user data — so they are overwritten /
+        # removed directly (no trash needed). The consumed backup file
+        # is deleted so the archive root can be removed when it did not
+        # pre-exist. A failure here is recoverable (the manifest is still
+        # recorded) and lands in the same RollbackError contract.
+        for dest_raw, backup_raw in plan.restore_data:
+            dest = Path(dest_raw)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(backup_raw, dest)
+            result.restored_data.append(dest_raw)
+            Path(backup_raw).unlink(missing_ok=True)
+        for dest_raw in plan.remove_data:
+            dest = Path(dest_raw)
+            if dest.exists():
+                dest.unlink(missing_ok=True)
+                result.removed_data.append(dest_raw)
+        # Sweep every deploy-time data-file backup that belongs to THIS
+        # session (stamp >= its base id). This includes the recorded
+        # backups restored above and any ORPHAN backups the deploy made
+        # but the session did not record (a deploy-all where multiple
+        # orgs each rewrite scopes.json/HUMANS.md backs the file up once
+        # per org; only the FIRST — the pre-session state — is recorded
+        # in the manifest, the rest are in-session duplicates). Leaving
+        # them would accumulate dead weight in the archive root (and,
+        # if the root pre-existed, keep it from ever cleaning up).
+        sid_base = re.sub(r"-\d+$", "", str(session.get("id", "")))
+        for _pf in list(archive_root.iterdir()):
+            if not (
+                _pf.is_file()
+                and not _pf.is_symlink()
+                and _pf.name.startswith(DATA_BACKUP_PREFIX)
+            ):
+                continue
+            _stamp = _pf.name[len(DATA_BACKUP_PREFIX) :]
+            # Strip the leading "<filename>-" to reach the stamp, then
+            # compare against the session base id.
+            for _tail in _DATA_STAMP_RE.findall(_stamp):
+                if _tail >= sid_base:
+                    # Not a local try/except: a failure here aborts the
+                    # rollback (RollbackError) and the session stays
+                    # recorded, so a retry re-restores/removes idempotently
+                    # and sweeps again.
+                    _pf.unlink(missing_ok=True)
+                    break
 
         # Recoverable work is done. Now the irreversible cleanup: our
         # own trash first (it is removed only once everything above

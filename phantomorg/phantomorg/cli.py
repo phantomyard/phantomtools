@@ -19,7 +19,8 @@ try:
 except ImportError:  # Python < 3.11
     import tomli as tomllib  # type: ignore[import-not-found,no-redef]
 
-from .compiler import CompileError, build as compiler_build
+from .compiler import CompileError
+from .compiler import build as compiler_build
 from .compiler.phantomchat import verify_phantomchat
 from .compiler.telegram import TelegramError, verify_telegram
 from .deploy.session import (
@@ -646,11 +647,21 @@ def telegram_check_cmd(org_path, config_path, state_path, as_json):
         click.echo("Run `po validate` for details.")
         raise SystemExit(1)
 
-    config = Path(config_path) if config_path else Path.home() / ".config" / "phantombot" / "config.toml"
-    state = Path(state_path) if state_path else Path.home() / ".local" / "share" / "phantombot" / "state.json"
+    config = (
+        Path(config_path)
+        if config_path
+        else Path.home() / ".config" / "phantombot" / "config.toml"
+    )
+    state = (
+        Path(state_path)
+        if state_path
+        else Path.home() / ".local" / "share" / "phantombot" / "state.json"
+    )
 
     try:
-        manifest = verify_telegram(spec, config, state_path=state if state.exists() else None)
+        manifest = verify_telegram(
+            spec, config, state_path=state if state.exists() else None
+        )
     except TelegramError as e:
         click.secho(f"Cannot verify: {e}", fg="red")
         raise SystemExit(1)
@@ -661,8 +672,7 @@ def telegram_check_cmd(org_path, config_path, state_path, as_json):
 
     summary = manifest.summary()
     click.echo(
-        f"telegram verification for {spec.organization.name} "
-        f"({manifest.checked_at}):"
+        f"telegram verification for {spec.organization.name} ({manifest.checked_at}):"
     )
     click.echo(f"  config path: {config}")
     if state.exists():
@@ -690,7 +700,9 @@ def telegram_check_cmd(org_path, config_path, state_path, as_json):
         f"{summary['error']} error"
     )
     if manifest.ok:
-        click.secho("✓ All declared telegram_bot handles match the live bots.", fg="green")
+        click.secho(
+            "✓ All declared telegram_bot handles match the live bots.", fg="green"
+        )
     else:
         click.secho("Some actors need attention (see above).", fg="yellow")
         raise SystemExit(1)
@@ -1000,9 +1012,7 @@ def build_all_cmd(base_dir, out_base):
             failed += 1
             continue
         except OSError as e:
-            click.secho(
-                f"✗ {org_id}: filesystem error, skipping ({e})", fg="red"
-            )
+            click.secho(f"✗ {org_id}: filesystem error, skipping ({e})", fg="red")
             failed += 1
             continue
         total_files = sum(len(f) for f in written.values())
@@ -1093,6 +1103,15 @@ def deploy_all_cmd(base_dir, dist_base, target, force, prune, assume_yes):
     merged_created: list[str] = []
     merged_pruned: list[str] = []
     merged_archived: list[tuple[str, str]] = []
+    # Data-dir backup info aggregated across orgs. Keep the FIRST
+    # pre-overwrite backup seen per file (the true pre-session state,
+    # matching the archive-dedup semantics: the first archive per name is
+    # the pre-session version) and OR the created flags (if any org saw
+    # the file absent, the deploy created it for the session as a whole).
+    merged_scopes_backup: str | None = None
+    merged_scopes_created = False
+    merged_humans_backup: str | None = None
+    merged_humans_created = False
 
     with _transaction_lock(effective_target):
         _reject_unresolved_in_progress(effective_target)
@@ -1215,6 +1234,12 @@ def deploy_all_cmd(base_dir, dist_base, target, force, prune, assume_yes):
                 merged_created.extend(result.created)
                 merged_pruned.extend(result.pruned)
                 merged_archived.extend(result.archived)
+                if merged_scopes_backup is None:
+                    merged_scopes_backup = result.scopes_backup
+                if merged_humans_backup is None:
+                    merged_humans_backup = result.humans_backup
+                merged_scopes_created = merged_scopes_created or result.scopes_created
+                merged_humans_created = merged_humans_created or result.humans_created
             ok += 1
 
         # One aggregated session for the whole deploy-all invocation: a single
@@ -1241,6 +1266,14 @@ def deploy_all_cmd(base_dir, dist_base, target, force, prune, assume_yes):
                 created=sorted(set(merged_created)),
                 pruned=sorted(set(merged_pruned)),
                 archived=merged_archived,
+                scopes_written=merged_scopes_backup is not None
+                or merged_scopes_created,
+                scopes_backup=merged_scopes_backup,
+                scopes_created=merged_scopes_created,
+                humans_written=merged_humans_backup is not None
+                or merged_humans_created,
+                humans_backup=merged_humans_backup,
+                humans_created=merged_humans_created,
             )
             try:
                 commit_session(effective_target, journal["id"], merged)
@@ -1480,6 +1513,24 @@ def rollback_cmd(target, list_only, assume_yes):
         )
     if result.removed_created:
         click.echo(f"  removed  : {', '.join(result.removed_created)}")
+    if result.restored_data:
+        click.echo(
+            "  data-restored: "
+            + ", ".join(Path(p).name for p in result.restored_data)
+            + " (data-dir files returned to their pre-deploy state)"
+        )
+    if result.removed_data:
+        click.echo(
+            "  data-removed : "
+            + ", ".join(Path(p).name for p in result.removed_data)
+            + " (data-dir files created by that deploy)"
+        )
+    if result.data_skipped:
+        click.echo(
+            "  data-skipped : scopes.json/HUMANS.md were NOT restored "
+            "(their pre-deploy state is unknown: interrupted deploy or "
+            "pre-backup session)."
+        )
     if result.discarded_archives:
         click.echo(
             "  discarded: "

@@ -428,7 +428,8 @@ def _classify_op(kind: str, path: str, target: Path, root: Path) -> tuple[str, s
 # Scenario A (fresh, 6 created personas, nothing archived):
 #   mark: manifest-lock mkdir, save mkdir, save os.replace
 #   execute: target.mkdir, trash.mkdir, 6 discard moves,
-#            trash sweep rmtree, target.rmdir
+#            data-file sweep unlink (mid-session scopes backup), trash
+#            sweep rmtree, target.rmdir
 #   drop (inside manifest lock): lock mkdir, manifest unlink
 #   remove-abandoned (outside lock): archive-root rmtree
 SCENARIO_A_OPS: list[tuple[str, str]] = (
@@ -441,6 +442,7 @@ SCENARIO_A_OPS: list[tuple[str, str]] = (
     ]
     + [("move", "discard")] * len(AU_PERSONAS + UCG_PERSONAS)
     + [
+        ("unlink", "archive_root"),
         ("rmtree", "trash"),
         ("rmdir", "target"),
         ("mkdir", "archive_root"),
@@ -453,7 +455,8 @@ SCENARIO_A_OPS: list[tuple[str, str]] = (
 #   mark: 2 mkdir + 1 replace
 #   execute: target.mkdir, trash.mkdir,
 #            5x (discard move + restore move), 1 discard move (anna),
-#            trash sweep rmtree
+#            data-file restores (2 copy2 + 2 backup unlinks) + sweep
+#            unlink, trash sweep rmtree
 #   drop (inside manifest lock): lock mkdir + save mkdir + save replace
 SCENARIO_B_OPS: list[tuple[str, str]] = (
     [
@@ -466,6 +469,9 @@ SCENARIO_B_OPS: list[tuple[str, str]] = (
     + [("move", "discard"), ("move", "restore")] * len(AU_PERSONAS)
     + [
         ("move", "discard"),
+        ("unlink", "archive_root"),
+        ("unlink", "archive_root"),
+        ("unlink", "archive_root"),
         ("rmtree", "trash"),
         ("mkdir", "archive_root"),
         ("mkdir", "archive_root"),
