@@ -157,11 +157,15 @@ def _require_type(value, expected_type, path: str) -> None:
 
 
 def _require_optional_type(value, expected_type, path: str) -> None:
-    """Optional field: must be None or the expected type (when present)."""
-    if value is not None and not isinstance(value, expected_type):
-        raise ShapeError(
-            f"{path}: expected {expected_type} or null, found {type(value)}"
-        )
+    """Optional field: must be None or the expected type (when present).
+
+    Delegates the type check to ``_require_type`` so its bool guard
+    applies too: ``telegram_user_id: true`` must be rejected exactly like
+    the required int fields (bool is a subclass of int, so a bare
+    isinstance check here would silently accept it).
+    """
+    if value is not None:
+        _require_type(value, expected_type, path)
 
 
 def _reject_unknown_keys(d: dict, allowed: set[str], path: str) -> None:

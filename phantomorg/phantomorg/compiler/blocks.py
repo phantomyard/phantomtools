@@ -47,6 +47,12 @@ _BLOCK_RE = re.compile(
 
 _BEGIN_RE = re.compile(r"<!-- FORJA:BEGIN (?P<name>[\w:.-]+) -->\r?\n?")
 _END_RE = re.compile(r"<!-- FORJA:END (?P<name>[\w:.-]+) -->\r?\n?")
+# Matches either marker, capturing the kind (BEGIN/END) and the name. Used
+# by the stack-based nesting check (_structurally_sound). CRLF-tolerant so
+# a Windows-edited file is validated exactly like an LF file.
+_MARKER_RE = re.compile(
+    r"<!-- FORJA:(?P<kind>BEGIN|END) (?P<name>[\w:.-]+) -->\r?\n?"
+)
 
 
 def extract_blocks(content: str) -> dict[str, str]:
@@ -57,6 +63,29 @@ def extract_blocks(content: str) -> dict[str, str]:
 def has_blocks(content: str) -> bool:
     """True if the text contains at least one FORJA:BEGIN marker."""
     return _BEGIN_RE.search(content) is not None
+
+
+def _structurally_sound(content: str) -> bool:
+    """Stack-based check that BEGIN/END markers nest correctly.
+
+    Catches crossed/interleaved nesting (``BEGIN a, BEGIN b, END a,
+    END b``) that the name-list comparison in ``merge_content`` cannot
+    see (the ordered lists of names are equal in the crossed case). Also
+    catches a stray END (stack underflow) and an unclosed BEGIN (non-empty
+    stack at the end). A well-formed file returns True; anything else
+    means the merge is ambiguous and must be preserved whole.
+    """
+    stack: list[str] = []
+    for m in _MARKER_RE.finditer(content):
+        if m.group("kind") == "BEGIN":
+            stack.append(m.group("name"))
+        else:  # END
+            if not stack:
+                return False  # stray END (underflow)
+            if stack[-1] != m.group("name"):
+                return False  # crossed / interleaved names
+            stack.pop()
+    return not stack  # False when a BEGIN was never closed
 
 
 def _find_block(content: str, name: str) -> tuple[int, int] | None:
@@ -120,6 +149,7 @@ def merge_content(existing: str, new: str) -> str:
         len(begin_names) != len(end_names)
         or begin_names != end_names
         or len(set(begin_names)) != len(begin_names)
+        or not _structurally_sound(existing)
     ):
         return _merge_ambiguous(existing)
 

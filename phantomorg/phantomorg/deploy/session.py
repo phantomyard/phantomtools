@@ -586,6 +586,8 @@ def record_session(
                 {"name": name, "dir": str(Path(path).resolve())}
                 for name, path in result.archived
             ],
+            "scopes_written": result.scopes_written,
+            "humans_written": result.humans_written,
         }
         sessions = existing
         sessions.append(session)
@@ -690,6 +692,8 @@ def commit_session(target: Path, session_id: str, result: DeployResult) -> dict:
             {"name": name, "dir": str(Path(path).resolve())}
             for name, path in result.archived
         ],
+        "scopes_written": result.scopes_written,
+        "humans_written": result.humans_written,
     }
     with _manifest_lock(archive_root):
         try:

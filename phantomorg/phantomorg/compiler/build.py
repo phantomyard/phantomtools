@@ -39,6 +39,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoes
 from ..spec.model import Actor, OrgSpec, Role
 from .access import merge_access
 from .blocks import has_blocks, merge_content
+from .errors import CompileError
 from .escalation import escalation_paths_for
 from .humans import HUMANS_FILENAME, write_humans
 from .i18n import available_languages, get_strings
@@ -280,9 +281,6 @@ def _norma_context(spec: OrgSpec) -> dict:
     return {
         "org_name": spec.organization.name,
         "norm_version": spec.communication.norm_version,
-        "build_date": datetime.datetime.now(tz=datetime.timezone.utc)
-        .date()
-        .isoformat(),
         "human_channel": spec.communication.human_channel,
         "agent_channel": spec.communication.agent_channel,
         "request_id_format": resolve_request_id_format(spec),
@@ -362,7 +360,7 @@ def _refuse_symlink(path: Path) -> None:
     produces.
     """
     if path.is_symlink():
-        raise ValueError(f"refusing to overwrite symlink: {path}")
+        raise CompileError(f"refusing to overwrite symlink: {path}")
 
 
 def _assert_no_symlink_components(path: Path, root: Path) -> None:
@@ -382,7 +380,7 @@ def _assert_no_symlink_components(path: Path, root: Path) -> None:
     for part in path.relative_to(root).parts:
         current = current / part
         if current.is_symlink():
-            raise ValueError(
+            raise CompileError(
                 f"refusing to build: symlink in output path component {current}"
             )
 
@@ -497,7 +495,7 @@ def build_actor(
     actor_dir = (out_dir / actor.id).resolve()
     out_resolved = out_dir.resolve()
     if actor_dir != out_resolved and out_resolved not in actor_dir.parents:
-        raise ValueError(
+        raise CompileError(
             f"refusing to build actor {actor.id!r}: resolved output path "
             f"{actor_dir} escapes the requested output directory {out_resolved}"
         )

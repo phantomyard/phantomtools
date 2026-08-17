@@ -14,6 +14,56 @@ class ReferenceError_(Exception):
     """Uses a different suffix so it doesn't clash with the builtin ReferenceError."""
 
 
+def check_role_hierarchy_cycles(spec: OrgSpec) -> list[str]:
+    """Detect cycles in the ``reports_to`` hierarchy (WHITE/GRAY/BLACK DFS).
+
+    A role that (directly or transitively) reports to itself — ``A``
+    reports to ``B`` and ``B`` reports to ``A``, or any longer loop —
+    makes the standing org structure ambiguous (who is on top?) and
+    breaks any upward walk over ``reports_to`` (escalation-to-human,
+    scope derivation, hierarchy rendering).
+
+    This is the role-hierarchy analogue of the escalation-matrix DAG
+    check in ``graph.py``: the two graphs are independent (escalation is
+    role→role on demand; ``reports_to`` is the standing org structure).
+    ``reports_to`` is a single optional parent per role, so the graph is
+    functional (out-degree ≤ 1) and its cycles are disjoint — each is
+    reported exactly once.
+    """
+    edges: dict[str, str | None] = {r.id: r.reports_to for r in spec.roles}
+    role_ids = set(edges)
+
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {rid: WHITE for rid in role_ids}
+    stack: list[str] = []
+    problems: list[str] = []
+
+    def visit(node: str) -> None:
+        color[node] = GRAY
+        stack.append(node)
+        parent = edges.get(node)
+        if parent is not None:
+            if parent in color:
+                if color[parent] == GRAY:
+                    start = stack.index(parent)
+                    cycle = stack[start:] + [parent]
+                    problems.append(
+                        "roles: reports_to cycle detected: " + " -> ".join(cycle)
+                    )
+                elif color[parent] == WHITE:
+                    visit(parent)
+            # parent not in color => references a non-existent role, which
+            # is a different error that check_references already reports
+            # ("roles.<id>: reports_to '<x>' does not exist").
+        stack.pop()
+        color[node] = BLACK
+
+    for node in sorted(role_ids):
+        if color[node] == WHITE:
+            visit(node)
+    return problems
+
+
 def check_references(spec: OrgSpec) -> list[str]:
     """Returns a list of problems found (empty if everything is fine)."""
     problems: list[str] = []
@@ -25,6 +75,7 @@ def check_references(spec: OrgSpec) -> list[str]:
         ("departments", spec.departments),
         ("roles", spec.roles),
         ("actors", spec.actors),
+        ("humans", spec.humans),
     ]
     for label, items in groups:
         seen: dict[str, int] = {}
@@ -138,6 +189,8 @@ def check_references(spec: OrgSpec) -> list[str]:
                     f"escalation_matrix: entry {e.from_} -> {e.to} is marked "
                     f"cross_department but both roles are in the same department"
                 )
+
+    problems.extend(check_role_hierarchy_cycles(spec))
 
     return problems
 

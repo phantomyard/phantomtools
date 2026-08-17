@@ -19,7 +19,7 @@ try:
 except ImportError:  # Python < 3.11
     import tomli as tomllib  # type: ignore[import-not-found,no-redef]
 
-from .compiler import build as compiler_build
+from .compiler import CompileError, build as compiler_build
 from .compiler.phantomchat import verify_phantomchat
 from .compiler.telegram import TelegramError, verify_telegram
 from .deploy.session import (
@@ -572,9 +572,16 @@ def build_cmd(org_path, out_dir, only_actor, scope_rule):
         click.echo(f"Actors: {', '.join(a.id for a in spec.actors)}")
         raise SystemExit(1)
 
-    written = compiler_build(
-        spec, Path(out_dir), only=only_actor, scope_rule=scope_rule
-    )
+    try:
+        written = compiler_build(
+            spec, Path(out_dir), only=only_actor, scope_rule=scope_rule
+        )
+    except CompileError as e:
+        click.secho(f"Cannot compile: {e}", fg="red")
+        raise SystemExit(1)
+    except OSError as e:
+        click.secho(f"Cannot compile: filesystem error: {e}", fg="red")
+        raise SystemExit(1)
 
     click.echo(f"Build of {spec.organization.name}:")
     for actor_id, files in written.items():
@@ -986,7 +993,18 @@ def build_all_cmd(base_dir, out_base):
             )
             failed += 1
             continue
-        written = compiler_build(spec, out_base / org_id)
+        try:
+            written = compiler_build(spec, out_base / org_id)
+        except CompileError as e:
+            click.secho(f"✗ {org_id}: compile error, skipping ({e})", fg="red")
+            failed += 1
+            continue
+        except OSError as e:
+            click.secho(
+                f"✗ {org_id}: filesystem error, skipping ({e})", fg="red"
+            )
+            failed += 1
+            continue
         total_files = sum(len(f) for f in written.values())
         if org_id != spec.organization.id:
             click.secho(

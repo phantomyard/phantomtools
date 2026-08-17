@@ -32,6 +32,7 @@ import os
 import re
 import subprocess  # nosec B404
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -63,6 +64,16 @@ NOTES_TRUNCATE = 800
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_AVAILABLE = 2
+
+
+class UpdateError(Exception):
+    """An update could not be applied safely (fail-closed).
+
+    Raised when the checkout's state cannot be determined (e.g. git
+    status fails), so the updater refuses to fast-forward a tree whose
+    dirtiness is unknown instead of proceeding and possibly clobbering
+    local edits.
+    """
 
 
 @dataclass
@@ -308,9 +319,15 @@ def _git(root: Path, *args: str) -> tuple[int, str, str]:
 
 
 def _dirty_paths(root: Path) -> list[str]:
-    code, stdout, _ = _git(root, "status", "--porcelain")
+    code, stdout, stderr = _git(root, "status", "--porcelain")
     if code != 0:
-        return []
+        # Fail-closed: if the working tree's state cannot be determined,
+        # proceeding could fast-forward over local edits that git failed
+        # to report. Refuse instead of treating "unknown" as "clean".
+        detail = stderr.strip() or f"git status exited {code}"
+        raise UpdateError(
+            f"cannot determine whether the working tree is clean: {detail}"
+        )
     # Untracked files (??) don't block a fast-forward; everything else does.
     return [
         line[3:]
@@ -366,13 +383,51 @@ def pending_update_tag(root: Path) -> str | None:
     return text or None
 
 
-def _write_pending_marker(root: Path, tag: str) -> None:
+def _fsync_dir(path: Path) -> None:
+    """Best-effort fsync of a directory (durability of a rename within it)."""
     try:
-        (root / PENDING_MARKER).write_text(tag + "\n", encoding="utf-8")
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _write_pending_marker(root: Path, tag: str) -> None:
+    """Write the pending-refresh marker atomically and durably.
+
+    mkstemp + fsync + os.replace + fsync_dir (LOW-3): a crash between
+    ``git merge`` and the venv refresh must not lose or truncate the
+    marker, otherwise the next ``po update`` would never repair the stale
+    venv. Plain ``write_text`` has no fsync — the very window the marker
+    exists to close.
+    """
+    marker = root / PENDING_MARKER
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(root), prefix=PENDING_MARKER + ".", suffix=".tmp"
+        )
     except OSError:
         # Best-effort: a read-only repo root must not block the update
         # itself; the marker is only a repair hint.
-        pass
+        return
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(tag + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, marker)
+        _fsync_dir(root)
+    except OSError:
+        # Best-effort (read-only root, disk full): never block the update.
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
 
 
 def _clear_pending_marker(root: Path) -> None:
@@ -550,7 +605,11 @@ def run_update(
             out.write("update cancelled.\n")
             return EXIT_OK
 
-    ok, message = apply_update(root, release.tag)
+    try:
+        ok, message = apply_update(root, release.tag)
+    except UpdateError as e:
+        err.write(f"install failed: {e}\n")
+        return EXIT_ERROR
     if not ok:
         err.write(f"install failed: {message}\n")
         return EXIT_ERROR
