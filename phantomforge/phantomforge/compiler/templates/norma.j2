@@ -1,0 +1,140 @@
+# 📋 {{ t.norma_title.format(org_name=org_name) }}
+
+> {{ t.norma_generated }}
+> **{{ t.norma_version_label }}:** {{ norm_version }} — {{ build_date }}
+
+---
+
+## {{ t.norma_canales_header }}
+
+{{ t.norma_canales_intro }}
+
+{% if human_channel -%}
+- {{ t.norma_channel_human.format(platform=human_channel.platform, group=human_channel.group or '', chat_id=human_channel.chat_id or '') }}
+{% endif -%}
+{% if agent_channel -%}
+- {{ t.norma_channel_agent.format(platform=agent_channel.platform, request_id_format=request_id_format, relay=agent_channel.relay or '', bridge=(' · puente `' + agent_channel.bridge_npub + '`') if agent_channel.bridge_npub else '') }}
+{% endif -%}
+
+- {{ t.norma_no_private }}
+
+---
+
+## {{ t.norma_rules_header }}
+
+### 1. {{ t.norma_rule1_title }}
+{{ t.norma_rule1_body }}
+
+### 2. {{ t.norma_rule2_title }}
+{{ t.norma_rule2_body }}
+
+### 3. {{ t.norma_rule3_title }}
+{{ t.norma_rule3_body }}
+
+### 4. {{ t.norma_rule4_title }}
+{{ t.norma_rule4_body }}
+
+---
+
+## {{ t.norma_hierarchy_header }}
+
+```
+{%- for node in hierarchy %}
+{{ node.indent }}{{ node.label }}
+{%- endfor %}
+```
+
+{{ t.norma_hierarchy_hint }}
+
+---
+
+## {{ t.norma_roles_header }}
+
+| {{ t.norma_roles_rol }} | {{ t.norma_roles_persona }} | {{ t.norma_roles_funcion }} |
+|---|---|---|
+{%- for row in role_rows %}
+| {{ row.role }} | {{ row.persona }} | {{ row.funcion }} |
+{%- endfor %}
+
+---
+
+## {{ t.norma_responsabilities_header }}
+
+| {{ t.norma_resp_persona }} | {{ t.norma_resp_gestiona }} |
+|---|---|
+{%- for row in resp_rows %}
+| {{ row.persona }} | {{ row.gestiona }} |
+{%- endfor %}
+
+---
+
+## {{ t.norma_escalation_header }}
+
+{{ t.norma_escalation_intro }}
+
+1. {{ t.norma_escalation_step1 }}
+2. {{ t.norma_escalation_step2.format(ceo_name=ceo_name) }}
+3. {{ t.norma_escalation_step3.format(ceo_name=ceo_name, reports_to_human=reports_to_human) }}
+
+**{{ t.norma_escalation_simple.format(ceo_name=ceo_name, reports_to_human=reports_to_human) }}**
+
+### {{ t.norma_escalation_matrix_header }}
+
+{%- if escalation_entries %}
+{%- for e in escalation_entries %}
+- {{ t.norma_escalation_entry.format(condition=e.condition, to_name=e.to_name) }}{% if e.cross_department %}{{ t.norma_escalation_cross }}{% endif %}
+{%- endfor %}
+{%- else %}
+- {{ t.escalation_none }}
+{%- endif %}
+
+---
+
+## {{ t.norma_lifecycle_header }}
+
+1. {{ t.norma_lifecycle_1 }}
+2. {{ t.norma_lifecycle_2.format(request_id_format=request_id_format) }}
+3. {{ t.norma_lifecycle_3 }}
+4. {{ t.norma_lifecycle_4 }}
+5. {{ t.norma_lifecycle_5 }}
+
+---
+
+## {{ t.norma_exceptions_header }}
+
+- {{ t.norma_exception_critical.format(ceo_name=ceo_name) }}
+- {{ t.norma_exception_reassign }}
+
+---
+
+## {{ t.norma_envelope_header }}
+
+{{ t.norma_envelope_intro.format(marker=marker) }}
+
+{{ t.norma_envelope_format.format(marker=marker, request_id_format=request_id_format) }}
+
+{{ t.norma_envelope_fields }}
+
+{{ t.norma_envelope_rule_preserve.format(marker=marker, ttl_hours=ttl_hours) }}
+
+{{ t.norma_envelope_rule_rid.format(marker=marker, request_id_format=request_id_format) }}
+
+{{ t.norma_envelope_bridge.format(max_hops=max_hops) }}
+
+### {{ t.norma_loop_header }}
+
+{{ t.norma_loop_intro }}
+
+{{ t.norma_loop_r1 }}
+
+{{ t.norma_loop_r2 }}
+
+{{ t.norma_loop_r3 }}
+
+---
+
+## {{ t.norma_future_header }}
+
+{{ t.norma_future_body }}
+
+{{ t.norma_footer.format(org_name=org_name) }}

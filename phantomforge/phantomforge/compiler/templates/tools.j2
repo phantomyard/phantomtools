@@ -1,0 +1,19 @@
+# {{ t.tools_title.format(actor_id=actor_id) }}
+
+<!-- FORJA:BEGIN tools -->
+{{ t.tools_intro_1 }}
+{{ t.tools_intro_2 }}
+
+{% for tool in tools %}
+- {{ tool }}
+{% endfor %}
+{% if tools_excluded %}
+## {{ t.tools_excluded_header }}
+{% for tool in tools_excluded %}
+- {{ tool }}
+{% endfor %}
+{% endif %}
+<!-- FORJA:END tools -->
+
+## {{ t.manual_notes_header }}
+<!-- {{ t.manual_notes_hint_generic }} -->

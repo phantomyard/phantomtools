@@ -1,0 +1,28 @@
+# {{ t.identity_title }}
+
+<!-- FORJA:BEGIN header -->
+- **{{ t.identity_name }}**: {{ actor.id }}
+- **{{ t.identity_role }}**: {{ role.name }}
+- **{{ t.identity_department }}**: {{ department.name }}
+{% if role.reports_to_role_name -%}
+- **{{ t.identity_reports_to }}**: {{ role.reports_to_role_name }}
+{% elif role.reports_to_human -%}
+- **{{ t.identity_reports_to }}**: {{ role.reports_to_human }}{{ t.identity_reports_to_human_suffix }}
+{% endif -%}
+{% if actor.telegram_bot -%}
+- **{{ t.identity_channel }}**: {{ actor.telegram_bot }}
+{% endif -%}
+{% if actor.tone -%}
+- **{{ t.identity_tone }}**: {{ actor.tone }}
+{% endif %}
+<!-- FORJA:END header -->
+
+<!-- FORJA:BEGIN functions -->
+## {{ t.functions_header }}
+{% for f in role.functions %}
+- {{ f }}
+{% endfor %}
+<!-- FORJA:END functions -->
+
+## {{ t.manual_notes_header }}
+<!-- {{ t.manual_notes_hint_generic }} -->
