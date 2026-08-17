@@ -27,7 +27,10 @@ a repo. The backup history from the rescue is kept locally in `history/`
   - `POST /pause {side: jitsi|nostr|both, paused: bool}` — **per-side kill-switch**: pause/resume the Jitsi and/or Nostr side independently. nostr paused = agent DMs are silently ignored (bots get no replies → no token burn); jitsi paused = rooms are left and commands answer "paused". `config.paused` sets the initial state at startup.
   - `GET /status` — rooms, nicks, agents, XMPP state, **paused state**
   - `GET /recordings` / `GET /recordings/:name` — list/download recordings
-    (path-traversal guarded, expiring signed URL)
+    (path-traversal guarded; **localhost-only API** — the `:name` route serves
+    the file directly with no auth token, so never expose the HTTP port via
+    proxy/tunnel; the signed, expiring download URL returned by
+    `GET /recordings` is served by a separate external downloader)
 - **Agent DMs** (NIP-17 gift-wrap to the bridge): `join [room]`,
   `leave [room]`, `[room] text` (injects the message into the room),
   `recordings`.
@@ -236,7 +239,7 @@ and stamps; people only propagate it. If you reply to a message without
 `[env]`, do not invent it: the bridge creates it.
 
 The `[env]` marker is a **protocol constant** (F2-03): PhantomBridge has it
-hardcoded and PhantomForge rejects any other value in org.yaml.
+hardcoded and PhantomOrg rejects any other value in org.yaml.
 `maxHops`/`expireMs` of the bridge must match
 `communication.max_hops`/`ttl_hours` of the org.yaml — `/status` exposes
 them (`antiloop.config`) to detect drift (F2-07).
@@ -278,14 +281,14 @@ XMPP_PASSWORD=... node e2e-inject.js [room] [msg] [nick]
 - **PhantomMeet** checks it at install time (`pm check-infra` — HTTP probe
   to `127.0.0.1:8090/status` and WS to the relay) and configures its npub
   in each person's allowlist.
-- **PhantomForge** references it at build time (org.yaml channels) and can
+- **PhantomOrg** references it at build time (org.yaml channels) and can
   install it from GitHub if not present.
 - **Communication norm v1.2**: the agent channel declares
   `phantomchat` (relay) as the bot↔bot and bot↔human path.
 
 ## org.yaml as source of truth — v1.6.0
 
-Norma v1.6: the org.yaml compiled by PhantomForge is the single source of
+Norma v1.6: the org.yaml compiled by PhantomOrg is the single source of
 truth for the organization hierarchy, and the bridge replicates it in
 bot↔bot communications. If an `org.yaml` is available next to the config
 file (or at the path in `config.orgFile`), the bridge **derives** its
@@ -365,7 +368,7 @@ Test: `node test-org-routing.js` (15 tests: unit + bridge integration).
     invalid envelope is treated as nonexistent (never immortal, never
     crashes). Goodbye to the `hops: -Infinity` and `expires: "garbage"`
     holes.
-  - **F2-03/F2-07** — `[env]` is a protocol constant (PhantomForge
+  - **F2-03/F2-07** — `[env]` is a protocol constant (PhantomOrg
     rejects any other marker) and `/status` exposes
     `antiloop.config` (maxHops/expireMs/marker) to detect drift against
     the org.yaml.
@@ -381,7 +384,7 @@ Test: `node test-org-routing.js` (15 tests: unit + bridge integration).
     consumed state (hash/pair/rid): the sender retry does not hit a
     false positive because of a network failure.
   - **F2-11/F2-12** — strict `Envelope.from_dict` (no silent coercion)
-    and `trace_agents` removed from PhantomForge (dead config with no
+    and `trace_agents` removed from PhantomOrg (dead config with no
     runtime effect).
   Tests: `test-antiloop.js` (31, +11 adversarial) + E2E with F2-01
   (delivery format), F2-02 (invalid envelopes) and F2-06 (braces in

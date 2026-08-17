@@ -1,8 +1,10 @@
 // E2E: inyectar mensaje en sala como participante (nick fijo 35955eec) usando la cuenta bridge
+// SCOPED fix (not global): STARTTLS upgrade is the only tls.connect call that
+// passes `socket`; only then disable verification (local XMPP 127.0.0.1 only).
 const tls = require("tls");
 const origTlsConnect = tls.connect;
 tls.connect = function (...args) {
-  if (args[0] && typeof args[0] === "object") args[0] = { ...args[0], rejectUnauthorized: false };
+  if (args[0] && typeof args[0] === "object" && args[0].socket) args[0] = { ...args[0], rejectUnauthorized: false };
   return origTlsConnect.apply(this, args);
 };
 const {client, xml} = require("@xmpp/client");

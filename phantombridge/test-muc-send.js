@@ -1,9 +1,11 @@
 // Test Fase A: enviar mensaje a la MUC como testbridge y verificar reflejo del puente
 // Uso: node test-muc-send.js <room> <text>
+// SCOPED fix (not global): only the STARTTLS upgrade (tls.connect with `socket`)
+// disables verification, for the local XMPP connection only.
 const tls = require('tls');
 const origTlsConnect = tls.connect;
 tls.connect = function (...args) {
-  if (args[0] && typeof args[0] === 'object') args[0] = { ...args[0], rejectUnauthorized: false };
+  if (args[0] && typeof args[0] === 'object' && args[0].socket) args[0] = { ...args[0], rejectUnauthorized: false };
   return origTlsConnect.apply(this, args);
 };
 const {client, xml} = require('@xmpp/client');

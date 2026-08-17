@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // PhantomBridge — org.yaml hierarchy → bridge routing (source of truth).
 //
-// The ecosystem norm (v1.6): the org.yaml compiled by PhantomForge is the
+// The ecosystem norm (v1.6): the org.yaml compiled by PhantomOrg is the
 // SOURCE OF TRUTH for the organization hierarchy (roles.reports_to +
 // escalation_matrix). This module translates that hierarchy into the
-// bridge's DM↔DM routing so that the structure defined in PhantomForge is
+// bridge's DM↔DM routing so that the structure defined in PhantomOrg is
 // replicated in bot↔bot communications.
 //
 // Derivation rules:

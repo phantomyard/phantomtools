@@ -199,7 +199,7 @@ function formatRecordingsList(recs) {
 // ---------------------------------------------------------------------------
 // org.yaml source of truth (norma v1.6) — hierarchy → routing
 // ---------------------------------------------------------------------------
-// If an org.yaml (PhantomForge compiled) is available, the bridge derives
+// If an org.yaml (PhantomOrg compiled) is available, the bridge derives
 // its agents and DM↔DM routing from roles.reports_to + escalation_matrix
 // (see org-routing.js). The manual config.json routing remains the fallback
 // when no org.yaml is present. Config: CONFIG.orgFile (default: org.yaml
@@ -298,7 +298,7 @@ function num(v, dflt, min, max) {
   if (max !== undefined && n > max) return max;
   return n;
 }
-const ENVELOPE_MARKER = '[env]'; // protocol constant: also fixed in PhantomForge (org.yaml envelope.marker)
+const ENVELOPE_MARKER = '[env]'; // protocol constant: also fixed in PhantomOrg (org.yaml envelope.marker)
 const ANTILOOP = {
   // 1) Envelope de protocolo (norma v1.3)
   maxHops: num(ALO.maxHops, 3, 1, 10),        // coincide con communication.max_hops del org

@@ -9,6 +9,7 @@ const xmpp = client({
   domain: cfg.xmpp.domain,
   username: cfg.xmpp.username,
   password: cfg.xmpp.password,
+  // Local XMPP (127.0.0.1) only; scoped to this client, not global.
   rejectUnauthorized: false
 });
 
