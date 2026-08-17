@@ -4,18 +4,18 @@ Block-based merge, not whole-file merge.
 A generated file (SOUL.md, IDENTITY.md, tools.md) contains sections
 delimited like this:
 
-    <!-- FORJA:BEGIN security -->
+    <!-- ORG:BEGIN security -->
     ...content derived from org.yaml...
-    <!-- FORJA:END security -->
+    <!-- ORG:END security -->
 
 Merge rule on regeneration:
-- Everything INSIDE a FORJA:BEGIN/END block is always replaced by the
+- Everything INSIDE a ORG:BEGIN/END block is always replaced by the
   freshly rendered version — it is content derived from the spec, you
   don't hand-edit inside it.
 - Everything OUTSIDE the blocks (before, between, or after them) is
   preserved exactly as it was in the existing file — that is where any
   manual annotation lives.
-- If the existing file contains NO FORJA block at all (for example,
+- If the existing file contains NO ORG block at all (for example,
   someone deliberately deleted all the markers), it is interpreted as
   "this file has opted out of automatic generation" and is not touched
   at all.
@@ -23,7 +23,7 @@ Merge rule on regeneration:
   the file, it is appended at the end. If a block no longer makes sense
   (very rare, but possible), it is replaced by the empty/current version.
 
-This replaces the previous "whole file frozen by [FORJA:manual]"
+This replaces the previous "whole file frozen by [ORG:manual]"
 mechanism, which also froze the spec-derived sections
 (security/escalation/comms) — the real gap reported after the pilot on
 the United Capital Group VPS.
@@ -39,29 +39,29 @@ import warnings
 # another tool must not silently stop matching, which would freeze the
 # spec-derived content forever.
 _BLOCK_RE = re.compile(
-    r"<!-- FORJA:BEGIN (?P<name>[\w:.-]+) -->\r?\n?"
+    r"<!-- ORG:BEGIN (?P<name>[\w:.-]+) -->\r?\n?"
     r"(?P<body>.*?)"
-    r"<!-- FORJA:END (?P=name) -->\r?\n?",
+    r"<!-- ORG:END (?P=name) -->\r?\n?",
     re.DOTALL,
 )
 
-_BEGIN_RE = re.compile(r"<!-- FORJA:BEGIN (?P<name>[\w:.-]+) -->\r?\n?")
-_END_RE = re.compile(r"<!-- FORJA:END (?P<name>[\w:.-]+) -->\r?\n?")
+_BEGIN_RE = re.compile(r"<!-- ORG:BEGIN (?P<name>[\w:.-]+) -->\r?\n?")
+_END_RE = re.compile(r"<!-- ORG:END (?P<name>[\w:.-]+) -->\r?\n?")
 # Matches either marker, capturing the kind (BEGIN/END) and the name. Used
 # by the stack-based nesting check (_structurally_sound). CRLF-tolerant so
 # a Windows-edited file is validated exactly like an LF file.
 _MARKER_RE = re.compile(
-    r"<!-- FORJA:(?P<kind>BEGIN|END) (?P<name>[\w:.-]+) -->\r?\n?"
+    r"<!-- ORG:(?P<kind>BEGIN|END) (?P<name>[\w:.-]+) -->\r?\n?"
 )
 
 
 def extract_blocks(content: str) -> dict[str, str]:
-    """Returns {block_name: body} for all the FORJA blocks in a text."""
+    """Returns {block_name: body} for all the ORG blocks in a text."""
     return {m.group("name"): m.group("body") for m in _BLOCK_RE.finditer(content)}
 
 
 def has_blocks(content: str) -> bool:
-    """True if the text contains at least one FORJA:BEGIN marker."""
+    """True if the text contains at least one ORG:BEGIN marker."""
     return _BEGIN_RE.search(content) is not None
 
 
@@ -92,12 +92,12 @@ def _find_block(content: str, name: str) -> tuple[int, int] | None:
     """Span (start, end) of the block named ``name`` in ``content``.
 
     Uses the LAST END marker after the first BEGIN, so a literal
-    ``<!-- FORJA:END <name> -->`` inside a generated body (F6) is not
+    ``<!-- ORG:END <name> -->`` inside a generated body (F6) is not
     mistaken for the real closing marker and the block is never
     truncated.
     """
-    begin = f"<!-- FORJA:BEGIN {name} -->"
-    end = f"<!-- FORJA:END {name} -->"
+    begin = f"<!-- ORG:BEGIN {name} -->"
+    end = f"<!-- ORG:END {name} -->"
     start = content.find(begin)
     if start < 0:
         return None
@@ -113,15 +113,15 @@ def _find_block(content: str, name: str) -> tuple[int, int] | None:
 def _merge_ambiguous(existing: str) -> str:
     """F4: duplicate or unbalanced markers make the merge ambiguous.
 
-    A manual annotation quoting a well-formed FORJA pair is legitimate
+    A manual annotation quoting a well-formed ORG pair is legitimate
     content; replacing every marker match would silently destroy it.
     When we cannot tell the real generated blocks apart from quoted
     ones, preserve the whole file and warn instead of guessing.
     """
     warnings.warn(
-        "existing file has duplicate or unbalanced FORJA:BEGIN/END markers — "
+        "existing file has duplicate or unbalanced ORG:BEGIN/END markers — "
         "preserving it whole instead of merging (no spec changes applied; "
-        "fix the markers or remove quoted FORJA pairs from manual notes)",
+        "fix the markers or remove quoted ORG pairs from manual notes)",
         stacklevel=3,
     )
     return existing

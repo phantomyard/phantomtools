@@ -280,7 +280,7 @@ po deploy --from ./dist --target ~/.local/share/phantombot/personas/
 ```
 
 The generated files are **block-based**: everything PhantomOrg owns lives
-inside `FORJA:BEGIN … FORJA:END` markers. Any notes you add outside those
+inside `ORG:BEGIN … ORG:END` markers. Any notes you add outside those
 blocks are preserved across re-builds. `MEMORY.md` is the exception — it is
 created once and never regenerated, so a persona's accumulated memory
 survives every rebuild.
@@ -490,7 +490,7 @@ import-audit) and the full editing cycle (remove/rename) resolved:
   reference is updated automatically.
 - `validate` (schema + escalation DAG + cross-references + id uniqueness
   + budgets).
-- `build` / `build-all` (block-based merge with `FORJA:BEGIN/END`;
+- `build` / `build-all` (block-based merge with `ORG:BEGIN/END`;
   `MEMORY.md` is created once and never regenerated).
 - `deploy` / `deploy-all` (collision detection between organizations,
   `--force`, `--prune` to clean up actors already removed from the spec).

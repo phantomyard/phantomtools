@@ -61,12 +61,12 @@ class TestAtomicWrites(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "SOUL.md"
             original = (
-                "<!-- FORJA:BEGIN tools -->\nold\n<!-- FORJA:END tools -->\n"
+                "<!-- ORG:BEGIN tools -->\nold\n<!-- ORG:END tools -->\n"
                 "manual note\n"
             )
             p.write_text(original, encoding="utf-8")
             new_content = (
-                "<!-- FORJA:BEGIN tools -->\nnew\n<!-- FORJA:END tools -->\n"
+                "<!-- ORG:BEGIN tools -->\nnew\n<!-- ORG:END tools -->\n"
                 "manual note\n"
             )
             surviving = self._simulate_crash(write_if_changed, p, new_content)
@@ -102,7 +102,7 @@ class TestSymlinkRefusal(unittest.TestCase):
             link = Path(tmp) / "SOUL.md"
             link.symlink_to(victim)
             with self.assertRaises(ValueError):
-                write_if_changed(link, "FORJA content")
+                write_if_changed(link, "ORG content")
             self.assertEqual(victim.read_text(encoding="utf-8"), "PRECIOUS")
 
     def test_write_plain_if_changed_refuses_symlink(self):

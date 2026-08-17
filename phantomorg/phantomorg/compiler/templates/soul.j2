@@ -6,16 +6,16 @@
 > {{ t.generated_notice_4 }}
 > {{ t.generated_notice_5 }}
 
-<!-- FORJA:BEGIN principles -->
+<!-- ORG:BEGIN principles -->
 ## {{ t.principles_header }}
 {{ t.principles_intro }}
 1. {{ t.principle_1 }}
 2. {{ t.principle_2.format(access_label=access.label) }}
 3. {{ t.principle_3a }}
    {{ t.principle_3b }}
-<!-- FORJA:END principles -->
+<!-- ORG:END principles -->
 
-<!-- FORJA:BEGIN scope -->
+<!-- ORG:BEGIN scope -->
 ## {{ t.scope_header }}
 - {{ t.scope_department }}: {{ department.name }}
 {% if reports_to_name -%}
@@ -24,9 +24,9 @@
 {% if subordinates -%}
 - {{ t.scope_subordinates }}: {{ subordinates | join(', ') }}
 {% endif %}
-<!-- FORJA:END scope -->
+<!-- ORG:END scope -->
 
-<!-- FORJA:BEGIN security -->
+<!-- ORG:BEGIN security -->
 ## {{ t.security_header }}
 - {{ t.security_access_level }}: **{{ access.label }}** ({{ t.security_categories }}: {{ access.categories | join(', ') }})
 {% if role_exceptions -%}
@@ -35,9 +35,9 @@
 {% if actor_exceptions -%}
 - {{ t.security_actor_exceptions.format(actor_id=actor_id) }}: {{ actor_exceptions | join(', ') }}
 {% endif %}
-<!-- FORJA:END security -->
+<!-- ORG:END security -->
 
-<!-- FORJA:BEGIN escalation -->
+<!-- ORG:BEGIN escalation -->
 ## {{ t.escalation_header }}
 {% if escalation_paths %}
 {% for e in escalation_paths %}
@@ -49,14 +49,14 @@
 - {{ t.escalation_max_hops_1.format(max_hops=max_hops) }}
   {{ t.escalation_max_hops_2 }}
   {{ t.escalation_max_hops_3 }}
-<!-- FORJA:END escalation -->
+<!-- ORG:END escalation -->
 
-<!-- FORJA:BEGIN comms -->
+<!-- ORG:BEGIN comms -->
 ## {{ t.comms_header }}
 - {{ t.comms_request_id_format }}: `{{ request_id_format }}`
 - {{ t.comms_message_types }}: {{ message_types | join(', ') }}
 - {{ t.comms_no_new_types }}
-<!-- FORJA:END comms -->
+<!-- ORG:END comms -->
 
 ## {{ t.manual_notes_header }}
 <!-- {{ t.manual_notes_hint_soul_1 }}

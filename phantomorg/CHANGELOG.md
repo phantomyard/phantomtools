@@ -394,8 +394,8 @@ compiler.md).
 
 ### Compiler
 
-- **Ambiguous FORJA markers are never destroyed (F4):** if an existing
-  file contains duplicate or unbalanced FORJA:BEGIN/END markers (for
+- **Ambiguous ORG markers are never destroyed (F4):** if an existing
+  file contains duplicate or unbalanced ORG:BEGIN/END markers (for
   example a manual note quoting a well-formed marker pair), the merge
   now preserves the whole file and warns instead of replacing every
   match — the quoted annotation is no longer silently overwritten with
@@ -406,14 +406,14 @@ compiler.md).
   `\r\n` line endings, so a file edited on Windows (or rewritten by
   another tool) no longer matches zero blocks and silently freezes —
   spec changes now propagate into CRLF files (written back as LF).
-  Additionally, when an existing file has no FORJA blocks but differs
+  Additionally, when an existing file has no ORG blocks but differs
   from the fresh render, the build warns that spec changes are NOT
   being applied (deliberate opt-out is preserved, but no longer
   silent).
 - **Literal END markers in generated bodies no longer truncate
   blocks (F6):** block extraction now uses the *last* END marker for a
   name, so a generated body containing the literal text
-  `<!-- FORJA:END <name> -->` is kept whole instead of being cut at
+  `<!-- ORG:END <name> -->` is kept whole instead of being cut at
   the fake marker on every rebuild.
 
 ## v0.4.16 — 2026-08-10
@@ -1153,7 +1153,7 @@ everything PhantomOrg modifies is backed up first.**
   id, which would collide with the org-wide id uniqueness rule.
 - `_slugify` now strips accents (`"café"` → `cafe`).
 - `po setup` only writes the org.yaml — it never touches MEMORY.md or any
-  persona content. Manual content outside FORJA blocks stays intact on
+  persona content. Manual content outside ORG blocks stays intact on
   later deploys.
 - Spec section 7.1 documents the flow; README shows usage. 131 tests,
   ruff + mypy + bandit clean.
@@ -1327,7 +1327,7 @@ it shouldn't be):**
 3. **Manual step, irreplaceable:** copy by hand what's valuable from
    the original SOUL (principles, business rules, style) into the
    "Notes (manual editing)" section of the newly generated SOUL —
-   outside the `FORJA:BEGIN/END` blocks, so it survives future
+   outside the `ORG:BEGIN/END` blocks, so it survives future
    regenerations.
 4. Only then `po deploy` from that already merged directory.
 
@@ -1572,12 +1572,12 @@ point.
 ## v0.2.0 — Block merge (fix of a real gap reported after the VPS pilot)
 
 **Gap found:** `write_if_changed` froze the entire file if it
-contained the `[FORJA:manual]` marker, including the sections
+contained the `[ORG:manual]` marker, including the sections
 derived from `org.yaml` (security/escalation/comms). Any manual
 note left the whole file out of regeneration forever.
 
 **Fix:** the templates now delimit each spec-derived section with
-`<!-- FORJA:BEGIN <section> -->` / `<!-- FORJA:END <section> -->`
+`<!-- ORG:BEGIN <section> -->` / `<!-- ORG:END <section> -->`
 markers. On each `po build`:
 
 - Everything INSIDE a block is always regenerated.
@@ -1599,8 +1599,8 @@ operation, that could erase real memory. Now it uses
 later builds, whether or not it has blocks.
 
 **Migration if you're coming from v0.1.0:** any file you marked with
-the old `[FORJA:manual]` (whole file) will keep being preserved
-unchanged — it simply has no recognizable `FORJA:BEGIN/END` blocks,
+the old `[ORG:manual]` (whole file) will keep being preserved
+unchanged — it simply has no recognizable `ORG:BEGIN/END` blocks,
 so it falls into the "full opt-out" case. To benefit from the
 per-section merge again in that agent, delete the file and
 recompile it from scratch with `po build`, and move your manual

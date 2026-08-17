@@ -424,7 +424,7 @@ Design decisions:
   the org-wide id uniqueness rule).
 - **Memories are untouched.** `po setup` only writes the org.yaml; it
   never touches `MEMORY.md` or any persona content. `po deploy` later
-  preserves manual content outside the FORJA blocks.
+  preserves manual content outside the ORG blocks.
 
 ### 7.2 Rollback & safety
 
@@ -703,7 +703,7 @@ function build(org_spec):
         tools_md    = render("tools.j2", actor.tools, actor.tools_excluded)
         memory_md   = render("memory.j2")  # seed <2KB
 
-        write_if_changed(actor.id, identity_md, soul_md, tools_md)  # merge by FORJA blocks
+        write_if_changed(actor.id, identity_md, soul_md, tools_md)  # merge by ORG blocks
         write_if_missing(actor.id, memory_md)  # MEMORY.md: only if it does not exist
         ensure_scaffold(actor.id)  # memory/*.md + kb/ drawer + seeds, idempotent
 ```

@@ -7,8 +7,8 @@ class TestBlocks(unittest.TestCase):
     def test_extract_blocks_finds_named_sections(self):
         content = (
             "# Title\n"
-            "<!-- FORJA:BEGIN security -->\nlevel 3\n<!-- FORJA:END security -->\n"
-            "<!-- FORJA:BEGIN escalation -->\nescalates to X\n<!-- FORJA:END escalation -->\n"
+            "<!-- ORG:BEGIN security -->\nlevel 3\n<!-- ORG:END security -->\n"
+            "<!-- ORG:BEGIN escalation -->\nescalates to X\n<!-- ORG:END escalation -->\n"
         )
         blocks = extract_blocks(content)
         self.assertEqual(set(blocks.keys()), {"security", "escalation"})
@@ -17,12 +17,12 @@ class TestBlocks(unittest.TestCase):
     def test_merge_regenerates_inside_blocks_preserves_outside(self):
         existing = (
             "# Title\n"
-            "<!-- FORJA:BEGIN security -->\nlevel 2 (old)\n<!-- FORJA:END security -->\n"
+            "<!-- ORG:BEGIN security -->\nlevel 2 (old)\n<!-- ORG:END security -->\n"
             "\n## Manual note\nThis was written by a person.\n"
         )
         new = (
             "# Title\n"
-            "<!-- FORJA:BEGIN security -->\nlevel 3 (new)\n<!-- FORJA:END security -->\n"
+            "<!-- ORG:BEGIN security -->\nlevel 3 (new)\n<!-- ORG:END security -->\n"
         )
         merged = merge_content(existing, new)
         self.assertIn("level 3 (new)", merged)
@@ -31,38 +31,38 @@ class TestBlocks(unittest.TestCase):
 
     def test_merge_adds_new_block_not_present_before(self):
         existing = (
-            "# Title\n<!-- FORJA:BEGIN security -->\nA\n<!-- FORJA:END security -->\n"
+            "# Title\n<!-- ORG:BEGIN security -->\nA\n<!-- ORG:END security -->\n"
         )
         new = (
-            "# Title\n<!-- FORJA:BEGIN security -->\nA\n<!-- FORJA:END security -->\n"
-            "<!-- FORJA:BEGIN escalation -->\nB\n<!-- FORJA:END escalation -->\n"
+            "# Title\n<!-- ORG:BEGIN security -->\nA\n<!-- ORG:END security -->\n"
+            "<!-- ORG:BEGIN escalation -->\nB\n<!-- ORG:END escalation -->\n"
         )
         merged = merge_content(existing, new)
-        self.assertIn("FORJA:BEGIN escalation", merged)
+        self.assertIn("ORG:BEGIN escalation", merged)
         self.assertIn("B", merged)
 
     def test_merge_without_any_block_preserves_everything(self):
         existing = "Fully manual content, without markers.\n"
-        new = "<!-- FORJA:BEGIN security -->\nnew\n<!-- FORJA:END security -->\n"
+        new = "<!-- ORG:BEGIN security -->\nnew\n<!-- ORG:END security -->\n"
         merged = merge_content(existing, new)
         self.assertEqual(merged, existing)
 
-    # F4: a manual annotation quoting a well-formed FORJA pair must not
+    # F4: a manual annotation quoting a well-formed ORG pair must not
     # be destroyed by the merge.
     def test_merge_preserves_manual_annotation_with_fake_pair(self):
         existing = (
             "## Manual note\n"
-            "<!-- FORJA:BEGIN security -->\n"
+            "<!-- ORG:BEGIN security -->\n"
             "fake body (manual annotation)\n"
-            "<!-- FORJA:END security -->\n"
-            "<!-- FORJA:BEGIN security -->\n"
+            "<!-- ORG:END security -->\n"
+            "<!-- ORG:BEGIN security -->\n"
             "level 2 (real, generated)\n"
-            "<!-- FORJA:END security -->\n"
+            "<!-- ORG:END security -->\n"
         )
         new = (
-            "<!-- FORJA:BEGIN security -->\n"
+            "<!-- ORG:BEGIN security -->\n"
             "level 3 (new)\n"
-            "<!-- FORJA:END security -->\n"
+            "<!-- ORG:END security -->\n"
         )
         with self.assertWarns(UserWarning):
             merged = merge_content(existing, new)
@@ -74,17 +74,17 @@ class TestBlocks(unittest.TestCase):
     def test_merge_handles_crlf_existing_file(self):
         existing = (
             "# Title\r\n"
-            "<!-- FORJA:BEGIN security -->\r\n"
+            "<!-- ORG:BEGIN security -->\r\n"
             "level 2 (old)\r\n"
-            "<!-- FORJA:END security -->\r\n"
+            "<!-- ORG:END security -->\r\n"
             "\r\n## Manual note\r\n"
             "This was written by a person.\r\n"
         )
         new = (
             "# Title\n"
-            "<!-- FORJA:BEGIN security -->\n"
+            "<!-- ORG:BEGIN security -->\n"
             "level 3 (new)\n"
-            "<!-- FORJA:END security -->\n"
+            "<!-- ORG:END security -->\n"
         )
         merged = merge_content(existing, new)
         self.assertIn("level 3 (new)", merged)
@@ -93,9 +93,9 @@ class TestBlocks(unittest.TestCase):
 
     def test_extract_blocks_handles_crlf(self):
         content = (
-            "<!-- FORJA:BEGIN security -->\r\n"
+            "<!-- ORG:BEGIN security -->\r\n"
             "level 3\r\n"
-            "<!-- FORJA:END security -->\r\n"
+            "<!-- ORG:END security -->\r\n"
         )
         blocks = extract_blocks(content)
         self.assertEqual(set(blocks.keys()), {"security"})
@@ -105,15 +105,15 @@ class TestBlocks(unittest.TestCase):
     # the block (extract by the last END, not the first).
     def test_merge_keeps_full_generated_body_with_literal_end(self):
         existing = (
-            "# Title\n<!-- FORJA:BEGIN tools -->\nold\n<!-- FORJA:END tools -->\n"
+            "# Title\n<!-- ORG:BEGIN tools -->\nold\n<!-- ORG:END tools -->\n"
         )
         new = (
             "# Title\n"
-            "<!-- FORJA:BEGIN tools -->\n"
+            "<!-- ORG:BEGIN tools -->\n"
             "- tool1\n"
-            "docs say: <!-- FORJA:END tools --> is the marker\n"
+            "docs say: <!-- ORG:END tools --> is the marker\n"
             "- tool2 (after fake end)\n"
-            "<!-- FORJA:END tools -->\n"
+            "<!-- ORG:END tools -->\n"
         )
         merged = merge_content(existing, new)
         self.assertIn("- tool1", merged)
@@ -123,14 +123,14 @@ class TestBlocks(unittest.TestCase):
     def test_merge_removes_block_that_no_longer_exists_in_template(self):
         existing = (
             "# Title\n"
-            "<!-- FORJA:BEGIN security -->\n"
+            "<!-- ORG:BEGIN security -->\n"
             "A\n"
-            "<!-- FORJA:END security -->\n"
+            "<!-- ORG:END security -->\n"
             "\nKeep me.\n"
         )
         new = "# Title\n"
         merged = merge_content(existing, new)
-        self.assertNotIn("FORJA:BEGIN security", merged)
+        self.assertNotIn("ORG:BEGIN security", merged)
         self.assertNotIn("A", merged)
         self.assertIn("Keep me.", merged)
 
@@ -138,15 +138,15 @@ class TestBlocks(unittest.TestCase):
         # A single-line fake pair is a well-formed pair inside a manual
         # note on one line: still ambiguous -> preserve whole + warn.
         existing = (
-            "<!-- FORJA:BEGIN security -->\n"
+            "<!-- ORG:BEGIN security -->\n"
             "level 2 (real, generated)\n"
-            "<!-- FORJA:END security -->\n"
-            "Note: <!-- FORJA:BEGIN security -->fake<!-- FORJA:END security -->\n"
+            "<!-- ORG:END security -->\n"
+            "Note: <!-- ORG:BEGIN security -->fake<!-- ORG:END security -->\n"
         )
         new = (
-            "<!-- FORJA:BEGIN security -->\n"
+            "<!-- ORG:BEGIN security -->\n"
             "level 3 (new)\n"
-            "<!-- FORJA:END security -->\n"
+            "<!-- ORG:END security -->\n"
         )
         with self.assertWarns(UserWarning):
             merged = merge_content(existing, new)

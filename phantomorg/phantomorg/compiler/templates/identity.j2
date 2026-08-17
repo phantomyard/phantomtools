@@ -1,6 +1,6 @@
 # {{ t.identity_title }}
 
-<!-- FORJA:BEGIN header -->
+<!-- ORG:BEGIN header -->
 - **{{ t.identity_name }}**: {{ actor.id }}
 - **{{ t.identity_role }}**: {{ role.name }}
 - **{{ t.identity_department }}**: {{ department.name }}
@@ -15,14 +15,14 @@
 {% if actor.tone -%}
 - **{{ t.identity_tone }}**: {{ actor.tone }}
 {% endif %}
-<!-- FORJA:END header -->
+<!-- ORG:END header -->
 
-<!-- FORJA:BEGIN functions -->
+<!-- ORG:BEGIN functions -->
 ## {{ t.functions_header }}
 {% for f in role.functions %}
 - {{ f }}
 {% endfor %}
-<!-- FORJA:END functions -->
+<!-- ORG:END functions -->
 
 ## {{ t.manual_notes_header }}
 <!-- {{ t.manual_notes_hint_generic }} -->

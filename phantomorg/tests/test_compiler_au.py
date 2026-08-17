@@ -171,7 +171,7 @@ class TestCompilerAU(unittest.TestCase):
 
     def test_manual_note_outside_blocks_is_preserved_but_blocks_regenerate(self):
         """
-        The real fix: a manual note OUTSIDE the FORJA blocks survives a
+        The real fix: a manual note OUTSIDE the ORG blocks survives a
         regeneration, and at the same time the sections derived from
         org.yaml (e.g. security) DO update when the spec changes. Before,
         marking any part of the file as manual froze the whole file.
@@ -183,7 +183,7 @@ class TestCompilerAU(unittest.TestCase):
 
             soul_path = out_dir / "alma" / "SOUL.md"
             original = soul_path.read_text(encoding="utf-8")
-            self.assertIn("<!-- FORJA:BEGIN security -->", original)
+            self.assertIn("<!-- ORG:BEGIN security -->", original)
 
             # We add a manual note OUTSIDE any block.
             manual_note = (
@@ -206,8 +206,8 @@ class TestCompilerAU(unittest.TestCase):
             # ...and the security block did update with the spec change.
             self.assertIn("category-2", rebuilt)
 
-    def test_file_without_any_forja_block_is_left_untouched(self):
-        """Deliberate opt-out: if no FORJA marker remains, nothing is touched.
+    def test_file_without_any_org_block_is_left_untouched(self):
+        """Deliberate opt-out: if no ORG marker remains, nothing is touched.
 
         The build now warns (F5) that spec changes are not applied to a
         marker-less file that differs from the fresh render.
@@ -230,7 +230,7 @@ class TestCompilerAU(unittest.TestCase):
         """
         MEMORY.md accumulates facts during real operation (the runtime
         writes there). A later build must not touch it, with or without
-        FORJA blocks, even if the spec changes.
+        ORG blocks, even if the spec changes.
         """
         spec, _ = validate_org(AU_ORG)
         with tempfile.TemporaryDirectory() as tmp:

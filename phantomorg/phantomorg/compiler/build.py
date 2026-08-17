@@ -13,7 +13,7 @@ build(): implements the pseudocode of section 8 of the spec.
 Two distinct write strategies, not one:
 
 - `write_if_changed` (IDENTITY.md, SOUL.md, tools.md): merges by blocks
-  (see blocks.py). The `FORJA:BEGIN/END` sections are always regenerated;
+  (see blocks.py). The `ORG:BEGIN/END` sections are always regenerated;
   everything else in the file is preserved. It replaces the previous
   "frozen whole-file" scheme, which was a real gap: it also froze
   spec-derived sections (security/escalation/comms) when the user only
@@ -390,7 +390,7 @@ def write_if_changed(path: Path, content: str) -> bool:
     Returns True if it wrote (new or changed file), False if the file
     didn't need to be touched.
 
-    If the file already exists and contains FORJA:BEGIN/END blocks,
+    If the file already exists and contains ORG:BEGIN/END blocks,
     merge_content is applied (section by section: block content is
     regenerated, outside content is preserved). If the file exists but
     has no recognizable blocks, it is preserved whole (deliberate opt-out).
@@ -400,15 +400,15 @@ def write_if_changed(path: Path, content: str) -> bool:
         existing = path.read_text(encoding="utf-8")
         merged = merge_content(existing, content)
         if merged == existing:
-            # F5: a file that exists but has no FORJA blocks is treated
+            # F5: a file that exists but has no ORG blocks is treated
             # as a manual opt-out — but if it also differs from the
             # fresh render, the spec changes are silently not being
             # applied. Surface that instead of staying quiet.
             if existing != content and not has_blocks(existing):
                 warnings.warn(
-                    f"{path.name} exists but has no FORJA blocks — preserved "
+                    f"{path.name} exists but has no ORG blocks — preserved "
                     f"whole (manual opt-out); spec changes are NOT applied. "
-                    f"Delete the file or add FORJA:BEGIN/END markers to "
+                    f"Delete the file or add ORG:BEGIN/END markers to "
                     f"re-enable generation.",
                     stacklevel=2,
                 )
@@ -425,7 +425,7 @@ def write_plain_if_changed(path: Path, content: str) -> bool:
     merging. Used for the metadata file (.phantomorg.yaml), which has
     no hand-editable sections — it must always reflect the current state
     of the spec (organization_id/actor_id/role_id), so applying
-    merge_content here would be wrong: if the file had no FORJA blocks
+    merge_content here would be wrong: if the file had no ORG blocks
     (it never does), it would stay frozen forever and never update if,
     for example, the actor changes role.
     """
@@ -590,7 +590,7 @@ def build_actor(
         p = normas_dir / "comunicacion-agentes.md"
         # Plain overwrite (like .phantomorg.yaml), NOT block merge: the
         # norm is fully generated state, no hand-editable sections — a
-        # FORJA-less existing file must not freeze it forever.
+        # ORG-less existing file must not freeze it forever.
         if write_plain_if_changed(p, norma_md):
             written.append(p)
 
