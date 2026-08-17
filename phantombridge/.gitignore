@@ -1,0 +1,25 @@
+# Secretos — NUNCA versionar
+config.json
+config.*.local.json
+testbridge-pw.txt
+*.secret
+.env
+
+# Dependencias
+node_modules/
+
+# Historial de rescate (contiene config.json.bak con secretos)
+history/
+
+# Refuerzos/artefactos de diagnóstico
+refs/*.pcap
+
+# Logs y temporales
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+
+# Directorios residuales de tests
+.test-tmp-*/

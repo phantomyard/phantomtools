@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths: ["phantombridge/**", ".github/workflows/phantombridge-ci.yml"]
+  pull_request:
+    paths: ["phantombridge/**", ".github/workflows/phantombridge-ci.yml"]
+
+defaults:
+  run:
+    working-directory: phantombridge
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: phantombridge/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check
+        run: |
+          for f in bridge.js org-routing.js test-*.js e2e-*.js giftwrap-*.js xmpp-inject.js e2e-inject.js; do
+            node --check "$f"
+          done
+
+      - name: Run tests (unit, no network)
+        run: |
+          node test-routing.js
+          node test-org-routing.js
+          node test-pause.js
+          node test-antiloop.js

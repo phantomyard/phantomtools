@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#
+# phantombridge — Jitsi ↔ Nostr presence bridge for phantombot personas.
+#
+# Thin launcher: resolves the realpath of this script (no readlink -f, which
+# is GNU-only and breaks on macOS) and runs bridge.js from the checkout with
+# node. The repo stays the single source of truth; symlinks point here.
+#
+set -euo pipefail
+
+# Resolve symlinks portably (python3 realpath, fallback to node).
+if command -v python3 >/dev/null 2>&1; then
+  SELF="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+else
+  SELF="$(node -e 'console.log(require("fs").realpathSync(process.argv[1]))' "$0")"
+fi
+DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
+
+if [ ! -f "$DIR/bridge.js" ]; then
+  echo "error: bridge.js not found next to launcher ($DIR)" >&2
+  exit 1
+fi
+
+exec node "$DIR/bridge.js" "$@"

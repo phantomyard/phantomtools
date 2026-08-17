@@ -1,0 +1,82 @@
+{
+  "_comment": "Copia este archivo a config.json y rellena los valores. config.json NO se versiona.",
+  "mode": "both",
+  "paused": {
+    "jitsi": false,
+    "nostr": false
+  },
+  "stateFile": "./.bridge-state.json",
+  "antiloop": {
+    "_comment": "maxHops/expireMs deben coincidir con communication.max_hops/ttl_hours del org.yaml compilado (norma v1.3); /status los expone para detectar drift. El marker del envelope es CONSTANTE de protocolo: [env] (no configurable). hashWindowMs 1h y pairHourMax 10/h (F3-01): defienden contra loops LENTOS (1 msg/15-30min) que evaden el rate por minuto y la ventana de dedup corta.",
+    "maxHops": 3,
+    "expireMs": 21600000,
+    "hashWindowMs": 3600000,
+    "hashMax": 200,
+    "fuzzyThreshold": 0.85,
+    "pairWindowMs": 60000,
+    "pairMax": 10,
+    "pairHourWindowMs": 3600000,
+    "pairHourMax": 10,
+    "reqWindowMs": 600000,
+    "reqMax": 8,
+    "requestMax": 500
+  },
+  "nick": "secretario",
+  "roomSuffix": "@conference.meet.example.com",
+  "startRooms": [],
+  "httpPort": 8090,
+  "xmpp": {
+    "service": "xmpp://127.0.0.1:5222",
+    "domain": "auth.meet.example.com",
+    "username": "bridge",
+    "password": "CHANGE_ME_XMPP_PASSWORD",
+    "rejectUnauthorized": false,
+    "focus": "focus.meet.example.com"
+  },
+  "nostr": {
+    "relay": "ws://relay.example.com:7777",
+    "nsec": "nsec1CHANGE_ME_BRIDGE_PRIVATE_KEY"
+  },
+  "agents": {
+    "pepa": "HEX_PUBKEY_64",
+    "paco": "HEX_PUBKEY_64",
+    "roberto": "HEX_PUBKEY_64",
+    "alma": "HEX_PUBKEY_64"
+  },
+  "permissions": {
+    "full": [
+      "pepa",
+      "paco",
+      "roberto"
+    ],
+    "restricted": {
+      "almaponia": [
+        "alma"
+      ]
+    }
+  },
+  "routing": {
+    "permissions": {
+      "roberto": [
+        "alma",
+        "paco",
+        "pepa"
+      ],
+      "alma": [
+        "roberto"
+      ]
+    },
+    "default": "deny"
+  },
+  "downloadBase": "https://meet.example.com",
+  "downloadSecretFile": "/opt/recordings-serve/.secret",
+  "downloadExpiryHours": 24,
+  "roomAgents": {
+    "mia": [
+      "paco"
+    ]
+  },
+  "roomTimeouts": {
+    "mia": 20
+  }
+}
