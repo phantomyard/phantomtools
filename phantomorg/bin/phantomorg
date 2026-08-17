@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# phantomforge — run PhantomOrg from the repo (the single source of truth).
+# phantomorg — run PhantomOrg from the repo (the single source of truth).
 #
 # This wrapper is symlinked into ~/.local/bin by install.sh. It resolves its
 # own real path (through the symlink) and runs the CLI straight from the repo,
@@ -32,7 +32,7 @@ fi
 if [[ -x "$here/.venv/bin/python" ]]; then
     py="$here/.venv/bin/python"
 elif [[ -z "${py:-}" ]]; then
-    echo "phantomforge: no Python interpreter found — install python3 or create the repo venv (.venv/bin/python)" >&2
+    echo "phantomorg: no Python interpreter found — install python3 or create the repo venv (.venv/bin/python)" >&2
     exit 1
 fi
 

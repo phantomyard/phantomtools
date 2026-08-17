@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 phantomorg = "phantomorg.cli:main"
+po = "phantomorg.cli:main"
 pf = "phantomorg.cli:main"
 
 [project.optional-dependencies]

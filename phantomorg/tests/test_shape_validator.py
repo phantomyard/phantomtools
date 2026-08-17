@@ -298,11 +298,11 @@ class TestNpubValidation(unittest.TestCase):
 
     # Real npubs extracted from the AU bots' phantomchat identities.
     VALID: ClassVar[list[str]] = [
-        "npub1p585a0cqnf949lc6jsfff49tqenqmxche2khtvsqfhn6p2a83qtspju756",
-        "npub15g9murn5rz3yh20c6wwkczv8ztn5trz8gfmulaxf8zt77fxatx5skz0vwt",
-        "npub1gthx35eejxlrkxc0faj7gpw5jy62hcw260g7ws95cq0x7hav58asyeuest",
-        "npub10dkp4yu0tfmra36qx35xa4apj28np3acfsrqtf07xqtqs3sxlvlsg3zkmq",
-        "npub1994zf2vg2pdsyg3gehhgahqu9mflz83azd7w5l3ukzdv6yk8fqgqd69axh",
+        "npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf",
+        "npub1gecyq3xylqzzvehz08mnsd4rxpjphhm03saq4rx3hx5xee4cg7tqts74vr",
+        "npub14t8u4p6n5lfahlwtfr2zq4zqrggktjmnv99qx0yx0j3wpfuvl2tssf775x",
+        "npub1ggyxfrue07z39dl0ag3lge3z8l7vtunlyrg9quwcdh4r84rnwq4s25aqa9",
+        "npub13wcvzezm4wxxyv3c6nda700zrjt63w06tpevkf52mkuggy3aqf7qlm0mp4",
     ]
 
     def setUp(self):
@@ -412,7 +412,7 @@ class TestHumansRegistry(unittest.TestCase):
     human counterparts (Board president, treasurer...)."""
 
     VALID_NPUB = (
-        "npub1p585a0cqnf949lc6jsfff49tqenqmxche2khtvsqfhn6p2a83qtspju756"
+        "npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf"
     )
 
     def setUp(self):

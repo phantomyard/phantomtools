@@ -9,6 +9,10 @@ on:
   push:
     branches: [main]
 
+defaults:
+  run:
+    working-directory: phantomorg
+
 jobs:
   lint:
     name: lint
@@ -26,13 +30,13 @@ jobs:
         run: pip install ruff==0.16.2 bandit==1.9.4
 
       - name: Ruff check (lint + style)
-        run: ruff check phantomforge tests
+        run: ruff check phantomorg tests
 
       - name: Ruff format check
-        run: ruff format --check phantomforge tests
+        run: ruff format --check phantomorg tests
 
       - name: Bandit (security)
-        run: bandit -r phantomforge -q
+        run: bandit -r phantomorg -q
 
   pipeline:
     name: pipeline
@@ -57,10 +61,10 @@ jobs:
       - name: Smoke test — packaged install must build an org end to end
         run: |
           cd /tmp
-          pf new-org --id smoke --name "Smoke Org" --sector ngo --lang en --template ngo
-          pf add-department --org organizations/smoke/org.yaml --id ops --name Operations --access-policy level-2
-          pf add-role --org organizations/smoke/org.yaml --id lead --name "Team Lead" --department ops --access-level level-2
-          pf add-actor --org organizations/smoke/org.yaml --id maria --role lead --tool email
-          pf validate --org organizations/smoke/org.yaml
-          pf build --org organizations/smoke/org.yaml --out /tmp/smoke-dist
+          po new-org --id smoke --name "Smoke Org" --sector ngo --lang en --template ngo
+          po add-department --org organizations/smoke/org.yaml --id ops --name Operations --access-policy level-2
+          po add-role --org organizations/smoke/org.yaml --id lead --name "Team Lead" --department ops --access-level level-2
+          po add-actor --org organizations/smoke/org.yaml --id maria --role lead --tool email
+          po validate --org organizations/smoke/org.yaml
+          po build --org organizations/smoke/org.yaml --out /tmp/smoke-dist
           find /tmp/smoke-dist -name SOUL.md | grep -q . && echo "SMOKE OK: SOUL.md generated"

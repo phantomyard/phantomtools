@@ -1,9 +1,9 @@
 @echo off
-rem phantomforge.cmd — run PhantomOrg from the repo checkout (Windows).
+rem phantomorg.cmd — run PhantomOrg from the repo checkout (Windows).
 rem
 rem Manual install (no installer on Windows yet): add this repo's bin
 rem directory to your PATH, e.g.
-rem   setx PATH "%PATH%;C:\path\to\phantomforge\bin"
+rem   setx PATH "%PATH%;C:\path\to\phantomorg\bin"
 rem or set it via System Properties > Environment Variables.
 rem Requirements: Python 3.10+ on PATH (or a repo .venv).
 rem

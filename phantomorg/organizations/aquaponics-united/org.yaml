@@ -63,7 +63,7 @@ roles:
 actors:
   - id: paco
     role: ceo
-    npub: npub1p585a0cqnf949lc6jsfff49tqenqmxche2khtvsqfhn6p2a83qtspju756
+    npub: npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf
     telegram_bot: "@CEO_bot"
     tools: [email, drive, calendar, notebooklm, printing]
     tools_excluded: []
@@ -72,7 +72,7 @@ actors:
 
   - id: pepa
     role: chief_of_staff
-    npub: npub15g9murn5rz3yh20c6wwkczv8ztn5trz8gfmulaxf8zt77fxatx5skz0vwt
+    npub: npub1gecyq3xylqzzvehz08mnsd4rxpjphhm03saq4rx3hx5xee4cg7tqts74vr
     telegram_bot: "@PA_bot"
     tools: [email, drive, calendar]
     tools_excluded: [send]
@@ -80,7 +80,7 @@ actors:
 
   - id: roberto
     role: cfo
-    npub: npub1gthx35eejxlrkxc0faj7gpw5jy62hcw260g7ws95cq0x7hav58asyeuest
+    npub: npub14t8u4p6n5lfahlwtfr2zq4zqrggktjmnv99qx0yx0j3wpfuvl2tssf775x
     telegram_bot: "@CFO_bot"
     tools: [email, drive, calendar, sheets]
     tools_excluded: []
@@ -88,7 +88,7 @@ actors:
 
   - id: alma
     role: project_lead
-    npub: npub10dkp4yu0tfmra36qx35xa4apj28np3acfsrqtf07xqtqs3sxlvlsg3zkmq
+    npub: npub1ggyxfrue07z39dl0ag3lge3z8l7vtunlyrg9quwcdh4r84rnwq4s25aqa9
     telegram_bot: "@Alma_bot"
     tools: [email, drive, calendar, notebooklm]
     tools_excluded: []
@@ -96,7 +96,7 @@ actors:
 
   - id: elena
     role: training_lead
-    npub: npub1994zf2vg2pdsyg3gehhgahqu9mflz83azd7w5l3ukzdv6yk8fqgqd69axh
+    npub: npub13wcvzezm4wxxyv3c6nda700zrjt63w06tpevkf52mkuggy3aqf7qlm0mp4
     telegram_bot: "@Elena_bot"
     tools: [email, drive, notebooklm]
     tools_excluded: []
@@ -161,10 +161,10 @@ communication:
       platform: phantomchat
       relay: "ws://relay.example.invalid:7777"
       # Puente PhantomBridge (v1.2.0): identidad nostr del puente y relays.
-      bridge_npub: "npub1klkkqdft4xmr2rxplzhyys6z7sypygm6k9k396lkua087d85ez2qs2kfmk"
+      bridge_npub: "npub1k5sucm83q6tg4a9qhz8vx6gu8m3x03ecnnr0klv6skzhv8elkfkstydrel"
       # Identidad nostr compartida del grupo humano (alicia/carla/iris/voluntariado).
       human_npubs:
-        - "npub1pvrd6n2kn3j6t8fl7d8nwqvjzvj8f45gkcfltwdc3pvnr8h0rkkqh7jlfh"
+        - "npub1cml4wlfllw6mmw8esxgtslnka3scdxek7ecvh6vej7rtdjvzzd0s0cum9v"
       # Relays públicos adicionales (el privado del org va siempre primero).
       public_relays:
         - "wss://relay.damus.io"

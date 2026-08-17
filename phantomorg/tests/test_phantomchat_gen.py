@@ -14,14 +14,14 @@ from phantomorg.validator import validate_org
 
 AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
 
-BRIDGE_NPUB = "npub1klkkqdft4xmr2rxplzhyys6z7sypygm6k9k396lkua087d85ez2qs2kfmk"
-HUMAN_NPUB = "npub1pvrd6n2kn3j6t8fl7d8nwqvjzvj8f45gkcfltwdc3pvnr8h0rkkqh7jlfh"
+BRIDGE_NPUB = "npub1k5sucm83q6tg4a9qhz8vx6gu8m3x03ecnnr0klv6skzhv8elkfkstydrel"
+HUMAN_NPUB = "npub1cml4wlfllw6mmw8esxgtslnka3scdxek7ecvh6vej7rtdjvzzd0s0cum9v"
 
 
 def _minimal_org_with_agent_channel(tmp: Path, with_npub: bool = True) -> Path:
     org = tmp / "org.yaml"
     actor = (
-        "{id: a, role: r, tools: [], npub: 'npub10dkp4yu0tfmra36qx35xa4apj28np3acfsrqtf07xqtqs3sxlvlsg3zkmq'}"
+        "{id: a, role: r, tools: [], npub: 'npub1ggyxfrue07z39dl0ag3lge3z8l7vtunlyrg9quwcdh4r84rnwq4s25aqa9'}"
         if with_npub
         else "{id: a, role: r, tools: []}"
     )
@@ -101,20 +101,20 @@ class TestPhantomchatGeneration(unittest.TestCase):
     "wss://nostr.data.haus"
   ],
   "allowed_npubs": [
-    "npub1p585a0cqnf949lc6jsfff49tqenqmxche2khtvsqfhn6p2a83qtspju756",
-    "npub15g9murn5rz3yh20c6wwkczv8ztn5trz8gfmulaxf8zt77fxatx5skz0vwt",
-    "npub1gthx35eejxlrkxc0faj7gpw5jy62hcw260g7ws95cq0x7hav58asyeuest",
-    "npub1994zf2vg2pdsyg3gehhgahqu9mflz83azd7w5l3ukzdv6yk8fqgqd69axh",
-    "npub1pvrd6n2kn3j6t8fl7d8nwqvjzvj8f45gkcfltwdc3pvnr8h0rkkqh7jlfh",
-    "npub1klkkqdft4xmr2rxplzhyys6z7sypygm6k9k396lkua087d85ez2qs2kfmk"
+    "npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf",
+    "npub1gecyq3xylqzzvehz08mnsd4rxpjphhm03saq4rx3hx5xee4cg7tqts74vr",
+    "npub14t8u4p6n5lfahlwtfr2zq4zqrggktjmnv99qx0yx0j3wpfuvl2tssf775x",
+    "npub13wcvzezm4wxxyv3c6nda700zrjt63w06tpevkf52mkuggy3aqf7qlm0mp4",
+    "npub1cml4wlfllw6mmw8esxgtslnka3scdxek7ecvh6vej7rtdjvzzd0s0cum9v",
+    "npub1k5sucm83q6tg4a9qhz8vx6gu8m3x03ecnnr0klv6skzhv8elkfkstydrel"
   ],
   "greeted": [
-    "npub1pvrd6n2kn3j6t8fl7d8nwqvjzvj8f45gkcfltwdc3pvnr8h0rkkqh7jlfh",
-    "npub1klkkqdft4xmr2rxplzhyys6z7sypygm6k9k396lkua087d85ez2qs2kfmk",
-    "npub1p585a0cqnf949lc6jsfff49tqenqmxche2khtvsqfhn6p2a83qtspju756",
-    "npub15g9murn5rz3yh20c6wwkczv8ztn5trz8gfmulaxf8zt77fxatx5skz0vwt",
-    "npub1gthx35eejxlrkxc0faj7gpw5jy62hcw260g7ws95cq0x7hav58asyeuest",
-    "npub1994zf2vg2pdsyg3gehhgahqu9mflz83azd7w5l3ukzdv6yk8fqgqd69axh"
+    "npub1cml4wlfllw6mmw8esxgtslnka3scdxek7ecvh6vej7rtdjvzzd0s0cum9v",
+    "npub1k5sucm83q6tg4a9qhz8vx6gu8m3x03ecnnr0klv6skzhv8elkfkstydrel",
+    "npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf",
+    "npub1gecyq3xylqzzvehz08mnsd4rxpjphhm03saq4rx3hx5xee4cg7tqts74vr",
+    "npub14t8u4p6n5lfahlwtfr2zq4zqrggktjmnv99qx0yx0j3wpfuvl2tssf775x",
+    "npub13wcvzezm4wxxyv3c6nda700zrjt63w06tpevkf52mkuggy3aqf7qlm0mp4"
   ]
 }
 """,
@@ -151,7 +151,7 @@ class TestPhantomchatGeneration(unittest.TestCase):
                 "access_policy: level-3}]\n"
                 "roles: [{id: r, name: R, department: d, reports_to: null, "
                 "access_level: level-3}]\n"
-                "actors: [{id: a, role: r, tools: [], npub: 'npub10dkp4yu0tfmra36qx35xa4apj28np3acfsrqtf07xqtqs3sxlvlsg3zkmq'}]\n"
+                "actors: [{id: a, role: r, tools: [], npub: 'npub1ggyxfrue07z39dl0ag3lge3z8l7vtunlyrg9quwcdh4r84rnwq4s25aqa9'}]\n"
                 "policies: {access_levels: {level-3: {label: L, "
                 "categories: []}}, security_categories: {cat-1: {label: C}}}\n"
                 "escalation_matrix: []\n"
@@ -181,8 +181,8 @@ class TestPhantomchatGeneration(unittest.TestCase):
     def test_serializer_format(self):
         pc = PhantomchatConfig(
             relays=["ws://x:7777"],
-            allowed_npubs=["npub10dkp4yu0tfmra36qx35xa4apj28np3acfsrqtf07xqtqs3sxlvlsg3zkmq"],
-            greeted=["npub10dkp4yu0tfmra36qx35xa4apj28np3acfsrqtf07xqtqs3sxlvlsg3zkmq"],
+            allowed_npubs=["npub1ggyxfrue07z39dl0ag3lge3z8l7vtunlyrg9quwcdh4r84rnwq4s25aqa9"],
+            greeted=["npub1ggyxfrue07z39dl0ag3lge3z8l7vtunlyrg9quwcdh4r84rnwq4s25aqa9"],
         )
         text = pc.to_json()
         self.assertTrue(text.endswith("\n"))
