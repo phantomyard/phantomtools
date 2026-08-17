@@ -30,18 +30,18 @@
     "domain": "auth.meet.example.com",
     "username": "bridge",
     "password": "CHANGE_ME_XMPP_PASSWORD",
-    "rejectUnauthorized": false,
+    "rejectUnauthorized": true,
     "focus": "focus.meet.example.com"
   },
   "nostr": {
     "relay": "ws://relay.example.com:7777",
-    "nsec": "nsec1CHANGE_ME_BRIDGE_PRIVATE_KEY"
+    "nsec": "CHANGE_ME_BRIDGE_PRIVATE_KEY"
   },
   "agents": {
-    "pepa": "HEX_PUBKEY_64",
-    "paco": "HEX_PUBKEY_64",
-    "roberto": "HEX_PUBKEY_64",
-    "alma": "HEX_PUBKEY_64"
+    "pepa": "CHANGE_ME_HEX_PUBKEY_64",
+    "paco": "CHANGE_ME_HEX_PUBKEY_64",
+    "roberto": "CHANGE_ME_HEX_PUBKEY_64",
+    "alma": "CHANGE_ME_HEX_PUBKEY_64"
   },
   "permissions": {
     "full": [

@@ -155,7 +155,7 @@ const ROOM_SUFFIX = CONFIG.roomSuffix || '@conference.meet.example.com';
 // ---------------------------------------------------------------------------
 // Recordings (jitsi mode only; shared by the HTTP API if applicable)
 // ---------------------------------------------------------------------------
-const RECORDINGS_DIR = CONFIG.recordingsDir || '/var/recordings';
+const RECORDINGS_DIR = CONFIG.recordingsDir || '/tmp/phantommeet-recordings';
 const DL_BASE = CONFIG.downloadBase || 'https://meet.example.com';
 const DL_SECRET_FILE = CONFIG.downloadSecretFile || '/opt/recordings-serve/.secret';
 const DL_EXPIRY_HOURS = CONFIG.downloadExpiryHours || 24;
@@ -741,6 +741,11 @@ function antiLoopRollback(admission) {
 // ---------------------------------------------------------------------------
 // Nostr — common layer (publishDM, subscribe, handling)
 // ---------------------------------------------------------------------------
+if (!CONFIG.nostr.nsec || CONFIG.nostr.nsec.startsWith('CHANGE_ME_')) {
+  throw new Error(
+    'PhantomBridge: nostr.nsec no configurada. Copia config.example.json a config.json y establece una nsec real (npub1.../nsec1...) en nostr.nsec.'
+  );
+}
 const {data: bridgeSk} = nip19.decode(CONFIG.nostr.nsec);
 const bridgePk = getPublicKey(bridgeSk);
 
