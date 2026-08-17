@@ -1,0 +1,55 @@
+version: 1
+
+organization:
+  id: united-capital-group
+  name: "United Capital Group"
+  sector: finance          # ajusta si el sector real es más específico (ej. "wealth-management", "consultora")
+  languages: [es, en]
+  default_language: es
+
+departments:
+  - { id: direccion, name: "Dirección", parent: null, access_policy: level-3 }
+  # Añade aquí el resto de departamentos reales (ej. operaciones, inversiones,
+  # cumplimiento) con `po add-department --org organizations/united-capital-group/org.yaml`
+  # a medida que se sumen más agentes.
+
+roles:
+  - id: ceo
+    name: "CEO"
+    department: direccion
+    reports_to: null
+    reports_to_human: null   # si Anna reporta a un humano concreto (fundador/socio), ponlo aquí
+    functions: [vision, liderazgo, comunicacion_externa, tools]
+    access_level: level-3
+    security_exceptions: []
+
+actors:
+  - id: anna
+    role: ceo
+    telegram_bot: "@Anna_bot"
+    tools: [email, drive, calendar]   # ajusta a las herramientas reales que Anna ya usa en Phantombot
+    tools_excluded: []
+    actor_exceptions: []              # si hay una excepción de acceso absoluto (equivalente al "Category 0"
+                                       # de Salvador en AU), decláralo aquí, ej. [category-0]
+    tone: formal-cercano
+
+policies:
+  access_levels:
+    level-3: { label: "Ejecutivo", categories: [1, 2, 3] }
+    level-2: { label: "Operativo", categories: [1, 2] }
+    level-1: { label: "Restringido", categories: [1] }
+  security_categories:
+    category-0: { label: "Excepción absoluta", scope: actor }
+    category-1: { label: "Público / interno bajo" }
+    category-2: { label: "Confidencial" }
+    category-3: { label: "Credenciales / financiero sensible" }
+
+escalation_matrix: []
+  # Vacío porque hoy solo hay 1 actor (Anna, en la raíz). En cuanto añadas un
+  # segundo rol que reporte a ella, usa `po add-role --reports-to ceo ...` y
+  # una entrada de escalation_matrix (from: <nuevo_rol>, to: ceo, condition: "...").
+
+communication:
+  request_id_format: "{org_id}-{yyyymmdd}-{seq4}"
+  message_types: [REQUEST, INFORM, ESCALATE, CONFIRM, REJECT]
+  max_hops: 3

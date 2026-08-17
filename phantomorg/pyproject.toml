@@ -1,0 +1,33 @@
+[project]
+name = "phantomorg"
+version = "0.5.10"
+description = "Model agent organizations (departments, roles, actors, access policies, escalation matrix) and compile them to the persona files Phantombot can load."
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0",
+    "Jinja2>=3.1",
+    "click>=8.1",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.scripts]
+phantomorg = "phantomorg.cli:main"
+pf = "phantomorg.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "types-PyYAML",
+    "types-click",
+    "types-Jinja2",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["phantomorg*"]
+
+[tool.setuptools.package-data]
+"phantomorg.compiler" = ["templates/*.j2"]
