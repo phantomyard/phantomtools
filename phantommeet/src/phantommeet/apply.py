@@ -1,4 +1,4 @@
-"""Apply the PhantomMeet update package to a PhantomForge persona installation.
+"""Apply the PhantomMeet update package to a PhantomOrg persona installation.
 
 All operations are **idempotent** (safe to re-run) and support ``--dry-run``
 to report every change without writing anything.

@@ -1,8 +1,8 @@
 # PhantomMeet
 
-**Agnostic meeting capabilities layer for PhantomForge-provisioned personas.**
+**Agnostic meeting capabilities layer for PhantomOrg-provisioned personas.**
 
-PhantomMeet gives AI personas of any PhantomForge-provisioned organization
+PhantomMeet gives AI personas of any PhantomOrg-provisioned organization
 everything they need to run, join, and follow up on meetings:
 
 - **Participate** in meeting rooms as text-only attendees via a bridge
@@ -23,7 +23,7 @@ everything they need to run, join, and follow up on meetings:
   (`{YYYY-MM-DD}-{HH-MM}_{topic}`); recording storage in the org's
   `storage.drive_folder` (e.g. `Grabaciones`).
 
-It is an **update package applied on top of a PhantomForge installation**: it
+It is an **update package applied on top of a PhantomOrg installation**: it
 adds knowledge, tools and configuration to the provisioned personas without
 breaking the existing installation.
 
@@ -73,7 +73,7 @@ Re-running the apply is safe: unchanged files are skipped.
 > **New to PhantomMeet?** Read the [Meeting Workflow — Human User Guide](docs/meeting-workflow.md) first: it explains how a real meeting works end to end, with no technical knowledge required.
 
 ```bash
-# Derive the manifest from a PhantomForge org model + base manifest
+# Derive the manifest from a PhantomOrg org model + base manifest
 pm derive-manifest --org organizations/<org>/org.yaml \
                   --base examples/<org>.base.yaml \
                   --out examples/<org>.yaml
@@ -103,9 +103,9 @@ pm check-infra --manifest examples/example-org.yaml \
 ```
 
 The manifest is **derived, not edited**: `derive-manifest` reads the
-organization hierarchy from a PhantomForge `org.yaml` (directive org roles
+organization hierarchy from a PhantomOrg `org.yaml` (directive org roles
 → `responsible`, support org roles → `support` with a restricted room
-prefix). See [`docs/SPEC.md` §5.1](docs/SPEC.md#51-deriving-the-manifest-from-a-phantomforge-org-model).
+prefix). See [`docs/SPEC.md` §5.1](docs/SPEC.md#51-deriving-the-manifest-from-a-phantomorg-org-model).
 
 `check-infra` probes the endpoints declared in the manifest's `infra` section
 (HTTP, WebSocket NIP-01 round-trip, read-only commands, file/env checks for
@@ -131,7 +131,7 @@ phantommeet/
 ├── pyproject.toml         # Package: v0.3.0, Python ≥3.10, deps PyYAML/Jinja2/click
 ├── install.sh             # Portable install (symlinks bin/ to PATH)
 ├── bin/                   # CLI wrappers: pm, phantommeet (+ .cmd for Windows)
-├── docs/                  # SPEC.md, meeting-workflow.md, GITHUB-READINESS.md
+├── docs/                  # SPEC.md, meeting-workflow.md
 ├── examples/              # Base + derived reference manifests (org-agnostic, placeholders)
 ├── src/phantommeet/       # Package: manifest, derive, infra, apply, discovery, CLI
 │   └── templates/
@@ -168,10 +168,10 @@ deploying. This is **not an install-and-forget project**.
   technician needed in day-to-day operation.
 - **2026-08-10** — v0.3.0: unified recording naming (`{YYYY-MM-DD}-{HH-MM}_{topic}`, room == file), `storage.drive_folder` convention, and a fully configurable invitation card (`invite.card`, mandatory-token validation, `--ask-card` / `--card-file` interactive setup, org-branded default).
 
-Development happens in the **PhantomTools monorepo** (private):
-`salvaalba-dev/phantomtools` — PhantomMeet lives in the `phantommeet/` tool
-subdirectory, same pattern as PhantomForge. The subtree carries its own
-standalone CI (lint + bandit + tests + smoke).
+Development happens in the **PhantomTools monorepo**:
+PhantomMeet lives in the `phantommeet/` tool subdirectory, same pattern as
+PhantomOrg. The subtree carries its own standalone CI (lint + bandit + tests
++ smoke).
 
 ## License
 

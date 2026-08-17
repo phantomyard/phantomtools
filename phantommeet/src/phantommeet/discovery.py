@@ -5,7 +5,7 @@ installer *discovers* the ground truth at apply time:
 
 - the **persona host**: which personas are actually installed under the
   target directory (phantombot persona root),
-- the **PhantomForge org model** (when reachable): the org's actors and
+- the **PhantomOrg org model** (when reachable): the org's actors and
   roles, so the installer can cross-check the persona list against the
   organization's declared hierarchy.
 
@@ -53,7 +53,7 @@ class Persona:
 
 @dataclass
 class OrgModel:
-    """A loaded PhantomForge org model (org.yaml)."""
+    """A loaded PhantomOrg org model (org.yaml)."""
 
     path: Path
     org_id: str
@@ -121,7 +121,7 @@ def discover_personas(target: str | Path) -> list[Persona]:
 
 
 def find_org_model(candidates: list[str | Path] | None = None) -> Path | None:
-    """Locate a PhantomForge org model on this machine.
+    """Locate a PhantomOrg org model on this machine.
 
     ``candidates`` may be explicit paths (e.g. from ``--org``); otherwise a
     few conventional locations are probed. Returns the first org.yaml found.
@@ -137,9 +137,9 @@ def find_org_model(candidates: list[str | Path] | None = None) -> Path | None:
 
     home = Path.home()
     conventional = [
-        home / "Desktop" / "phantomforge" / "organizations",
-        home / "phantomforge" / "organizations",
-        home / ".phantomforge" / "organizations",
+        home / "Desktop" / "phantomorg" / "organizations",
+        home / "phantomorg" / "organizations",
+        home / ".phantomorg" / "organizations",
     ]
     for base in conventional:
         if base.is_dir():
@@ -149,7 +149,7 @@ def find_org_model(candidates: list[str | Path] | None = None) -> Path | None:
 
 
 def load_org_model(path: str | Path) -> OrgModel:
-    """Load a PhantomForge org model, tolerant of missing bits."""
+    """Load a PhantomOrg org model, tolerant of missing bits."""
     p = Path(path)
     raw: dict[str, Any] = {}
     try:

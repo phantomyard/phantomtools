@@ -20,7 +20,7 @@ from .manifest import ManifestError, load_manifest
 @click.group()
 @click.version_option(__version__, prog_name="phantommeet")
 def cli() -> None:
-    """PhantomMeet — agnostic meeting capabilities for PhantomForge personas."""
+    """PhantomMeet — agnostic meeting capabilities for PhantomOrg personas."""
 
 
 @cli.command()
@@ -128,13 +128,13 @@ def apply(
     "org_path",
     type=click.Path(dir_okay=False),
     multiple=True,
-    help="Path(s) to a PhantomForge org model (org.yaml); auto-detected when omitted.",
+    help="Path(s) to a PhantomOrg org model (org.yaml); auto-detected when omitted.",
 )
 def discover(target: str, org_path: tuple[str, ...]) -> None:
-    """Discover installed personas and the PhantomForge org model (read-only).
+    """Discover installed personas and the PhantomOrg org model (read-only).
 
     Scans ``--target`` for persona directories (identity.json / SOUL.md /
-    phantomchat.json) and cross-references them with a PhantomForge org
+    phantomchat.json) and cross-references them with a PhantomOrg org
     model when one is found. The output is what the installer uses to ask
     the operator who may schedule meetings.
     """
@@ -150,7 +150,7 @@ def discover(target: str, org_path: tuple[str, ...]) -> None:
     "org_path",
     required=True,
     type=click.Path(exists=True, dir_okay=False),
-    help="Path to a PhantomForge org model (org.yaml).",
+    help="Path to a PhantomOrg org model (org.yaml).",
 )
 @click.option(
     "--base",
@@ -166,7 +166,7 @@ def discover(target: str, org_path: tuple[str, ...]) -> None:
     help="Write the derived manifest to this file (default: print to stdout).",
 )
 def derive_manifest(org_path: str, base_path: str, out_path: str | None) -> None:
-    """Derive a PhantomMeet manifest from a PhantomForge org model."""
+    """Derive a PhantomMeet manifest from a PhantomOrg org model."""
     try:
         manifest, warnings = _derive_manifest(org_path, base_path)
     except ManifestError as exc:

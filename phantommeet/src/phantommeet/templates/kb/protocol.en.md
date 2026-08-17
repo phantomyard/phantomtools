@@ -141,12 +141,12 @@ To reply to a room message `[sala] sender: text`, use the `sala-send` tool:
 
 ## Communication channel
 
-Each recipient has the channel established by **phantomforge** (the
+Each recipient has the channel established by **phantomorg** (the
 organization's source of truth):
 
 - **Personas** → Nostr (their `npub`) and/or Telegram (their `telegram_bot`).
 - **Humans** → they may also have an `npub` (Nostr), plus Telegram and/or
-  email — depending on their phantomforge configuration.
+  email — depending on their phantomorg configuration.
 - Contact each recipient through the channel they have defined (if they have
   an npub, Nostr may be used; otherwise Telegram/email).
 
@@ -178,7 +178,7 @@ missing, and only ask when it is impossible or contradictory.
 | Room | derived from naming | derived from title+date |
 | Sensitivity | detect "confidential/private/finance" | not sensitive (no password) |
 | Destination (folder) | {% if destination_folder %}folder name given | `{{ destination_folder }}` ({{ destination_note }}){% else %}you don't schedule; pass the one in the request{% endif %} |
-| Sending channel | per phantomforge per persona | Telegram (coordination or DM) |
+| Sending channel | per phantomorg per persona | Telegram (coordination or DM) |
 | Duration | — | `{{ defaults.duration_min }}` min |
 
 **Golden rule**: if a variable is missing → default. If it is ambiguous or

@@ -128,9 +128,9 @@ def test_meetings_md_renders_explicit_escalation_for_support(tmp_path: Path) -> 
     assert "`Grabaciones`" not in meetings
     # Custody appendix: no owner/custodian for support (generic wording).
     assert "La persona responsable sube el MP4" in meetings
-    # Communication channel section (phantomforge is the source of truth).
+    # Communication channel section (phantomorg is the source of truth).
     assert "## Canal de comunicación" in meetings
-    assert "phantomforge" in meetings
+    assert "phantomorg" in meetings
     # Pre-flight request check section with defaults table.
     assert "## Antes de actuar: comprobación de la solicitud" in meetings
     assert "`18:00`" in meetings

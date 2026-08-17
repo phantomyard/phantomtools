@@ -144,21 +144,21 @@ infra:
     host: server
   - name: whisper-venv
     type: file
-    path: /opt/whisper-transcribe/venv/bin/python
+    path: /opt/example-transcribe/venv/bin/python
     host: server
   - name: whisper-import
     type: command
-    cmd: /opt/whisper-transcribe/venv/bin/python -c "import faster_whisper; print('faster-whisper',
+    cmd: /opt/example-transcribe/venv/bin/python -c "import faster_whisper; print('faster-whisper',
       faster_whisper.__version__)"
     host: server
   - name: summary-env
     type: env
-    path: /opt/whisper-transcribe/.env
+    path: /opt/example-transcribe/.env
     key: DEEPSEEK_API_KEY
     host: server
   - name: finalize-hook
     type: command
-    cmd: grep -q "transcribe.py" /opt/jitsi/jibri/finalize.sh && echo "hook present"
+    cmd: grep -q "transcribe.py" /etc/jitsi/jibri/finalize.sh && echo "hook present"
     host: server
   - name: phantombot
     type: command

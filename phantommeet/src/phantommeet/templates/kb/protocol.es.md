@@ -141,12 +141,12 @@ Para responder a un mensaje de sala `[sala] emisor: texto`, usa la herramienta `
 
 ## Canal de comunicación
 
-Cada destinatario tiene su canal establecido por **phantomforge** (la fuente
+Cada destinatario tiene su canal establecido por **phantomorg** (la fuente
  de verdad de la organización):
 
 - **Personas** → Nostr (su `npub`) y/o Telegram (su `telegram_bot`).
 - **Humanos** → también pueden tener `npub` (Nostr), además de Telegram y/o
-  email — según su configuración en phantomforge.
+  email — según su configuración en phantomorg.
 - Contacta a cada destinatario por el canal que tenga definido (si tiene
   npub, puede ser Nostr; si no, Telegram/email).
 
@@ -178,7 +178,7 @@ pregunta si es imposible o contradictorio.
 | Sala | derivada del naming | derivada de título+fecha |
 | Sensibilidad | detectar "confidencial/privado/finanzas" | no sensible (sin contraseña) |
 | Destino (carpeta) | {% if destination_folder %}nombre de carpeta dado | `{{ destination_folder }}` ({{ destination_note }}){% else %}no agendas; pasa el indicado en la solicitud{% endif %} |
-| Canal de envío | según phantomforge por persona | Telegram (coordinación o DM) |
+| Canal de envío | según phantomorg por persona | Telegram (coordinación o DM) |
 | Duración | — | `{{ defaults.duration_min }}` min |
 
 **Regla de oro**: si falta una variable → default. Si es ambigua o

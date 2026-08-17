@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "phantommeet"
 version = "0.3.0"
-description = "Agnostic meeting capabilities layer for PhantomForge-provisioned agent personas."
+description = "Agnostic meeting capabilities layer for PhantomOrg-provisioned agent personas."
 requires-python = ">=3.10"
 dependencies = [
     "PyYAML>=6.0",

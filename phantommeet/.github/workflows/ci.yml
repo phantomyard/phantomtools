@@ -9,6 +9,10 @@ on:
   push:
     branches: [main]
 
+defaults:
+  run:
+    working-directory: phantommeet
+
 jobs:
   lint:
     name: lint
@@ -58,8 +62,8 @@ jobs:
         run: |
           cd /tmp
           pm derive-manifest \
-            --org "$GITHUB_WORKSPACE/tests/fixtures/org.smoke.yaml" \
-            --base "$GITHUB_WORKSPACE/tests/fixtures/base.smoke.yaml" \
+            --org "$GITHUB_WORKSPACE/phantommeet/tests/fixtures/org.smoke.yaml" \
+            --base "$GITHUB_WORKSPACE/phantommeet/tests/fixtures/base.smoke.yaml" \
             --out /tmp/smoke-derived.yaml
           pm validate --manifest /tmp/smoke-derived.yaml | grep -q "OK" \
             && echo "SMOKE OK: derive + validate"

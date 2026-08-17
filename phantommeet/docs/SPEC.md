@@ -8,7 +8,7 @@
 ## 1. Purpose
 
 PhantomMeet is an **agnostic capability layer** that gives AI personas of any
-PhantomForge-provisioned organization everything they need to run, join and
+PhantomOrg-provisioned organization everything they need to run, join and
 follow up on meetings:
 
 - **Participate** in meeting rooms as text-only attendees via a bridge
@@ -16,7 +16,7 @@ follow up on meetings:
 - **Transcribe** and **store** each meeting's artifacts where its responsible decides
 - **Logistics**: create/invite/open meetings from Google Calendar
 
-It is an **update package applied on top of a PhantomForge installation**: it
+It is an **update package applied on top of a PhantomOrg installation**: it
 adds knowledge, tools and configuration to the provisioned personas without
 breaking the existing installation. It is **agnostic** — it does not hardcode
 any organization, persona, bridge endpoint or storage location. Everything is
@@ -29,7 +29,7 @@ and their human users without the technicians intervening day-to-day.
 
 | Concept | Meaning |
 |---|---|
-| **Organization** | Any persona ecosystem provisioned by PhantomForge |
+| **Organization** | Any persona ecosystem provisioned by PhantomOrg |
 | **Responsible** | A directive persona that owns a domain. Decides **where** each meeting's artifacts are stored and handles the **whole process** (create, invite, open, store, transcribe) |
 | **Support persona** | A non-directive persona that contributes by **specific expertise** (coordination, domain know-how). Does not manage meetings on its own |
 | **Room** | A meeting room (e.g. Jitsi MUC) with a name following a convention |
@@ -47,7 +47,7 @@ and their human users without the technicians intervening day-to-day.
 └───────────────────────────────────────────────────────────────────┘
 
 ┌────────────────────────── Persona host ──────────────────────────┐
-│  Phantombot personas (provisioned by PhantomForge)               │
+│  Phantombot personas (provisioned by PhantomOrg)               │
 │  • Messaging network (e.g. private relay + NIP-17 gift-wraps)    │
 │  • identity (nsec), SOUL.md, MEMORY.md, kb/, memory/, tools/     │
 └───────────────────────────────────────────────────────────────────┘
@@ -153,11 +153,11 @@ infra:                       # optional — probes for `pm check-infra` (§5.2)
       host: vps                          # only run when --host vps
     - name: whisper-venv
       type: file
-      path: /opt/whisper-transcribe/venv/bin/python
+      path: /opt/example-transcribe/venv/bin/python
       host: vps
     - name: summary-env
       type: env
-      path: /opt/whisper-transcribe/.env
+      path: /opt/example-transcribe/.env
       key: DEEPSEEK_API_KEY
       host: vps
   persona_checks:            # optional — per-persona capability probes
@@ -168,10 +168,10 @@ infra:                       # optional — probes for `pm check-infra` (§5.2)
 
 See `examples/example-org.yaml` for a complete reference manifest.
 
-### 5.1 Deriving the manifest from a PhantomForge org model
+### 5.1 Deriving the manifest from a PhantomOrg org model
 
 The manifest can be **generated automatically** from the organization's
-PhantomForge org model (`org.yaml`), so the meeting capability is granted
+PhantomOrg org model (`org.yaml`), so the meeting capability is granted
 *intrinsically* to the roles declared as directive/support — no
 hand-maintained persona list to keep in sync:
 
@@ -298,7 +298,7 @@ a technician (see §10 Roadmap → “autonomy”).
 
 ## 7. Update package (what PhantomMeet applies)
 
-Applied **idempotently** to a PhantomForge persona installation:
+Applied **idempotently** to a PhantomOrg persona installation:
 
 - `kb/procedures/Meetings.md` — meeting protocol per persona
   (rendered from templates; role-aware: responsible vs support).
@@ -317,7 +317,7 @@ prompts the operator interactively:
 
 1. `discover()` scans the target for installed personas (presence of
    `identity.json`, `SOUL.md` or `phantomchat.json`) and, when available,
-   cross-references the PhantomForge org model (`organizations/<org>/org.yaml`)
+   cross-references the PhantomOrg org model (`organizations/<org>/org.yaml`)
    to annotate each persona with its org role.
 2. The operator picks who may create invitations — by number or name,
    comma-separated. The choice is persisted to the manifest as
@@ -370,12 +370,12 @@ idempotent (safe to re-run).
   credentials only on the host.
 - Artifacts removed from the host after confirmed storage.
 
-## 9. Integration with PhantomForge
+## 9. Integration with PhantomOrg
 
-- Personas are provisioned by PhantomForge (`pf build` / `pf deploy`) from an
+- Personas are provisioned by PhantomOrg (`po build` / `po deploy`) from an
   org model.
-- PhantomMeet sits **on top**: it does not modify PhantomForge itself, only the
-  deployed personas. Later, when PhantomForge is translated to English, deeper
+- PhantomMeet sits **on top**: it does not modify PhantomOrg itself, only the
+  deployed personas. Later, when PhantomOrg is translated to English, deeper
   model-level integration (meeting capabilities as org fields) becomes possible.
 
 ## 10. Roadmap
@@ -391,7 +391,7 @@ idempotent (safe to re-run).
 - **Phase 5** — GitHub publication (English) **+ self-update cycle** mirroring
   phantombot's: `pm update --check/--force/--restart` from GitHub Releases
   (SHA256-verified, cron-friendly exit codes 0/1/2). The same cycle is
-  planned for **PhantomForge** (`pf update`) — both tools will be
+  planned for **PhantomOrg** (`po update`) — both tools will be
   updateable like phantombot once published.
 
 ## 11. Infrastructure, third-party software & maintenance
@@ -408,7 +408,7 @@ care.
 | Component | Role | Minimum footprint | Notes |
 |---|---|---|---|
 | **Meeting host** | Meeting rooms, recording service, bridge | VPS: 2+ vCPU, 4+ GB RAM, 20+ GB disk | Reference deployment: Ubuntu 24.04 LTS, Apache TLS → nginx → Prosody/JVB/Jicofo/Jibri |
-| **Persona host** | Phantombot personas (provisioned by PhantomForge) | Always-on machine running the personas | Can be a desktop or laptop (reference deployment) |
+| **Persona host** | Phantombot personas (provisioned by PhantomOrg) | Always-on machine running the personas | Can be a desktop or laptop (reference deployment) |
 | **Domain + TLS** | Public URL for meeting rooms | DNS record + TLS certificate | Required for browser access; keep the certificate auto-renewal working (e.g. Let's Encrypt) |
 | **Private messaging relay** | Persona ↔ bridge encrypted DMs | Lightweight process (e.g. nostr-rs-relay) | Can co-locate with the meeting host; needs whitelist + NIP-17 gift-wrap support |
 | **Storage** | Recordings before archival | Disk on the meeting host + organization Drive | Cleaned up after confirmed upload (§11.3) |
@@ -430,7 +430,7 @@ Internet ──► 443/4443  meeting host (Jitsi web/media)
 | **nostr-rs-relay** | Private relay | Community (Rust) | The reference deployment **patches it locally** (whitelist + NIP-17 gift-wraps); upstream updates must be **re-based on the local patch** |
 | **Node.js + nostr-tools / @xmpp** | Bridge runtime and libraries | Community | Keep Node on a supported LTS; library updates can change APIs |
 | **Phantombot** | Persona runtime | Internal | Internal project; updates must not break persona configs |
-| **PhantomForge** | Persona provisioning engine | Internal | Internal project; PhantomMeet sits on top of it |
+| **PhantomOrg** | Persona provisioning engine | Internal | Internal project; PhantomMeet sits on top of it |
 | **Google Workspace** (Calendar, Drive) | Meeting logistics + artifact storage | Google | API changes; OAuth refresh tokens expire; account policies can change |
 | **Whisper** (faster-whisper, local) | Transcription / meeting summaries | Community (open source) | Self-hosted in an isolated venv on the meeting host; no API costs, no external dependency |
 | **LLM API for summaries** (user-chosen provider) | Automatic meeting summaries | External (user-chosen, e.g. DeepSeek) | Provider is **not fixed** — each deployment picks its own LLM; cost, rate limits and key rotation are the deployer's to manage. Configured via the `infra` `env` probe (e.g. `DEEPSEEK_API_KEY`) |

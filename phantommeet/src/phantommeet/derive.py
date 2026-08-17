@@ -1,4 +1,4 @@
-"""Derive a PhantomMeet manifest from a PhantomForge org model (org.yaml).
+"""Derive a PhantomMeet manifest from a PhantomOrg org model (org.yaml).
 
 The org model is the single source of truth for the organization hierarchy
 (departments, roles, actors). This module reads it and produces a complete
@@ -30,7 +30,7 @@ DEFAULT_DERIVE = {
 
 
 def load_org_model(path: str | Path) -> dict[str, Any]:
-    """Load and validate a PhantomForge org model."""
+    """Load and validate a PhantomOrg org model."""
     p = Path(path)
     if not p.exists():
         raise ManifestError(f"org model not found: {p}")
