@@ -289,11 +289,31 @@ survives every rebuild.
 
 `SOUL.md`/`IDENTITY.md`/`tools.md`/`MEMORY.md` are generated in the
 language set by `organization.default_language` in `org.yaml` (`en` and
-`es` supported today; any other value falls back to `en`). Only the fixed
-labels and phrases from the templates are translated — the real values of
-the spec (role names, departments, functions, `policies` labels) come out
-exactly as you wrote them. The CLI (`po ...`, messages and errors) is in
-English regardless of the organization's language.
+`es` supported today; any other value falls back to `en`). PhantomOrg is
+bilingual by design and defaults to English: the language is resolved
+each build with this priority — **explicit `default_language` > first
+entry in `languages` > `en`**. So an organization that declares
+explicitly `default_language: es` (or lists `es` first) is generated in
+Spanish, while any English- or unset-language organization is generated
+in English.
+
+Only the fixed labels and phrases from the templates are translated —
+the real values of the spec (role names, departments, functions,
+`policies` labels) come out exactly as you wrote them, in whatever
+language the organization keeps its data in. The CLI (`po ...`, messages
+and errors) is always in English regardless of the organization's
+language.
+
+The repo ships two real example organizations that demonstrate the
+two directions:
+
+- `organizations/aquaponics-united/org.yaml` — Spanish-speaking org,
+  `default_language: es`. Its generated personas come out in Spanish.
+- `organizations/united-capital-group/org.yaml` — English-speaking org,
+  `default_language: en`. Its generated personas come out in English.
+
+Add a new language by adding a translated block to
+`phantomorg/compiler/i18n.py` (see its docstring).
 
 ### Deploy target
 
@@ -480,9 +500,10 @@ import-audit) and the full editing cycle (remove/rename) resolved:
 - `update` (self-update from GitHub Releases: `--check` / `--force`,
   exit codes 0/1/2 cron-alertable — see `CHANGELOG.md` v0.5.0).
 
-Tests: 100+ (`unittest`, including `click.testing.CliRunner` for the CLI
-in `tests/test_cli.py`). See `CHANGELOG.md` for the detail of each
-iteration and which real gap motivated each change.
+Tests: 522 passed + 49 subtests (`unittest`, including
+`click.testing.CliRunner` for the CLI in `tests/test_cli.py`). See
+`CHANGELOG.md` for the detail of each iteration and which real gap
+motivated each change.
 
 Real pending work, not yet resolved: no PyPI packaging (only
 `pip install -e .`); `import-audit` is still a text heuristic, it doesn't

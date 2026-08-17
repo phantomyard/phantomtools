@@ -69,12 +69,12 @@ This is what currently exists in AU's 5 personas (alma, elena, paco, pepa, rober
 ### 4.2 Message envelope
 
 ```yaml
-request_id: "au-20260802-0042"     # formato definido en org.yaml
+request_id: "au-20260802-0042"     # format defined in org.yaml
 type: ESCALATE
-from: { actor: alma, role: project_lead, department: operaciones }
-to:   { actor: pepa, role: chief_of_staff, department: direccion }
-hops: 1                             # se incrementa en cada re-escalado; corta en max_hops
-trust: internal                     # internal | external | untrusted (alineado con el security perimeter de Phantombot)
+from: { actor: alma, role: project_lead, department: operations }
+to:   { actor: pepa, role: chief_of_staff, department: management }
+hops: 1                             # incremented on each re-escalation; cut off at max_hops
+trust: internal                     # internal | external | untrusted (aligned with Phantombot's security perimeter)
 payload: "..."
 ```
 
@@ -215,46 +215,46 @@ organization:
   default_language: es
 
 departments:
-  - { id: direccion,   name: "Dirección",   parent: null,      access_policy: level-3 }
-  - { id: operaciones, name: "Operaciones", parent: direccion, access_policy: level-2 }
-  - { id: formacion,   name: "Formación",   parent: direccion, access_policy: level-2 }
-  - { id: finanzas,    name: "Finanzas",    parent: direccion, access_policy: level-2 }
+  - { id: management,  name: "Management",  parent: null, access_policy: level-3 }
+  - { id: operations,  name: "Operations",  parent: management, access_policy: level-2 }
+  - { id: training,    name: "Training",    parent: management, access_policy: level-2 }
+  - { id: finance,     name: "Finance",     parent: management, access_policy: level-2 }
 
 roles:
   - id: ceo
     name: "CEO"
-    department: direccion
+    department: management
     reports_to: null
     reports_to_human: "Salvador"
-    functions: [vision, liderazgo, wikipedia_au, tools]
+    functions: [vision, leadership, wikipedia_au, tools]
     access_level: level-3
 
   - id: chief_of_staff
     name: "Chief of Staff"
-    department: direccion
+    department: management
     reports_to: ceo
-    functions: [coordinacion, escalado, seguimiento]
+    functions: [coordination, escalation, follow_up]
     access_level: level-2
 
   - id: cfo
     name: "CFO"
-    department: finanzas
+    department: finance
     reports_to: ceo
-    functions: [finanzas, reporting]
+    functions: [finance, reporting]
     access_level: level-2
 
   - id: project_lead
     name: "Project Lead"
-    department: operaciones
+    department: operations
     reports_to: chief_of_staff
-    functions: [proyectos, seguimiento_campo]
+    functions: [projects, field_coordination]
     access_level: level-2
 
   - id: training_lead
     name: "Training Lead"
-    department: formacion
+    department: training
     reports_to: chief_of_staff
-    functions: [formacion, documentacion]
+    functions: [training, documentation]
     access_level: level-2
     security_exceptions: [category-3]     # previously maintained by hand in Elena's SOUL; now explicit and auditable (resolves G2)
 
@@ -264,13 +264,13 @@ actors:
     telegram_bot: "@CEO_bot"
     tools: [email, drive, calendar, notebooklm, printing]
     actor_exceptions: [category-0]        # Salvador's absolute exception, modeled as an actor attribute, not a role one (resolves G5)
-    tone: formal-cercano
+    tone: formal-close
 
   - id: pepa
     role: chief_of_staff
     telegram_bot: "@COS_bot"
     tools: [email, drive, calendar]
-    tools_excluded: [send]                # antes era una nota suelta ("send not available"); ahora es un campo declarado (resuelve G3)
+    tools_excluded: [send]                # previously a loose note ("send not available"); now a declared field (resolves G3)
 
   - id: roberto
     role: cfo
@@ -289,21 +289,21 @@ actors:
 
 policies:
   access_levels:
-    level-3: { label: "Ejecutivo", categories: [1, 2, 3] }
-    level-2: { label: "Operativo", categories: [1, 2] }
-    level-1: { label: "Restringido", categories: [1] }
+    level-3: { label: "Executive", categories: [1, 2, 3] }
+    level-2: { label: "Operative", categories: [1, 2] }
+    level-1: { label: "Restricted", categories: [1] }
   security_categories:
-    category-0: { label: "Excepción absoluta", scope: actor, owner: "Salvador" }
-    category-1: { label: "Público / interno bajo" }
-    category-2: { label: "Confidencial" }
-    category-3: { label: "Credenciales / financiero sensible" }
+    category-0: { label: "Absolute exception", scope: actor, owner: "Salvador" }
+    category-1: { label: "Public / low-internal" }
+    category-2: { label: "Confidential" }
+    category-3: { label: "Credentials / sensitive financial" }
 
 escalation_matrix:
-  - { from: project_lead,   to: chief_of_staff, condition: "bloqueo operativo o desacuerdo de campo" }
-  - { from: training_lead,  to: chief_of_staff, condition: "contenido fuera de alcance de formación" }
-  - { from: cfo,            to: ceo,            condition: "gasto por encima del umbral de política financiera" }
-  - { from: chief_of_staff, to: ceo,            condition: "bloqueo no resuelto en su nivel" }
-  - { from: "*",            to: ceo,            condition: "excepción Category 0 solicitada", cross_department: true }
+  - { from: project_lead,   to: chief_of_staff, condition: "operational blocker or field disagreement" }
+  - { from: training_lead,  to: chief_of_staff, condition: "content outside training scope" }
+  - { from: cfo,            to: ceo,            condition: "expense above the financial policy threshold" }
+  - { from: chief_of_staff, to: ceo,            condition: "blocker unresolved at their level" }
+  - { from: "*",            to: ceo,            condition: "Category 0 exception requested", cross_department: true }
   # note: today's real route ("Roberto escalates to Paco, Salvador or Fran") resolves
   # explicitly here as "cfo → ceo"; "Salvador" and "Fran" stay out of the matrix
   # because they are people, not roles — they must be defined as `reports_to_human` or as
@@ -701,11 +701,11 @@ function build(org_spec):
         identity_md = render("identity.j2", actor, role, department)
         soul_md     = render("soul.j2", role, access, escalation, org_spec.communication)
         tools_md    = render("tools.j2", actor.tools, actor.tools_excluded)
-        memory_md   = render("memory.j2")  # semilla <2KB
+        memory_md   = render("memory.j2")  # seed <2KB
 
-        write_if_changed(actor.id, identity_md, soul_md, tools_md)  # merge por bloques FORJA
-        write_if_missing(actor.id, memory_md)  # MEMORY.md: solo si no existe
-        ensure_scaffold(actor.id)  # drawers memory/*.md + kb/ + seeds, idempotente
+        write_if_changed(actor.id, identity_md, soul_md, tools_md)  # merge by FORJA blocks
+        write_if_missing(actor.id, memory_md)  # MEMORY.md: only if it does not exist
+        ensure_scaffold(actor.id)  # memory/*.md + kb/ drawer + seeds, idempotent
 ```
 
 `write_if_changed` is key for incremental regeneration: it only rewrites files whose computed content differs from the existing one, and it respects blocks marked as manually edited (same pattern as Phantombot's `ensurePersonaScaffold`).

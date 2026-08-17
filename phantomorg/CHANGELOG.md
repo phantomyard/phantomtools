@@ -34,10 +34,10 @@ phantomchat.json compilation, full English translation, the first-class
   @Elena_AU_bot (elena).
 - **i18n:** remaining Spanish prose translated to English (forge, meet,
   docs; commits 29b629a, 9db188e).
-- **Normas v1.2–v1.5** (`compiler/norma*`): compile-time-agnostic
-  comunicación-agentes v1.2 (canales separados), v1.3 envelope de
-  protocolo anti-bucle, v1.4 regla del rid, v1.5 ciclo de vida del
-  bucle (timeout 24h, backoff 2 reintentos, rid único).
+- **Norms v1.2–v1.5** (`compiler/norma*`): compile-time-agnostic
+  agent-communication v1.2 (separate channels), v1.3 anti-loop
+  envelope, v1.4 rid rule, v1.5 loop lifecycle
+  (24h timeout, 2-retry backoff, unique rid).
 - **`phantomchat.json` compiled from org.yaml** (bridge integration,
   96ff3c2).
 - **npub schema + `po phantomchat-check` + build warnings** (89f5ad7).
