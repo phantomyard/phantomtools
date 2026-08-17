@@ -1,0 +1,65 @@
+name: CI
+
+# Required status check for branch protection on `main`.
+# The job name `pipeline` matches the phantomyard org convention so the
+# standard branch-protection ruleset (`contexts: ["pipeline"]`) applies.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install ruff + bandit
+        run: pip install ruff==0.16.2 bandit==1.9.4
+
+      - name: Ruff check (lint + style)
+        run: ruff check src tests
+
+      - name: Ruff format check
+        run: ruff format --check src tests
+
+      - name: Bandit (security)
+        run: bandit -r src -q
+
+  pipeline:
+    name: pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies (non-editable, as a real user would)
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[dev]"
+
+      - name: Run tests
+        run: python -m pytest -v
+
+      - name: Smoke test — packaged install must derive + validate a manifest
+        run: |
+          cd /tmp
+          pm derive-manifest \
+            --org "$GITHUB_WORKSPACE/tests/fixtures/org.smoke.yaml" \
+            --base "$GITHUB_WORKSPACE/tests/fixtures/base.smoke.yaml" \
+            --out /tmp/smoke-derived.yaml
+          pm validate --manifest /tmp/smoke-derived.yaml | grep -q "OK" \
+            && echo "SMOKE OK: derive + validate"

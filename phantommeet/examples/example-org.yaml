@@ -1,0 +1,206 @@
+org: example-org
+language: es
+version: 0.0.0
+bridge:
+  relay: ws://relay.example.invalid:7777
+  npub: npub1CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME
+rooms:
+  suffix: '@conference.meet.example.invalid'
+  naming: '{YYYY-MM-DD}-{HH-MM}_{topic}'
+  active_room_required: true
+roles:
+  maria: responsible
+  juan: responsible
+  pedro: lead
+  lucia: support
+permissions:
+  full:
+  - maria
+  - juan
+  scoped:
+    almaponia:
+    - pedro
+  restricted:
+    formacion:
+    - lucia
+escalation:
+  pedro: maria
+  lucia: maria
+storage:
+  recordings_dir: /var/recordings
+  drive_folder: Grabaciones
+  custodian: maria
+  meeting_folders:
+    almaponia: 01_REUNIONES_ALMAPONIA
+  decided_by: responsible
+  cleanup_after_confirm: true
+defaults:
+  title: reunion
+  time: '18:00'
+  duration_min: 60
+  recipients: []
+  sensitive: false
+legacy_kb_files:
+- kb/procedures/SalasJitsi.md
+kb_appendix:
+- '## Grabaciones — reglas
+
+
+  - **Avisar siempre** antes de grabar: "vamos a grabar la reunión" (transparencia/legal).
+
+  - Grabar por defecto en: asambleas, juntas directivas, comités con acuerdos.
+
+  - No grabar conversaciones informales salvo acuerdo explícito.
+
+  - Las grabaciones son propiedad de la organización; acceso restringido al equipo.'
+- "## Custodia (flujo post-reunión)\n\n1. El servidor genera el MP4 automáticamente.\n\
+  2. El servidor transcribe el MP4 automáticamente con **Whisper local** (faster-whisper,\
+  \ sin coste ni API).\n3. El servidor genera el **resumen** automáticamente con **DeepSeek\
+  \ API** (modelo de la organización, ~0,2 céntimos por reunión).\n4. {% if destination_owner\
+  \ %}**{{ destination_owner }}** sube el MP4, la transcripción y el resumen a Google\
+  \ Drive → carpeta `{{ destination_folder }}/` ({{ destination_note }}).{% if destination_custodian\
+  \ %} Si {{ destination_owner }} no puede, lo hace **{{ destination_custodian }}**\
+  \ (custodia de la organización).{% endif %}{% else %}La persona responsable sube\
+  \ el MP4, la transcripción y el resumen a Google Drive (la carpeta destino la indica\
+  \ la solicitud).{% endif %} El archivo se llama **igual que la sala** de la reunión\
+  \ + extensión (p. ej. `2026-08-10-18-06_asamblea_general.mp4`, `.txt`, `.resumen.md`).\n\
+  5. **Cómo subir (herramienta):** pide el listado con `grabaciones` (DM al puente)\
+  \ y sube con\n   `workspace.py drive-upload <URL-o-ruta-local> --folder <nombre-carpeta>`\
+  \ (acepta URL firmada del\n   servidor o archivo local; crea la carpeta si no existe).\
+  \ Verifica con `workspace.py drive`.\n6. Tras confirmar la subida, el MP4 se borra\
+  \ del servidor."
+- "## Rol logístico de la persona (agenda)\n\n- Las personas **responsables** agendan\
+  \ las reuniones online de toda la\n  organización con `meeting-invite.sh`.\n- Los\
+  \ **leads de proyecto** agendan las reuniones online **dentro de su\n  ámbito**\
+  \ (p. ej. `almaponia-*`) con `meeting-invite.sh`. Si la solicitud\n  es de **fuera\
+  \ de su ámbito** (otro proyecto o reunión general de la\n  organización), la **escalan\
+  \ a la persona responsable** con los parámetros\n  exactos recibidos.\n- Las personas\
+  \ de **soporte** **no agendan** reuniones online: si reciben\n  una solicitud de\
+  \ reunión online, la **escalan a la persona responsable**\n  con los parámetros\
+  \ exactos recibidos.\n- El resto de la agenda (citas, calendario, recordatorios)\
+  \ lo gestiona cada\n  persona con normalidad.\n- La persona con calendario agenda\
+  \ la reunión, genera el enlace con la convención\n  (nombre de sala = nombre del\
+  \ archivo de grabación en Drive) y lo envía por\n  Telegram/email a los participantes.\n\
+  - **Nomenclatura de sala** (unificada con la del archivo en Drive):\n  `{YYYY-MM-DD}-{HH-MM}-{nombre}`\
+  \ (p. ej. `2026-08-10-18-06_asamblea_general`).\n  Guiones solo para la fecha/hora\
+  \ (los pone la máquina); el nombre lo pone el\n  usuario y sus espacios se convierten\
+  \ en `_` (minúsculas, sin acentos).\n- **Invitaciones a personas**: se envían por\
+  \ **Telegram** (grupo de coordinación o DM)\n  con la **ficha de comunicado** (formato\
+  \ configurable en el manifest,\n  `invite.card`; tokens `%TITLE%`/`%RECIPIENTS%`/`%DATETIME%`/`%LINK%`/\n\
+  \  `%ROOM%`/`%PASSWORD_LINE%`). El formato por defecto es:\n  ```\n  \U0001F4C5\
+  \ Reunión: <título>\n  \U0001F465 Destinatarios: @pepa, @paco\n  \U0001F550 <YYYY-MM-DDTHH:MM:SS>\n\
+  \  \U0001F517 https://meet.example.invalid/<sala>\n  [\U0001F512 Contraseña: <clave>]\
+  \   (solo si la sala está protegida)\n  ```\n  La línea **`Destinatarios`** va justo\
+  \ debajo del título y usa **menciones**\n  (`@…`); si la invitación se envía por\
+  \ DM individual, el destinatario es\n  implícito y puede omitirse la línea.\n- **Solo\
+  \ la persona destinataria** (su mención aparece en `Destinatarios`) se\n  auto-programa\
+  \ y se une. Si el aviso no lleva tu mención, **no te unas ni\n  programes ningún\
+  \ task**: la invitación no es para ti.\n- La persona destinataria **programa un\
+  \ task** en phantombot para la hora de inicio\n  (ver «Unirse a reuniones» en Meetings.md)\
+  \ y se une sola al puente con\n  `join [<sala>] --nick <su-propio-nick> [--password\
+  \ <clave>]` — el nick es\n  **siempre la identidad de la persona que se une**, nunca\
+  \ la de otra.\n- Recordatorio: aviso 24h y 30min antes.\n- Post-reunión: recibe\
+  \ el MP4, la transcripción (Whisper) y el resumen (DeepSeek), se distribuye el acta.\n\
+  - Cualquier persona puede consultar este protocolo y el estado de grabaciones con\
+  \ el comando `grabaciones`."
+- '## Seguridad
+
+
+  - Reuniones sensibles (personal, finanzas, datos privados): **contraseña siempre**
+  (candado en la UI).
+
+  - No compartir enlaces de salas sensibles fuera del equipo.
+
+  - Grabaciones: nunca públicas, solo Drive de la organización.'
+- '## Ejemplos de nombres de sala
+
+
+  `2026-08-10-18-06_asamblea_general`, `2026-08-14-10-00_junta_directiva`,
+
+  `2026-08-18-17-30_comite_aguas`, `2026-08-21-09-00_almaponia_revision`.
+
+  Enlace: `https://meet.example.invalid/{nombre-sala}`.
+
+  La sala se crea sola al abrir el enlace — no hay que crear nada en el servidor.
+
+  La grabación se guarda en Drive con ese mismo nombre (+ extensión).'
+infra:
+  checks:
+  - name: python3
+    type: command
+    cmd: python3 --version
+  - name: bash
+    type: command
+    cmd: bash --version
+  - name: jitsi
+    type: http
+    url: https://meet.example.invalid
+  - name: relay
+    type: ws
+    url: ws://relay.example.invalid:7777
+  - name: bridge
+    type: http
+    url: http://127.0.0.1:8090/status
+    host: server
+  - name: whisper-venv
+    type: file
+    path: /opt/whisper-transcribe/venv/bin/python
+    host: server
+  - name: whisper-import
+    type: command
+    cmd: /opt/whisper-transcribe/venv/bin/python -c "import faster_whisper; print('faster-whisper',
+      faster_whisper.__version__)"
+    host: server
+  - name: summary-env
+    type: env
+    path: /opt/whisper-transcribe/.env
+    key: DEEPSEEK_API_KEY
+    host: server
+  - name: finalize-hook
+    type: command
+    cmd: grep -q "transcribe.py" /opt/jitsi/jibri/finalize.sh && echo "hook present"
+    host: server
+  - name: phantombot
+    type: command
+    cmd: test -x "$HOME/.local/bin/phantombot" && "$HOME/.local/bin/phantombot" --version
+      || (command -v phantombot && phantombot --version)
+    host: desktop
+invite:
+  phantombot_bin: phantombot
+  coordinator_chat: '@coordinacion'
+  meet_base_url: https://meet.example.invalid
+  send_via: phantombot-notify
+  telegram_bots:
+    maria: '@CEO_bot'
+    juan: '@CFO_bot'
+    pedro: '@ProjectLead_bot'
+    lucia: '@TrainingLead_bot'
+  roles:
+  - maria
+  - juan
+  card: '🌊 EXAMPLE ORG 🌊
+
+    ━━━━━━━━━━━━━━━━━━━━━
+
+    📅 Reunión: %TITLE%
+
+    👥 Destinatarios: %RECIPIENTS%
+
+    🕐 %DATETIME%
+
+    🔗 %LINK%
+
+    %PASSWORD_LINE%
+
+    ━━━━━━━━━━━━━━━━━━━━━
+
+    "If you want to go fast, go alone.
+
+    If you want to go far, go together"
+
+    '
+  tool:
+    template: tools/meeting-invite.sh.j2
+    dest: tools/meeting-invite.sh
+    chmod: 0o755
+tools: []

@@ -1,0 +1,249 @@
+# PhantomMeet base manifest — worked example (org-agnostic)
+#
+# This is the org-specific *base* for `pm derive-manifest`. It supplies
+# everything that is not part of the PhantomForge org model: bridge
+# endpoint, room naming, storage policy, org knowledge and the derive
+# rules (which org roles map to responsible/support + restricted prefix).
+#
+# Everything here uses placeholder values (example.invalid / example.org,
+# CHANGE_ME_*) — copy this file and replace them with your own values.
+#
+# The full manifest is generated from this + organizations/.../org.yaml:
+#
+#   pm derive-manifest \
+#       --org examples/org.example.yaml \
+#       --base examples/base.example.yaml \
+#       --out examples/example-org.yaml
+
+org: example-org            # overridden by org.yaml organization.id
+language: es                # overridden by org.yaml default_language
+version: 0.0.0
+
+bridge:
+  relay: ws://relay.example.invalid:7777
+  npub: npub1CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME
+
+rooms:
+  suffix: "@conference.meet.example.invalid"
+  naming: "{YYYY-MM-DD}-{HH-MM}_{topic}"
+  active_room_required: true
+
+storage:
+  recordings_dir: /var/recordings
+  drive_folder: "Grabaciones"
+  custodian: maria
+  meeting_folders:
+    almaponia: "01_REUNIONES_ALMAPONIA"
+  decided_by: responsible
+  cleanup_after_confirm: true
+
+# Defaults for the meeting-request variables (used when a human request omits
+# a variable — preformatted/normalized before acting). See Meetings.md
+# "Antes de actuar: comprobación de la solicitud".
+defaults:
+  title: reunion
+  time: "18:00"
+  duration_min: 60
+  recipients: []
+  sensitive: false
+
+# Meeting invitation tool — installed by `pm apply` only to the personas
+# the operator grants scheduling rights to (invite.roles is decided
+# interactively at install time via `pm apply --ask-roles`, then persisted
+# back into the manifest; there is nothing to set here).
+invite:
+  phantombot_bin: phantombot
+  coordinator_chat: "@coordinacion"
+  meet_base_url: https://meet.example.invalid
+  send_via: phantombot-notify
+  # Telegram bot handle per persona. Used by meeting-invite.sh to resolve a
+  # recipient addressed by bot handle (e.g. @CEO_bot) back to the persona
+  # name, so its auto-join task lands in the right runtime. Plain persona
+  # names (e.g. @maria) also work without this map.
+  telegram_bots:
+    maria: "@CEO_bot"
+    juan: "@CFO_bot"
+    pedro: "@ProjectLead_bot"
+    lucia: "@TrainingLead_bot"
+  # Roles granted scheduling rights (interactive decision at install time via
+  # `pm apply --ask-roles`, persisted back into the manifest). Included here
+  # so the shipped example applies headless.
+  roles: [maria, juan]
+  # Ficha de comunicado (card de invitación a reuniones). Totalmente
+  # configurable (branding: nombre, eslogan, separadores, emojis...).
+  # TOKENS OBLIGATORIOS: %TITLE%, %DATETIME%, %LINK% — si falta alguno,
+  # el manifest se rechaza al validar/aplicar. Opcionales: %RECIPIENTS%,
+  # %ROOM%, %PASSWORD_LINE% (se sustituye por la línea de contraseña, o
+  # nada si no hay). Las líneas en blanco se eliminan al enviar. Sin este
+  # campo se usa el formato integrado por idioma.
+  card: |
+    🌊 EXAMPLE ORG 🌊
+    ━━━━━━━━━━━━━━━━━━━━━
+    📅 Reunión: %TITLE%
+    👥 Destinatarios: %RECIPIENTS%
+    🕐 %DATETIME%
+    🔗 %LINK%
+    %PASSWORD_LINE%
+    ━━━━━━━━━━━━━━━━━━━━━
+    "If you want to go fast, go alone.
+    If you want to go far, go together"
+  tool:
+    template: tools/meeting-invite.sh.j2
+    dest: tools/meeting-invite.sh
+    chmod: 0o755
+
+# Derivation rules: org roles -> PhantomMeet roles.
+# Directive org roles become "responsible" (full access); scoped_responsible
+# roles become "lead" — responsible for online meetings *within their project
+# scope* (they schedule with meeting-invite.sh, escalate out-of-scope requests
+# to the responsible persona); support org roles become "support" restricted to
+# a room-name prefix (derive.restricted_prefixes) — they never schedule and
+# escalate every online-meeting request.
+derive:
+  directive_roles: [ceo, cfo]
+  scoped_responsible_roles:
+    project_lead: almaponia
+  support_roles: [training_lead]
+  restricted_prefixes:
+    training_lead: formacion
+
+# Legacy ad-hoc kb file superseded by Meetings.md (removed on apply).
+legacy_kb_files:
+  - kb/procedures/SalasJitsi.md
+
+# Infrastructure probes for `pm check-infra` (read-only).
+# All URLs/commands are org-specific; PhantomMeet itself stays agnostic.
+#   - bridge: HTTP status endpoint of the Jitsi-Nostr bridge (ok:true, xmpp:online)
+#   - relay:  private Nostr relay — real NIP-01 REQ/EOSE round-trip
+#   - jitsi:  HTTPS front door of the meeting server
+# The bridge listens on 127.0.0.1:8090 (server-only), so run `pm check-infra`
+# where each endpoint is reachable.
+infra:
+  checks:
+    # --- PhantomMeet's own prerequisites (any host that runs `pm` or
+    # hosts personas). These are the tool's minimal needs: a Python 3.10+
+    # interpreter for the CLI and bash for the deployed meeting-invite
+    # tool. Missing any of these = the host cannot run PhantomMeet.
+    - name: python3
+      type: command
+      cmd: python3 --version
+    - name: bash
+      type: command
+      cmd: bash --version
+    # --- Org-specific infrastructure probes (example: placeholder values)
+    - name: jitsi
+      type: http
+      url: https://meet.example.invalid
+    - name: relay
+      type: ws
+      url: ws://relay.example.invalid:7777
+    - name: bridge
+      type: http
+      url: http://127.0.0.1:8090/status
+      host: server
+    - name: whisper-venv
+      type: file
+      path: /opt/whisper-transcribe/venv/bin/python
+      host: server
+    - name: whisper-import
+      type: command
+      cmd: /opt/whisper-transcribe/venv/bin/python -c "import faster_whisper; print('faster-whisper', faster_whisper.__version__)"
+      host: server
+    - name: summary-env
+      type: env
+      path: /opt/whisper-transcribe/.env
+      key: DEEPSEEK_API_KEY
+      host: server
+    - name: finalize-hook
+      type: command
+      cmd: grep -q "transcribe.py" /opt/jitsi/jibri/finalize.sh && echo "hook present"
+      host: server
+    - name: phantombot
+      type: command
+      cmd: test -x "$HOME/.local/bin/phantombot" && "$HOME/.local/bin/phantombot" --version || (command -v phantombot && phantombot --version)
+      host: desktop
+
+# Org-specific knowledge appended to the generic protocol (Spanish).
+kb_appendix:
+  - |-
+    ## Grabaciones — reglas
+
+    - **Avisar siempre** antes de grabar: "vamos a grabar la reunión" (transparencia/legal).
+    - Grabar por defecto en: asambleas, juntas directivas, comités con acuerdos.
+    - No grabar conversaciones informales salvo acuerdo explícito.
+    - Las grabaciones son propiedad de la organización; acceso restringido al equipo.
+
+  - |-
+    ## Custodia (flujo post-reunión)
+
+    1. El servidor genera el MP4 automáticamente.
+    2. El servidor transcribe el MP4 automáticamente con **Whisper local** (faster-whisper, sin coste ni API).
+    3. El servidor genera el **resumen** automáticamente con **DeepSeek API** (modelo de la organización, ~0,2 céntimos por reunión).
+    4. {% if destination_owner %}**{{ destination_owner }}** sube el MP4, la transcripción y el resumen a Google Drive → carpeta `{{ destination_folder }}/` ({{ destination_note }}).{% if destination_custodian %} Si {{ destination_owner }} no puede, lo hace **{{ destination_custodian }}** (custodia de la organización).{% endif %}{% else %}La persona responsable sube el MP4, la transcripción y el resumen a Google Drive (la carpeta destino la indica la solicitud).{% endif %} El archivo se llama **igual que la sala** de la reunión + extensión (p. ej. `2026-08-10-18-06_asamblea_general.mp4`, `.txt`, `.resumen.md`).
+    5. **Cómo subir (herramienta):** pide el listado con `grabaciones` (DM al puente) y sube con
+       `workspace.py drive-upload <URL-o-ruta-local> --folder <nombre-carpeta>` (acepta URL firmada del
+       servidor o archivo local; crea la carpeta si no existe). Verifica con `workspace.py drive`.
+    6. Tras confirmar la subida, el MP4 se borra del servidor.
+
+  - |-
+    ## Rol logístico de la persona (agenda)
+
+    - Las personas **responsables** agendan las reuniones online de toda la
+      organización con `meeting-invite.sh`.
+    - Los **leads de proyecto** agendan las reuniones online **dentro de su
+      ámbito** (p. ej. `almaponia-*`) con `meeting-invite.sh`. Si la solicitud
+      es de **fuera de su ámbito** (otro proyecto o reunión general de la
+      organización), la **escalan a la persona responsable** con los parámetros
+      exactos recibidos.
+    - Las personas de **soporte** **no agendan** reuniones online: si reciben
+      una solicitud de reunión online, la **escalan a la persona responsable**
+      con los parámetros exactos recibidos.
+    - El resto de la agenda (citas, calendario, recordatorios) lo gestiona cada
+      persona con normalidad.
+    - La persona con calendario agenda la reunión, genera el enlace con la convención
+      (nombre de sala = nombre del archivo de grabación en Drive) y lo envía por
+      Telegram/email a los participantes.
+    - **Nomenclatura de sala** (unificada con la del archivo en Drive):
+      `{YYYY-MM-DD}-{HH-MM}-{nombre}` (p. ej. `2026-08-10-18-06_asamblea_general`).
+      Guiones solo para la fecha/hora (los pone la máquina); el nombre lo pone el
+      usuario y sus espacios se convierten en `_` (minúsculas, sin acentos).
+    - **Invitaciones a personas**: se envían por **Telegram** (grupo de coordinación o DM)
+      con la **ficha de comunicado** (formato configurable en el manifest,
+      `invite.card`; tokens `%TITLE%`/`%RECIPIENTS%`/`%DATETIME%`/`%LINK%`/
+      `%ROOM%`/`%PASSWORD_LINE%`). El formato por defecto es:
+      ```
+      📅 Reunión: <título>
+      👥 Destinatarios: @pepa, @paco
+      🕐 <YYYY-MM-DDTHH:MM:SS>
+      🔗 https://meet.example.invalid/<sala>
+      [🔒 Contraseña: <clave>]   (solo si la sala está protegida)
+      ```
+      La línea **`Destinatarios`** va justo debajo del título y usa **menciones**
+      (`@…`); si la invitación se envía por DM individual, el destinatario es
+      implícito y puede omitirse la línea.
+    - **Solo la persona destinataria** (su mención aparece en `Destinatarios`) se
+      auto-programa y se une. Si el aviso no lleva tu mención, **no te unas ni
+      programes ningún task**: la invitación no es para ti.
+    - La persona destinataria **programa un task** en phantombot para la hora de inicio
+      (ver «Unirse a reuniones» en Meetings.md) y se une sola al puente con
+      `join [<sala>] --nick <su-propio-nick> [--password <clave>]` — el nick es
+      **siempre la identidad de la persona que se une**, nunca la de otra.
+    - Recordatorio: aviso 24h y 30min antes.
+    - Post-reunión: recibe el MP4, la transcripción (Whisper) y el resumen (DeepSeek), se distribuye el acta.
+    - Cualquier persona puede consultar este protocolo y el estado de grabaciones con el comando `grabaciones`.
+
+  - |-
+    ## Seguridad
+
+    - Reuniones sensibles (personal, finanzas, datos privados): **contraseña siempre** (candado en la UI).
+    - No compartir enlaces de salas sensibles fuera del equipo.
+    - Grabaciones: nunca públicas, solo Drive de la organización.
+
+  - |-
+    ## Ejemplos de nombres de sala
+
+    `2026-08-10-18-06_asamblea_general`, `2026-08-14-10-00_junta_directiva`,
+    `2026-08-18-17-30_comite_aguas`, `2026-08-21-09-00_almaponia_revision`.
+    Enlace: `https://meet.example.invalid/{nombre-sala}`.
+    La sala se crea sola al abrir el enlace — no hay que crear nada en el servidor.
+    La grabación se guarda en Drive con ese mismo nombre (+ extensión).

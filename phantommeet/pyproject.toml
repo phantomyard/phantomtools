@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phantommeet"
+version = "0.3.0"
+description = "Agnostic meeting capabilities layer for PhantomForge-provisioned agent personas."
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0",
+    "Jinja2>=3.1",
+    "click>=8.1",
+]
+
+[project.scripts]
+phantommeet = "phantommeet.cli:main"
+pm = "phantommeet.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+phantommeet = ["templates/**/*"]

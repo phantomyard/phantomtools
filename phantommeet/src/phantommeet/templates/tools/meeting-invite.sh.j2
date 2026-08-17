@@ -1,0 +1,275 @@
+#!/usr/bin/env bash
+#
+# meeting-invite.sh — create a meeting invitation for PhantomMeet.
+#
+# Rendered from the PhantomMeet manifest by `pm apply`: every
+# installation-specific value below comes from the manifest (see the
+# "Installation configuration" block). This script only creates and sends
+# the *invitation*; recipients schedule their own auto-join (see
+# kb/procedures/Meetings.md).
+#
+# Usage:
+#   meeting-invite.sh --title "..." --type <type> --datetime <ISO-8601> \
+#       --recipients "@a,@b" [--topic <topic>] [--password <secret>] [--dry-run]
+#
+# Flags:
+#   --title TEXT       Meeting title (required)
+#   --type TEXT        Room type token (optional; only used if the naming
+#                      convention contains a {type} slot)
+#   --datetime ISO     Start time, ISO 8601 (required, e.g. 2026-08-10T17:00:00)
+#   --recipients LIST  Comma-separated @mentions of the recipients (required).
+#                      Recipients matching an org persona (manifest roles) get
+#                      their OWN auto-join task scheduled in their runtime;
+#                      humans just receive the invite link.
+#   --topic TEXT       Optional room topic token; when omitted, the {topic}
+#                      slot (and its leading hyphen) is dropped from the name
+#   --password SECRET  Optional room password (sent only to recipients)
+#   --dry-run          Print everything without creating tasks or sending
+#
+# Announcement card format: the manifest may define a custom card
+# (invite.card) using the tokens %TITLE%, %RECIPIENTS%, %DATETIME%,
+# %LINK%, %ROOM% and %PASSWORD_LINE% (expands to the password line, or
+# nothing when no password is set). Without invite.card, a built-in
+# language-aware format is used.
+#
+# Every message that leaves this machine goes through phantombot; this
+# script only shells out to the configured binary.
+
+set -euo pipefail
+
+# =========================================================================
+# Installation configuration (rendered from the manifest — edit per install)
+# =========================================================================
+PHANTOMBOT_BIN="{{ invite.phantombot_bin | default('phantombot') }}"
+PERSONA="{{ name }}"                      # the persona running this script
+COORD_GROUP="{{ invite.coordinator_chat | default('') }}"
+MEET_BASE_URL="{{ invite.meet_base_url | default('') }}"
+ROOM_NAMING="{{ rooms.naming | default('{YYYY-MM-DD}-{HH-MM}_{topic}') }}"
+LANGUAGE="{{ language }}"
+# Personas of this org (from the manifest roles). Auto-join tasks are only
+# scheduled for recipients that match one of these — humans just get the link.
+KNOWN_PERSONAS="{{ roles.keys() | join(' ') }}"
+# Telegram handles per persona (from invite.telegram_bots). Recipients are
+# often addressed by bot handle (e.g. @<bot_handle>); the handle is resolved
+# back to the persona name so auto-join is scheduled in the right runtime.
+{% if invite.telegram_bots is defined and invite.telegram_bots %}
+declare -A HANDLE_TO_PERSONA=(
+{% for persona, handle in invite.telegram_bots.items() %}
+  ["{{ handle | lower | replace('@', '') }}"]="{{ persona }}"
+{% endfor %})
+{% else %}
+declare -A HANDLE_TO_PERSONA=()
+{% endif %}
+# Personalized announcement card (optional). Empty string = built-in format.
+# A heredoc keeps multi-line manifests intact in the rendered script.
+CARD_TEMPLATE=$(cat <<'CARD_EOF'
+{{ invite.card | default('') }}
+CARD_EOF
+)
+# =========================================================================
+{% raw %}
+usage() {
+  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+  exit 1
+}
+
+# --- argument parsing -----------------------------------------------------
+TITLE=""
+TYPE=""
+DATETIME=""
+RECIPIENTS=""
+TOPIC=""
+PASSWORD=""
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --title) TITLE="$2"; shift 2 ;;
+    --type) TYPE="$2"; shift 2 ;;
+    --datetime) DATETIME="$2"; shift 2 ;;
+    --recipients) RECIPIENTS="$2"; shift 2 ;;
+    --topic) TOPIC="$2"; shift 2 ;;
+    --password) PASSWORD="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    *) echo "unknown option: $1" >&2; usage ;;
+  esac
+done
+
+[[ -n "$TITLE" && -n "$DATETIME" && -n "$RECIPIENTS" ]] || {
+  echo "error: --title, --datetime and --recipients are required" >&2
+  usage
+}
+
+# --- resolve the phantombot binary (skipped in --dry-run) ------------------
+# Explicit path from the manifest, PATH lookup, then ~/.local/bin install
+# location (covers non-login shells).
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if ! command -v "$PHANTOMBOT_BIN" >/dev/null 2>&1; then
+    for cand in "$HOME/.local/bin/$PHANTOMBOT_BIN" "$HOME/.local/bin/phantombot"; do
+      if [[ -x "$cand" ]]; then
+        PHANTOMBOT_BIN="$cand"
+        break
+      fi
+    done
+  fi
+  if ! command -v "$PHANTOMBOT_BIN" >/dev/null 2>&1 && [[ "$PHANTOMBOT_BIN" != /* ]]; then
+    echo "error: no se encontró el binario phantombot ($PHANTOMBOT_BIN) en PATH ni en ~/.local/bin" >&2
+    exit 1
+  fi
+fi
+
+# --- derive the room name from the naming convention ----------------------
+slug() {
+  # lowercase, no accents, spaces/symbols -> underscores, strip non [a-z0-9_]
+  echo "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed 's/á/a/g; s/é/e/g; s/í/i/g; s/ó/o/g; s/ú/u/g; s/ñ/n/g; s/ü/u/g' \
+    | sed 's/[^a-z0-9]\+/_/g' \
+    | sed 's/^_//; s/_$//'
+}
+
+YYYY="${DATETIME:0:4}"
+MM="${DATETIME:5:2}"
+DD="${DATETIME:8:2}"
+HH="${DATETIME:11:2}"
+MIN="${DATETIME:14:2}"
+
+# Build the room name from the naming convention. sed is used instead of
+# bash parameter expansion because {type} style tokens get mangled by
+# bash's brace handling in ${var//pat/rep} patterns.
+room_name="$ROOM_NAMING"
+room_name="$(echo "$room_name" | sed \
+  -e "s/{type}/$(slug "$TYPE")/g" \
+  -e "s/{DD-MM-YYYY}/$DD-$MM-$YYYY/g" \
+  -e "s/{HH-MM}/$HH-$MIN/g" \
+  -e "s/{YYYY-MM-DD}/$YYYY-$MM-$DD/g" \
+  -e "s/{YYYY}/$YYYY/g" \
+  -e "s/{MM}/$MM/g" \
+  -e "s/{DD}/$DD/g")"
+if [[ -n "$TOPIC" ]]; then
+  room_name="$(echo "$room_name" | sed "s/{topic}/$(slug "$TOPIC")/g")"
+else
+  # Drop the {topic} slot together with its leading hyphen.
+  room_name="$(echo "$room_name" | sed 's/-{topic}//; s/{topic}//')"
+fi
+# any remaining {token} collapses to 'x' (generic fallback)
+room_name="$(echo "$room_name" | sed 's/{[^}]*}/x/g')"
+
+# --- build the invitation text --------------------------------------------
+# Custom card from the manifest (invite.card) wins; the built-in format is
+# the fallback. Runtime values are substituted literally (%TOKEN% → value);
+# blank lines are dropped so an empty %PASSWORD_LINE% leaves no hole.
+if [[ -n "$CARD_TEMPLATE" ]]; then
+  card_text="$CARD_TEMPLATE"
+  card_text="${card_text//%TITLE%/$TITLE}"
+  card_text="${card_text//%RECIPIENTS%/$RECIPIENTS}"
+  card_text="${card_text//%DATETIME%/$DATETIME}"
+  card_text="${card_text//%LINK%/$MEET_BASE_URL/$room_name}"
+  card_text="${card_text//%ROOM%/$room_name}"
+  if [[ -n "$PASSWORD" ]]; then
+    if [[ "$LANGUAGE" == "es" ]]; then
+      card_text="${card_text//%PASSWORD_LINE%/🔒 Contraseña: $PASSWORD}"
+    else
+      card_text="${card_text//%PASSWORD_LINE%/🔒 Password: $PASSWORD}"
+    fi
+  else
+    card_text="${card_text//%PASSWORD_LINE%/}"
+  fi
+  card_text="$(printf '%s\n' "$card_text" | sed '/^[[:space:]]*$/d')"
+  invite_text="$card_text"
+else
+  if [[ "$LANGUAGE" == "es" ]]; then
+    INVITE_HEADER="📅 Reunión: ${TITLE}"
+    INVITE_RECIPIENTS="👥 Destinatarios: ${RECIPIENTS}"
+    INVITE_TIME="🕐 ${DATETIME}"
+    INVITE_LINK="🔗 ${MEET_BASE_URL}/${room_name}"
+    if [[ -n "$PASSWORD" ]]; then
+      INVITE_PASSWORD="🔒 Contraseña: ${PASSWORD}"
+    fi
+  else
+    INVITE_HEADER="📅 Meeting: ${TITLE}"
+    INVITE_RECIPIENTS="👥 Recipients: ${RECIPIENTS}"
+    INVITE_TIME="🕐 ${DATETIME}"
+    INVITE_LINK="🔗 ${MEET_BASE_URL}/${room_name}"
+    if [[ -n "$PASSWORD" ]]; then
+      INVITE_PASSWORD="🔒 Password: ${PASSWORD}"
+    fi
+  fi
+
+  invite_text="${INVITE_HEADER}
+${INVITE_RECIPIENTS}
+${INVITE_TIME}
+${INVITE_LINK}"
+  [[ -n "${INVITE_PASSWORD:-}" ]] && invite_text="${invite_text}
+${INVITE_PASSWORD}"
+fi
+
+# --- schedule auto-join tasks for every recipient that is an org persona ---
+# Each recipient that matches a known persona gets its OWN task, created in
+# that persona's runtime (phantombot persona <X> --yes … then restore).
+# Humans (non-persona recipients) get the invite link and join manually.
+join_task_ids=()
+for rec in ${RECIPIENTS//,/ }; do
+  rec="${rec#@}"
+  [[ -z "$rec" ]] && continue
+  # Resolve handle -> persona: accept the plain persona name (case-insensitive)
+  # or any configured Telegram handle (e.g. @<bot_handle> -> alma).
+  persona=""
+  rec_lc="${rec,,}"
+  if [[ " $KNOWN_PERSONAS " == *" $rec_lc "* ]]; then
+    persona="$rec_lc"
+  elif [[ -n "${HANDLE_TO_PERSONA[$rec_lc]:-}" ]]; then
+    persona="${HANDLE_TO_PERSONA[$rec_lc]}"
+  fi
+  if [[ -n "$persona" ]]; then
+    rec="$persona"
+    if [[ "$LANGUAGE" == "es" ]]; then
+      task_prompt="Reunión ${room_name}: envíame al puente: join [${room_name}] --nick ${rec}"
+      [[ -n "$PASSWORD" ]] && task_prompt="${task_prompt} --password ${PASSWORD}"
+      task_desc="Reunión ${TITLE} (auto-join ${rec})"
+    else
+      task_prompt="Meeting ${room_name}: tell the bridge: join [${room_name}] --nick ${rec}"
+      [[ -n "$PASSWORD" ]] && task_prompt="${task_prompt} --password ${PASSWORD}"
+      task_desc="Meeting ${TITLE} (auto-join ${rec})"
+    fi
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      echo "[dry-run] would schedule (persona ${rec}): ${PHANTOMBOT_BIN} persona ${rec} --yes && ${PHANTOMBOT_BIN} task add \"${task_prompt}\" \"${task_desc}\" --at ${DATETIME}"
+    else
+      "${PHANTOMBOT_BIN}" persona "${rec}" --yes >/dev/null 2>&1 || {
+        echo "error: no se pudo cambiar a la persona ${rec}" >&2
+        continue
+      }
+      task_id="$("${PHANTOMBOT_BIN}" task add "${task_prompt}" "${task_desc}" --at "${DATETIME}" 2>&1)"
+      echo "scheduled auto-join task (persona ${rec}): ${task_id}"
+      join_task_ids+=("${rec}:${task_id}")
+      "${PHANTOMBOT_BIN}" persona "${PERSONA}" --yes >/dev/null 2>&1 || true
+    fi
+  fi
+done
+# Restore the original persona if the loop above changed it (safety net).
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  "${PHANTOMBOT_BIN}" persona "${PERSONA}" --yes >/dev/null 2>&1 || true
+fi
+
+# --- send the invitation to the coordination group --------------------------
+if [[ -n "$COORD_GROUP" ]]; then
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "[dry-run] would notify: ${PHANTOMBOT_BIN} notify --message \"${invite_text}\" --persona ${PERSONA}"
+  else
+    "${PHANTOMBOT_BIN}" notify --message "${invite_text}" --persona "${PERSONA}"
+    echo "invitation sent to ${COORD_GROUP}"
+  fi
+else
+  echo "warning: invite.coordinator_chat is empty — invitation not sent (set it in the manifest)"
+fi
+
+# --- summary ----------------------------------------------------------------
+echo "---"
+echo "room       : ${room_name}"
+echo "invite     :"
+echo "${invite_text}"
+if [[ "${#join_task_ids[@]}" -gt 0 ]]; then
+  echo "tasks      : ${join_task_ids[*]}"
+fi
+exit 0
+{% endraw %}

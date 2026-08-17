@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# phantommeet — run PhantomMeet from the repo (the single source of truth).
+#
+# This wrapper is symlinked into ~/.local/bin by install.sh. It resolves its
+# own real path (through the symlink) and runs the CLI straight from the repo,
+# so an edit + re-run of install.sh is all it takes to pick up changes — no
+# pip reinstall required. Uses the repo venv when present, else system python3.
+#
+set -euo pipefail
+
+# Prefer a global python3 for the realpath resolution when available; a
+# portable readlink loop (no GNU-only -f) covers environments without one,
+# so a repo with its own .venv still works with no system python3 at all.
+py="$(command -v python3 || true)"
+
+if [[ -n "$py" ]]; then
+    here="$(cd "$(dirname "$("$py" -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")/.." && pwd)"
+else
+    _target="${BASH_SOURCE[0]}"
+    while [[ -L "$_target" ]]; do
+        _dir="$(cd "$(dirname "$_target")" && pwd)"
+        _target="$(readlink "$_target")"
+        if [[ "$_target" != /* ]]; then
+            _target="$_dir/$_target"
+        fi
+    done
+    here="$(cd "$(dirname "$_target")/.." && pwd)"
+fi
+
+# Repo venv wins over the global interpreter.
+if [[ -x "$here/.venv/bin/python" ]]; then
+    py="$here/.venv/bin/python"
+elif [[ -z "${py:-}" ]]; then
+    echo "phantommeet: no Python interpreter found — install python3 or create the repo venv (.venv/bin/python)" >&2
+    exit 1
+fi
+
+# Repo root on sys.path so `python -m phantommeet.cli` works from anywhere.
+export PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}"
+
+exec "$py" -m phantommeet.cli "$@"
