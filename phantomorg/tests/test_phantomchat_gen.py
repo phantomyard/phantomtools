@@ -67,7 +67,7 @@ class TestPhantomchatGeneration(unittest.TestCase):
         spec, _ = validate_org(AU_ORG)
         actors = {a.id: a for a in spec.actors}
 
-        for actor_id, actor in actors.items():
+        for actor in actors.values():
             pc = phantomchat_config(spec, actor)
             self.assertIsNotNone(pc)
             # Relays: private first, then the 5 public ones.
@@ -162,7 +162,7 @@ class TestPhantomchatGeneration(unittest.TestCase):
             spec = load_org_yaml(org)
             with tempfile.TemporaryDirectory() as tmp2:
                 out_dir = Path(tmp2)
-                written = build(spec, out_dir)
+                build(spec, out_dir)
                 self.assertFalse(
                     (out_dir / "a" / PHANTOMCHAT_FILENAME).exists()
                 )

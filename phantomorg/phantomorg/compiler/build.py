@@ -41,7 +41,7 @@ from .access import merge_access
 from .blocks import has_blocks, merge_content
 from .errors import CompileError
 from .escalation import escalation_paths_for
-from .humans import HUMANS_FILENAME, write_humans
+from .humans import write_humans
 from .i18n import available_languages, get_strings
 from .phantomchat_gen import PHANTOMCHAT_FILENAME, phantomchat_config
 from .request_id import resolve_request_id_format

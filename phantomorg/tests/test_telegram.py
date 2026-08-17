@@ -325,7 +325,6 @@ class TelegramCheckCliTestCase(unittest.TestCase):
         self.tmp.cleanup()
 
     def _invoke(self, *extra):
-        from phantomorg.compiler.telegram import _getme
 
         fake = FakeGetMe(dict(self.tokens))
         with unittest.mock.patch(
@@ -361,7 +360,6 @@ class TelegramCheckCliTestCase(unittest.TestCase):
         tmp_org = self.root / "org-drift.yaml"
         tmp_org.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
 
-        from phantomorg.compiler.telegram import _getme
 
         fake = FakeGetMe(dict(self.tokens))
         with unittest.mock.patch(

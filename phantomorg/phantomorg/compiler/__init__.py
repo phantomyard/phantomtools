@@ -12,10 +12,10 @@ from .i18n import available_languages, get_strings
 from .request_id import resolve_request_id_format
 
 __all__ = [
+    "CompileError",
     "available_languages",
     "build",
     "build_actor",
-    "CompileError",
     "ensure_scaffold",
     "get_strings",
     "resolve_lang",

@@ -69,11 +69,11 @@ class TestCompilerAU(unittest.TestCase):
 
     def test_build_without_humans_writes_no_registry(self):
         """An org without a humans block builds no HUMANS.md."""
-        import copy
+
+        import yaml
 
         from phantomorg.spec.model import OrgSpec
         from phantomorg.spec.shape_validator import validate_shape
-        import yaml
 
         with open(AU_ORG, encoding="utf-8") as f:
             doc = yaml.safe_load(f)

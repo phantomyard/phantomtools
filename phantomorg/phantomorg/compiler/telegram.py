@@ -205,7 +205,7 @@ def _getme(token: str, timeout: float) -> tuple[str | None, str]:
     url = f"{TELEGRAM_API}/bot{token}/getMe"
     req = urllib.request.Request(url, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — fixed https URL
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
         return None, f"getMe failed: {e}"
@@ -236,7 +236,7 @@ def verify_telegram(
         config = _load_toml(config_path)
     except OSError as e:
         raise TelegramError(f"cannot read config: {e}") from e
-    except Exception as e:  # noqa: BLE001 — tomllib raises TOMLDecodeError
+    except Exception as e:
         raise TelegramError(f"cannot parse config {config_path}: {e}") from e
 
     state: dict = {}

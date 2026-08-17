@@ -42,16 +42,15 @@ def check_role_hierarchy_cycles(spec: OrgSpec) -> list[str]:
         color[node] = GRAY
         stack.append(node)
         parent = edges.get(node)
-        if parent is not None:
-            if parent in color:
-                if color[parent] == GRAY:
-                    start = stack.index(parent)
-                    cycle = stack[start:] + [parent]
-                    problems.append(
-                        "roles: reports_to cycle detected: " + " -> ".join(cycle)
-                    )
-                elif color[parent] == WHITE:
-                    visit(parent)
+        if parent is not None and parent in color:
+            if color[parent] == GRAY:
+                start = stack.index(parent)
+                cycle = stack[start:] + [parent]
+                problems.append(
+                    "roles: reports_to cycle detected: " + " -> ".join(cycle)
+                )
+            elif color[parent] == WHITE:
+                visit(parent)
             # parent not in color => references a non-existent role, which
             # is a different error that check_references already reports
             # ("roles.<id>: reports_to '<x>' does not exist").

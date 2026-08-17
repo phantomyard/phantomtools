@@ -32,8 +32,8 @@ def render_humans(spec: OrgSpec) -> str:
         "",
         f"Organization: `{org.id}`",
         "",
-        "Humans are external counterparts (not personas). Telegram user ids "
-        "and Nostr npubs are filled in as they get registered.",
+        ("Humans are external counterparts (not personas). Telegram user ids "
+         "and Nostr npubs are filled in as they get registered"),
         "",
         "| id | name | role | telegram_user_id | npub |",
         "|---|---|---|---|---|",
