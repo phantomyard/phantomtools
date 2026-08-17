@@ -47,7 +47,6 @@ except ImportError:  # Python < 3.11
 
 DEFAULT_REPO = "salvaalba-dev/phantomtools"
 UPDATE_REPO_ENV = "PHANTOMORG_UPDATE_REPO"
-UPDATE_REPO_ENV_LEGACY = "PHANTOMFORGE_UPDATE_REPO"
 # Marker file left in the repo root between `git merge` and a successful
 # `pip install -e .` refresh. A crash (SIGKILL, power loss) in that window
 # would otherwise leave the venv stale with no way to notice — a later
@@ -525,7 +524,6 @@ def run_update(
     repo = (
         repo_override
         or os.environ.get(UPDATE_REPO_ENV)
-        or os.environ.get(UPDATE_REPO_ENV_LEGACY)
         or origin_repo
     )
     if not repo:

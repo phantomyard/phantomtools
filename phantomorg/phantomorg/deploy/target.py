@@ -59,7 +59,6 @@ DEFAULT_PERSONAS_DIR = Path.home() / ".local/share/phantombot/personas"
 
 # Environment variable to override the deploy target without flags.
 ENV_TARGET_DIR = "PHANTOMORG_TARGET_DIR"
-ENV_TARGET_DIR_LEGACY = "PHANTOMFORGE_TARGET_DIR"
 
 
 def default_personas_dir() -> Path:
@@ -68,10 +67,7 @@ def default_personas_dir() -> Path:
     Priority: $PHANTOMORG_TARGET_DIR (if set and non-empty) →
     DEFAULT_PERSONAS_DIR.
     """
-    env_dir = (
-        os.environ.get(ENV_TARGET_DIR, "").strip()
-        or os.environ.get(ENV_TARGET_DIR_LEGACY, "").strip()
-    )
+    env_dir = os.environ.get(ENV_TARGET_DIR, "").strip()
     if env_dir:
         return Path(env_dir).expanduser()
     return DEFAULT_PERSONAS_DIR
