@@ -9,7 +9,7 @@ version: 0.0.0
 
 bridge:
   relay: ws://example.invalid:7777
-  npub: npub1placeholderplaceholderplaceholderplaceholderplaceholderplace
+  npub: npub1qh7upcrg0l3h88yx9tkggept8x552l0tgl303fen9s7vrxn6dyzs5tn0nu
 
 rooms:
   suffix: "@conference.example.invalid"
@@ -17,11 +17,11 @@ rooms:
   active_room_required: true
 
 storage:
-  recordings_dir: /var/recordings
+  recordings_dir: /tmp/phantommeet-recordings
   drive_folder: Grabaciones
   custodian: maria
   meeting_folders:
-    almaponia: "01_REUNIONES_GO"
+    example-project: "example-meetings"
   decided_by: responsible
   cleanup_after_confirm: true
 
@@ -51,7 +51,7 @@ invite:
 derive:
   directive_roles: [ceo, cfo]
   scoped_responsible_roles:
-    project_lead: almaponia
+    project_lead: example-project
   support_roles: [training_lead]
   restricted_prefixes:
     training_lead: formacion

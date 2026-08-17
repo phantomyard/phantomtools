@@ -192,7 +192,7 @@ derive:
   directive_roles: [ceo, chief_of_staff, cfo]   # → responsible (full access)
   support_roles: [project_lead, training_lead]  # → support (restricted)
   restricted_prefixes:
-    project_lead: almaponia    # support room-name prefix per role
+    project_lead: example-project    # support room-name prefix per role
     training_lead: formacion
 ```
 

@@ -126,7 +126,7 @@ Para responder a un mensaje de sala `[sala] emisor: texto`, usa la herramienta `
 ## Grabaciones y transcripción
 
 - Las reuniones se graban **automáticamente** en el servidor (VPS) → carpeta
-  `{{ storage.recordings_dir }}` (`/var/recordings` por defecto).
+  `{{ storage.recordings_dir }}` (`/tmp/phantommeet-recordings` por defecto).
 - Comando **`grabaciones`** (DM al puente) → lista las grabaciones de esa
   carpeta (nombre, tamaño, fecha).
 - La **transcripción** (Whisper local) y el **resumen** (DeepSeek) se generan

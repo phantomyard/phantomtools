@@ -126,7 +126,7 @@ To reply to a room message `[sala] sender: text`, use the `sala-send` tool:
 ## Recordings & transcription
 
 - Meetings are recorded **automatically** on the server (VPS) → folder
-  `{{ storage.recordings_dir }}` (`/var/recordings` by default).
+  `{{ storage.recordings_dir }}` (`/tmp/phantommeet-recordings` by default).
 - Command **`grabaciones`** (DM to the bridge) → lists the recordings in that
   folder (name, size, date).
 - The **transcription** (local Whisper) and **summary** (DeepSeek) are

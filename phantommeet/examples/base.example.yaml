@@ -21,7 +21,7 @@ version: 0.0.0
 
 bridge:
   relay: ws://relay.example.invalid:7777
-  npub: npub1CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME
+  npub: npub1qh7upcrg0l3h88yx9tkggept8x552l0tgl303fen9s7vrxn6dyzs5tn0nu
 
 rooms:
   suffix: "@conference.meet.example.invalid"
@@ -29,11 +29,11 @@ rooms:
   active_room_required: true
 
 storage:
-  recordings_dir: /var/recordings
+  recordings_dir: /tmp/phantommeet-recordings
   drive_folder: "Grabaciones"
   custodian: maria
   meeting_folders:
-    almaponia: "01_REUNIONES_ALMAPONIA"
+    example-project: "example-meetings"
   decided_by: responsible
   cleanup_after_confirm: true
 
@@ -102,7 +102,7 @@ invite:
 derive:
   directive_roles: [ceo, cfo]
   scoped_responsible_roles:
-    project_lead: almaponia
+    project_lead: example-project
   support_roles: [training_lead]
   restricted_prefixes:
     training_lead: formacion
@@ -191,7 +191,7 @@ kb_appendix:
     - Las personas **responsables** agendan las reuniones online de toda la
       organización con `meeting-invite.sh`.
     - Los **leads de proyecto** agendan las reuniones online **dentro de su
-      ámbito** (p. ej. `almaponia-*`) con `meeting-invite.sh`. Si la solicitud
+      ámbito** (p. ej. `example-project-*`) con `meeting-invite.sh`. Si la solicitud
       es de **fuera de su ámbito** (otro proyecto o reunión general de la
       organización), la **escalan a la persona responsable** con los parámetros
       exactos recibidos.
@@ -243,7 +243,7 @@ kb_appendix:
     ## Ejemplos de nombres de sala
 
     `2026-08-10-18-06_asamblea_general`, `2026-08-14-10-00_junta_directiva`,
-    `2026-08-18-17-30_comite_aguas`, `2026-08-21-09-00_almaponia_revision`.
+    `2026-08-18-17-30_comite_aguas`, `2026-08-21-09-00_example_project_revision`.
     Enlace: `https://meet.example.invalid/{nombre-sala}`.
     La sala se crea sola al abrir el enlace — no hay que crear nada en el servidor.
     La grabación se guarda en Drive con ese mismo nombre (+ extensión).

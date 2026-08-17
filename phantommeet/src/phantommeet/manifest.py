@@ -79,13 +79,13 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
     # automatically (fixed per deployment), and the default destination
     # folder in Drive where recordings are uploaded (default of the
     # "Destino" variable — the responsible can override it per meeting).
-    raw["storage"].setdefault("recordings_dir", "/var/recordings")
+    raw["storage"].setdefault("recordings_dir", "/tmp/phantommeet-recordings")
     raw["storage"].setdefault("drive_folder", "Grabaciones")
     # Persona that performs Drive custody for org-wide meetings (fallback for
     # scoped leads is the same custodian). Empty means "org responsible".
     raw["storage"].setdefault("custodian", "")
     # Per-scope meeting folders: a lead answers with their own project's
-    # folder (e.g. almaponia -> 01_REUNIONES_GO), not the org-wide one.
+    # folder (e.g. example-project -> example-meetings), not the org-wide one.
     raw["storage"].setdefault("meeting_folders", {})
     if not isinstance(raw["storage"]["meeting_folders"], dict):
         raise ManifestError("storage.meeting_folders must be a mapping")

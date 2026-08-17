@@ -3,7 +3,7 @@ language: es
 version: 0.0.0
 bridge:
   relay: ws://relay.example.invalid:7777
-  npub: npub1CHANGE_ME_CHANGE_ME_CHANGE_ME_CHANGE_ME
+  npub: npub1qh7upcrg0l3h88yx9tkggept8x552l0tgl303fen9s7vrxn6dyzs5tn0nu
 rooms:
   suffix: '@conference.meet.example.invalid'
   naming: '{YYYY-MM-DD}-{HH-MM}_{topic}'
@@ -18,7 +18,7 @@ permissions:
   - maria
   - juan
   scoped:
-    almaponia:
+    example-project:
     - pedro
   restricted:
     formacion:
@@ -27,11 +27,11 @@ escalation:
   pedro: maria
   lucia: maria
 storage:
-  recordings_dir: /var/recordings
+  recordings_dir: /tmp/phantommeet-recordings
   drive_folder: Grabaciones
   custodian: maria
   meeting_folders:
-    almaponia: 01_REUNIONES_ALMAPONIA
+    example-project: example-meetings
   decided_by: responsible
   cleanup_after_confirm: true
 defaults:
@@ -72,7 +72,7 @@ kb_appendix:
 - "## Rol logístico de la persona (agenda)\n\n- Las personas **responsables** agendan\
   \ las reuniones online de toda la\n  organización con `meeting-invite.sh`.\n- Los\
   \ **leads de proyecto** agendan las reuniones online **dentro de su\n  ámbito**\
-  \ (p. ej. `almaponia-*`) con `meeting-invite.sh`. Si la solicitud\n  es de **fuera\
+  \ (p. ej. `example-project-*`) con `meeting-invite.sh`. Si la solicitud\n  es de **fuera\
   \ de su ámbito** (otro proyecto o reunión general de la\n  organización), la **escalan\
   \ a la persona responsable** con los parámetros\n  exactos recibidos.\n- Las personas\
   \ de **soporte** **no agendan** reuniones online: si reciben\n  una solicitud de\
@@ -117,7 +117,7 @@ kb_appendix:
 
   `2026-08-10-18-06_asamblea_general`, `2026-08-14-10-00_junta_directiva`,
 
-  `2026-08-18-17-30_comite_aguas`, `2026-08-21-09-00_almaponia_revision`.
+  `2026-08-18-17-30_comite_aguas`, `2026-08-21-09-00_example_project_revision`.
 
   Enlace: `https://meet.example.invalid/{nombre-sala}`.
 

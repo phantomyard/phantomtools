@@ -67,7 +67,7 @@ def test_derive_then_validate_smoke_org(tmp_path: Path) -> None:
     # permissions: three tiers — full, scoped (prefix-scoped leads), restricted.
     assert manifest["permissions"] == {
         "full": ["maria", "juan"],
-        "scoped": {"almaponia": ["pedro"]},
+        "scoped": {"example-project": ["pedro"]},
         "restricted": {"formacion": ["lucia"]},
     }
     assert manifest["roles"] == {
@@ -122,7 +122,7 @@ def test_meetings_md_renders_explicit_escalation_for_support(tmp_path: Path) -> 
     assert "`@<persona> <texto>`" in meetings
     assert "`join [<sala>] --nick <tu-nick> [--password ***]`" in meetings
     # Recordings: automatic VPS dir + Drive destination default.
-    assert "`/var/recordings`" in meetings
+    assert "`/tmp/phantommeet-recordings`" in meetings
     # Support does not schedule: no destination folder for them.
     assert "no agendas; pasa el indicado en la solicitud" in meetings
     assert "`Grabaciones`" not in meetings
@@ -172,7 +172,7 @@ def test_meetings_md_renders_scoped_responsible_for_lead(tmp_path: Path) -> None
     )
     # Scoped responsible: can schedule within scope.
     assert "Eres **responsable de las reuniones online dentro de tu ámbito**" in meetings
-    assert "**'almaponia-*'**: las agendas con `meeting-invite.sh`" in meetings
+    assert "**'example-project-*'**: las agendas con `meeting-invite.sh`" in meetings
     # Out-of-scope escalates to the concrete persona.
     assert "Las reuniones fuera de tu ámbito escalan a **maria**." in meetings
     # Lead must NOT get the support "No agendes" rule.
@@ -185,11 +185,11 @@ def test_meetings_md_renders_scoped_responsible_for_lead(tmp_path: Path) -> None
     assert "Eres responsable de las reuniones online **dentro de tu ámbito**" in meetings
     # Destination is per-scope: the lead answers with their project's folder,
     # not the org-wide recordings folder.
-    assert "`01_REUNIONES_GO` (la carpeta de reuniones de tu ámbito en Drive)" in meetings
+    assert "`example-meetings` (la carpeta de reuniones de tu ámbito en Drive)" in meetings
     assert "`Grabaciones`" not in meetings
     # Custody: the lead uploads her scope's recordings; org custodian is backup.
     assert "**Pedro** sube el MP4" in meetings
-    assert "carpeta `01_REUNIONES_GO/`" in meetings
+    assert "carpeta `example-meetings/`" in meetings
     assert "lo hace **Maria** (custodia de la organización)" in meetings
 
 
@@ -264,13 +264,13 @@ def test_meeting_invite_resolves_bot_handles_to_personas() -> None:
                 "bash",
                 str(script),
                 "--title",
-                "ALMAPONIA Coordinación",
+                "Example Project Coordinación",
                 "--topic",
-                "almaponia_coordinacion",
+                "example_project_coordinacion",
                 "--datetime",
                 "2026-08-11T09:00:00+02:00",
                 "--recipients",
-                "@Salvador,@CEO_bot,@maria,@ProjectLead_bot,@Unknown_bot",
+                "@President_bot,@CEO_bot,@maria,@ProjectLead_bot,@Unknown_bot",
                 "--dry-run",
             ],
             capture_output=True,
