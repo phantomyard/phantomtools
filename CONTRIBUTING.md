@@ -93,10 +93,13 @@ Build a tree from a snapshot, then swap the directory in, and everything written
 between snapshot and swap is silently gone — the process reports nothing, because
 from its side the writes succeeded.
 
-`vault.sqlite` makes that worse: it runs in SQLite's default rollback-journal mode
-(the WAL pragma is set on the memory index and the task DB, not the vault), so a
-swap mid-transaction can strand a `-journal` beside a stale database and desync the
-only copy of the secrets from the `identity.json` that decrypts it.
+`vault.sqlite` makes that worse: it runs in rollback-journal mode *by deliberate
+choice, not by default* — `vault.ts` sets `PRAGMA journal_mode = DELETE` explicitly
+so the whole vault stays in one file at rest and the persona folder keeps its
+"copy the folder and the secrets travel" property (WAL is set on the memory index
+and the task DB, not here). The consequence for you: a swap mid-transaction can
+strand a `-journal` beside a stale database and desync the only copy of the secrets
+from the `identity.json` that decrypts it.
 
 If your tool requires the persona to be stopped, it must **enforce** that (check
 the run lock, refuse otherwise), not assume it.
