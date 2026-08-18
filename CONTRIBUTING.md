@@ -24,7 +24,7 @@ usually not the person who wrote the tool.
 
 1. [The persona directory is live state, not a build artifact](#1-the-persona-directory-is-live-state-not-a-build-artifact)
 2. [The memory system is the substrate — emit into it, don't rebuild it](#2-the-memory-system-is-the-substrate--emit-into-it-dont-rebuild-it)
-3. [KB notes must conform to OKF, or they are invisible](#3-kb-notes-must-conform-to-okf-or-they-are-invisible)
+3. [KB notes must conform to OKF, or they lose their ranking signals](#3-kb-notes-must-conform-to-okf-or-they-lose-their-ranking-signals)
 4. [The security perimeter: two tiers, and it stays simple because it's two tiers](#4-the-security-perimeter-two-tiers-and-it-stays-simple-because-its-two-tiers)
 5. [Enshittification — what we mean by it](#5-enshittification--what-we-mean-by-it)
 6. [PR checklist](#6-pr-checklist)
@@ -41,9 +41,7 @@ inventory of what lives there:
 |---|---|---|
 | `identity.json` | runtime | The persona's nsec. **Also the vault's key-derivation root.** |
 | `vault.sqlite` | runtime | Every secret the persona holds, AES-256-GCM at rest |
-| `live-memory.sqlite` (+ `-wal`, `-shm`) | runtime | Search index and turn history, **held open in WAL by a running process** |
-| `state.json` | runtime | Active persona, channel state |
-| `phantomchat.json` | runtime | Relay cache, allowlist, TOFU state |
+| `phantomchat.json` | runtime | Relay cache, allowlist (`allowed_npubs`), TOFU state |
 | `memory/YYYY-MM-DD.md` | the phantom | Daily journal, written as work happens |
 | `memory/*.md` drawers | the nightly | Distilled people / decisions / lessons / commitments / norms |
 | `kb/**` | the phantom + nightly | The knowledge graph |
@@ -52,6 +50,11 @@ inventory of what lives there:
 Note the shape of that table: **most of it is authored after deploy, by files your
 tool has never heard of.** Any operation whose correctness depends on *"the tree I
 produce is the tree that should be there"* is destructive by construction.
+
+(Turn history and the search index are *not* in here — at `ae95d5f` they live at
+`$XDG_DATA_HOME/phantombot/memory.sqlite` and `$XDG_DATA_HOME/phantombot/memory-index/`,
+and `state.json` is global too. That's a smaller blast radius than the persona dir,
+not a licence: the files above are the irreplaceable ones.)
 
 ### 1.1 `identity.json` has a blast radius most people don't price in
 
@@ -70,17 +73,30 @@ Two corollaries that have already bitten real PRs:
 - **"It's archived first" is not a mitigation** for a file with that blast radius.
   Archives get pruned; `--force` exists; the archive and the live vault desync the
   moment either is touched.
-- **Rotating the identity rotates the npub**, which empties the effective allowlist.
-  With `tofu: true`, phantombot then locks trust to **the first stranger who DMs it**
-  (`src/channels/phantomchat/server.ts`). A key-management accident becomes a
-  principal-takeover.
+- **Rotating the identity rotates the npub**, so every counterparty that allowlisted
+  the old one stops recognising this persona — and every counterparty allowlist that
+  still holds it is now stale. It does **not** empty this persona's own inbound
+  allowlist: `allowed_npubs` is loaded independently from `phantomchat.json`.
+  That file has its own trap, though — TOFU arms only when the allowlist is
+  **already empty** *and* `tofu: true`, and then locks trust to the first sender
+  (`server.ts:233-237`). So a tool that regenerates or truncates `phantomchat.json`
+  can hand principal trust to the first stranger who DMs. Two separate files, two
+  separate blast radii; don't own either.
 
 ### 1.2 The directory swap also races the running process
 
-phantombot holds `live-memory.sqlite` open in WAL mode. Replacing the *parent
-directory* leaves the live process writing through an fd into the now-archived
-inode while its `-wal`/`-shm` siblings move out from under it. The result is
-silent lost writes and split state — **no error is raised anywhere.**
+The persona directory is written *continuously* by the live process: the phantom
+appends to `memory/YYYY-MM-DD.md` as work happens, the heartbeat promotes captures
+into the drawers every 30 minutes, the nightly rewrites drawers and `kb/**`, and
+`phantomchat.json` and `vault.sqlite` are rewritten on trust and secret changes.
+Build a tree from a snapshot, then swap the directory in, and everything written
+between snapshot and swap is silently gone — the process reports nothing, because
+from its side the writes succeeded.
+
+`vault.sqlite` makes that worse: it runs in SQLite's default rollback-journal mode
+(the WAL pragma is set on the memory index and the task DB, not the vault), so a
+swap mid-transaction can strand a `-journal` beside a stale database and desync the
+only copy of the secrets from the `identity.json` that decrypts it.
 
 If your tool requires the persona to be stopped, it must **enforce** that (check
 the run lock, refuse otherwise), not assume it.
@@ -194,8 +210,12 @@ memory/commitments.md   memory/norms.md   ← briefs the threat judge
 
 Three of those — `decisions.md`, `people.md`, `norms.md` — are read **in full** by
 the threat judge before it screens untrusted input (`BRIEFING_DRAWERS` in
-`src/orchestrator/screen.ts`). `norms.md` is where "this is routine in this
-operator's world" lives.
+`src/orchestrator/screen.ts`) — in full up to a shared ~16KB cap
+(`DRAWERS_CAP_BYTES`), past which the tail is truncated with a marker. `norms.md`
+is where "this is routine in this operator's world" lives. A generated norm dump
+that pushes the three drawers past the cap silently hides the tail from the judge
+and brings the HELD-your-own-traffic failure below straight back; keep what you
+generate curated.
 
 **This has a sharp practical consequence for org-tooling.** If you generate a
 protocol document that says "agents in this org DM each other in this format" and
@@ -229,7 +249,7 @@ in notes you never touched.
 
 ---
 
-## 3. KB notes must conform to OKF, or they are invisible
+## 3. KB notes must conform to OKF, or they lose their ranking signals
 
 The KB index is BM25F with per-field weights (`NOTE_FIELD_WEIGHTS` in
 `src/lib/memoryIndex.ts`):
@@ -242,11 +262,14 @@ The KB index is BM25F with per-field weights (`NOTE_FIELD_WEIGHTS` in
 | headings | 3.0 |
 | body | 1.0 |
 
-A note with no frontmatter competes at **body weight only — an 8× recall penalty
-against its own title.** A generated "how to join a meeting" note with no
-frontmatter will be the last result for *"how do I join a meeting"*, which is the
-one query it exists to answer. It isn't broken, it's just unfindable, which is
-worse because nothing alerts.
+A frontmatter-free note is not invisible — `parseOkf` falls back to the first
+Markdown H1 for `title`, and headings and body are indexed either way, so an H1 note
+still gets title-weighted on an exact-wording hit. What it loses is everything
+*structured*: no `type` and no `tags` to rank on, and — the expensive one — no
+`aliases` or `description`, which are the fields that let a **later query using
+different words** reach the note at all. A generated "Meeting Protocol" note without
+them answers *"meeting protocol"* and misses *"how do I join a meeting"*, which is
+the query it exists for. Nothing alerts; the note just never surfaces.
 
 Every generated KB note carries:
 
@@ -295,8 +318,19 @@ phantombot's perimeter:
 
 - **Trusted** — the authenticated principal. Instructions are executed as commands.
 - **Untrusted** — email, web, webhooks, meeting text, relayed messages, everything
-  else. Read first by a separate, tool-less **threat judge**; risky input is HELD
-  and surfaced, safe input proceeds.
+  else. Read first by a separate **threat judge**; risky input is HELD and surfaced,
+  safe input proceeds.
+
+Two things about the judge that contributors should design against, because they're
+what the runtime actually does at `ae95d5f`, not the ideal:
+
+- **"Tool-less" is per-harness.** The Claude and Pi judges run with zero tools; the
+  Codex judge runs read-only. It is a narrowed judge, not a universally inert one.
+- **It fails OPEN.** If the judge throws or is unavailable, `screen.ts:351-363`
+  passes the content through with a `(failed open)` reason rather than holding it.
+  So the screen is a filter, not a guarantee — never let your design's safety rest
+  on the judge having run. (§4.5's fail-closed rule is the bar for **new** code,
+  including anything that fixes this; it is not a description of today's judge.)
 
 That is the whole model, and its simplicity *is* the security property. Every
 carve-out — "…unless the sender is on the recipients line", "…unless it came through
@@ -428,9 +462,13 @@ Two patterns that look like conveniences and are privilege escalation:
 - **Flipping the box's global active persona** (`phantombot persona <x> --yes`) to do
   work "as" someone else. It's global state; you've just changed who the machine is
   for every concurrent turn.
-- **Planting free-text prompts in another agent's task queue.** A scheduled task
-  fires as a **self-initiated, trusted turn** — no judge. Writing a prompt into
-  another persona's queue is remote code execution with extra steps.
+- **Planting free-text prompts in another agent's task queue.** Be precise about why
+  this is bad, because trust, provenance and screening are three different things:
+  `tick.ts` does **not** grant a task principal authority — it stamps both turns
+  `other` and selects the untrusted perimeter prompt. The hole is **screening**: tick
+  passes no `screen` callback, so a planted prompt reaches a fully tool-capable
+  harness having been read by nobody. Writing a prompt into another persona's queue
+  is remote code execution with extra steps.
 
 Agents talk to each other over the channel layer, where the perimeter applies.
 
@@ -489,7 +527,7 @@ in phantombot where everyone gets it, rather than carving around it locally.
 - [ ] Every write is to an explicitly owned path, atomic per file (`tmp` + `os.replace`)
 - [ ] Shared files use marker-delimited sections; content outside markers preserved
 - [ ] Accumulating files (`MEMORY.md`) are `write_if_missing`, never rewritten
-- [ ] `identity.json`, `vault.sqlite`, `*.sqlite`, `state.json` are never touched
+- [ ] `identity.json`, `vault.sqlite` and any other runtime `*.sqlite` are never touched
 - [ ] If the persona must be stopped, the tool **checks and refuses**, not assumes
 - [ ] Nothing is `unlink()`ed; superseded notes get a `> Superseded by [[…]]` line
 - [ ] Path containment asserted on every derived path
