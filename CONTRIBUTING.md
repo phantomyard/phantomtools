@@ -445,9 +445,16 @@ truth.
 
 ### 4.6 Secrets
 
-- **Never in argv.** It's world-readable via `ps`, and it lands in shell history,
-  task DBs, task logs, notifications and stdout. A meeting password written into a
-  task prompt outlives the meeting by design.
+- **Never in argv your tool persists or schedules** — task prompts, task DB rows,
+  systemd units, cron lines, generated scripts, logs, notifications, stdout. Argv is
+  world-readable via `ps` while it runs, and a meeting password written into a task
+  prompt outlives the meeting by design. (The rule is about *persisted* argv on
+  purpose: `phantombot vault set NAME value` currently takes the value as a
+  positional — `src/cli/vault.ts:169-180` — so the one sanctioned write path is
+  itself a transient argv exposure. Treat that as a known upstream limitation, not a
+  precedent: don't wrap it in anything durable, and if you need a secret written
+  non-interactively, ask for a stdin input upstream rather than inventing a second
+  store.)
 - **Never in plaintext JSON**, especially an nsec. Per §4.1, a bridge nsec may
   effectively *be* fleet-wide principal authority; treat it like the root key it is.
   `chmod 600` at minimum.
