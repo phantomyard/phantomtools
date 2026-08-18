@@ -145,8 +145,22 @@ More content the phantom wrote. Also untouched.
 Idempotent, re-appliable, preserves everything around it. If the markers are
 absent, append the block; never rewrite the file.
 
-Related: **`write_if_missing` for files that accumulate.** `MEMORY.md` gains facts
-during real operation — seed it once, then leave it alone.
+Related, and easy to read as a contradiction: **`write_if_missing` for files that
+accumulate.** `MEMORY.md` gains facts during real operation, so the rule scopes to
+the *whole file*, not to your region inside it:
+
+- **The file** is yours to create exactly once, if it is missing. If it already
+  exists, you never regenerate it from a template and never re-seed it — whatever
+  the phantom accumulated there outranks whatever your template thinks belongs.
+- **Your marker region**, inside a file that already exists, you may regenerate on
+  every apply. That necessarily reads the file, replaces the block between your
+  markers, and atomically rewrites it — which is not "rewriting the file" in the
+  sense prohibited above, as long as every byte outside your markers survives
+  unchanged.
+
+The distinction that matters is *ownership scope*, not whether a write syscall
+touched the file: seed a missing file once; on an existing one, touch only what you
+own.
 
 ---
 
@@ -227,12 +241,34 @@ inter-agent DM looks like an unfamiliar entity issuing structured instructions, 
 gets **HELD**. Your own protocol becomes the thing that makes your own traffic look
 like an attack.
 
-Org communication norms go in `memory/norms.md`. Reference material *about* the org
-can also go in `kb/`; the norm itself must be in the drawer.
+Org communication norms belong in the `norms.md` drawer — but get them there the
+same way as everything else in §2.1, through capture, not by writing the file:
 
-*(Known gap on our side: phantombot's own `personaScaffold.ts` seeds four drawers
-and not `norms.md`. That's our bug, not yours — write to it anyway, creating it if
-absent.)*
+```bash
+phantombot memory capture "Agents in this org DM each other in <format> — routine" --tag norm
+```
+
+`--tag norm` is the supported path, not a convention: `TAG_TO_DRAWER` in
+`src/lib/heartbeat.ts` maps both `norm` and `norms` to `memory/norms.md`, and the
+capture CLI validates your tag against that same table, so a typo fails loudly
+instead of writing somewhere silly. Capture appends the audited entry to today's
+daily file, records it in `capture_log` (which is what `phantombot doctor` checks to
+notice a persona that has silently stopped remembering), and indexes it immediately;
+the heartbeat then promotes it into the drawer under a date header, de-duplicating
+against what's already there.
+
+Writing `memory/norms.md` yourself skips all three — no daily entry, no
+`capture_log` row, no de-duplication — which is the parallel-memory behaviour this
+whole section exists to prevent, just aimed at a file the memory system already
+owns. Reference material *about* the org can still go in `kb/`; the norm itself goes
+through capture.
+
+*(You don't need to create the drawer if it's missing — the heartbeat appends, which
+creates it. That matters because phantombot's own `personaScaffold.ts` seeds four
+drawers and not `norms.md`; our bug, not yours, and capture routes around it. If you
+genuinely need the promotion to land before your tool exits rather than on the next
+heartbeat, run the supported heartbeat — don't hand-write the drawer to get there
+faster.)*
 
 ### 2.4 Deleting a KB note doesn't remove a leaf — it severs a path
 
@@ -458,11 +494,23 @@ truth.
   precedent: don't wrap it in anything durable, and if you need a secret written
   non-interactively, ask for a stdin input upstream rather than inventing a second
   store.)
-- **Never in plaintext JSON**, especially an nsec. Per §4.1, a bridge nsec may
-  effectively *be* fleet-wide principal authority; treat it like the root key it is.
-  `chmod 600` at minimum.
-- **Use the vault.** `phantombot vault set NAME "value"` — AES-256-GCM at rest.
-  Read the credential at execution time; don't persist it in your own store.
+- **Use the vault — it is the only answer for a tool credential.**
+  `phantombot vault set NAME "value"` — AES-256-GCM at rest, keyed off the persona's
+  `identity.json`. Read the credential at execution time; don't persist it in your
+  own store.
+- **Never create a second plaintext secret store**, and above all never a second
+  plaintext nsec. Per §4.1 a bridge nsec may effectively *be* fleet-wide principal
+  authority — it is a root key, and there is no file mode that makes a tool-owned
+  copy of one acceptable. If your tool wants to persist an nsec, that is the design
+  to change, not the permissions.
+
+  The runtime's own `identity.json` is the one piece of plaintext key material a
+  persona directory legitimately holds, and it is a narrow, **runtime-owned**
+  exception: tools never read, write, copy, template or relocate it — they reach
+  secrets through `phantombot vault`, and the runtime does the key derivation
+  (§1.1: `identity.json` is the vault's HKDF root, so a bad write costs every secret
+  permanently). `0600` on that file is defense in depth on an exception that already
+  exists — it is not a mitigation that licenses a new one.
 - **Never echo a value back** in logs, notifications or PR text. Acknowledge by name.
 
 ### 4.7 Don't build cross-persona escalation primitives
@@ -536,7 +584,8 @@ in phantombot where everyone gets it, rather than carving around it locally.
 - [ ] No `copytree` / `move` / `replace` / `rmtree` targeting a persona **directory**
 - [ ] Every write is to an explicitly owned path, atomic per file (`tmp` + `os.replace`)
 - [ ] Shared files use marker-delimited sections; content outside markers preserved
-- [ ] Accumulating files (`MEMORY.md`) are `write_if_missing`, never rewritten
+- [ ] Accumulating files (`MEMORY.md`) you create: seeded **once if missing**, never re-seeded from a template
+- [ ] Accumulating files that already exist: only your **marker region** is updated (read/modify/atomic-replace), everything outside it byte-preserved
 - [ ] `identity.json`, `vault.sqlite` and any other runtime `*.sqlite` are never touched
 - [ ] If the persona must be stopped, the tool **checks and refuses**, not assumes
 - [ ] Nothing is `unlink()`ed; superseded notes get a `> Superseded by [[…]]` line
@@ -545,7 +594,7 @@ in phantombot where everyone gets it, rather than carving around it locally.
 **Memory**
 - [ ] Anything the phantom should remember goes through `phantombot memory capture --tag …`
 - [ ] No parallel state store duplicating what the memory system already does
-- [ ] Org/comms norms land in `memory/norms.md` (so the threat judge reads them)
+- [ ] Org/comms norms are captured with `--tag norm` (never by writing `memory/norms.md` directly), so the threat judge reads them
 - [ ] After this tool runs, the phantom demonstrably knows something new
 
 **KB / OKF**
@@ -560,7 +609,7 @@ in phantombot where everyone gets it, rather than carving around it locally.
 - [ ] Externally-controlled values are escaped/fenced everywhere they land
 - [ ] No control metadata (hop counts, loop guards) parsed from sender-supplied text
 - [ ] Parse/validation failures fail **closed**
-- [ ] No secrets in argv, task prompts, logs, notifications or plaintext files
+- [ ] No secrets in argv your tool **persists or schedules** (task prompts, task DB rows, units, cron lines, generated scripts), nor in logs, notifications or a plaintext store of your own — see §4.6, incl. the transient `vault set` positional exception
 - [ ] No global persona switching; no writing into another persona's task queue
 - [ ] Local listeners authenticate
 - [ ] Generated docs, prompts and `MEMORY.md` sections reviewed as attack surface
