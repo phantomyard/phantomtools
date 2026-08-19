@@ -85,6 +85,14 @@ def resolved_categories(org: dict[str, Any], actor_id: str) -> list[int]:
     return sorted(categories)
 
 
+def _actor_role_id(org: dict[str, Any], actor_id: str) -> str | None:
+    """The role id an actor holds, or None if the actor is unknown."""
+    for a in org.get("actors", []):
+        if a.get("id") == actor_id:
+            return a.get("role")
+    return None
+
+
 def can_read(org: dict[str, Any], actor_id: str, category: int) -> bool:
     """True iff the actor's resolved access covers the given category."""
     return category in resolved_categories(org, actor_id)
@@ -93,13 +101,26 @@ def can_read(org: dict[str, Any], actor_id: str, category: int) -> bool:
 def can_write(
     org: dict[str, Any], actor_id: str, category: int, owners: list[str] | None = None
 ) -> bool:
-    """True iff the actor may write a node of ``category``.
+    """True iff the actor may write a node of ``category`` (spec §9).
 
-    Write requires read access to the category AND, when the node declares
-    explicit ``owners``, membership in that list. No rule -> denied.
+    Write requires, in order (fail-closed, "no rule -> denied"):
+
+    1. An explicit, non-empty ``owners`` list. PhantomDocs v1 does NOT
+       re-derive PhantomOrg's reporting-chain default write scope (§9's
+       "otherwise the actors in the same reporting chain"); it requires
+       owners to be declared and denies when they are not. This avoids a
+       second, drifting implementation of PhantomOrg's scope policy.
+    2. Read access to the category (an actor who cannot read cannot write).
+    3. Membership in ``owners`` by actor id OR by role id — PhantomOrg's
+       ``owners`` field accepts both role ids and actor ids, so a role-owned
+       node must be writable by every actor holding that role.
     """
+    owners = list(owners or [])
+    if not owners:
+        return False
     if not can_read(org, actor_id, category):
         return False
-    if owners:
-        return actor_id in owners
-    return True
+    if actor_id in owners:
+        return True
+    role_id = _actor_role_id(org, actor_id)
+    return bool(role_id) and role_id in owners

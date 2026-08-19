@@ -66,47 +66,59 @@ def _load_or_die(root: str):
         raise click.ClickException(str(exc))
 
 
-def _default_actor() -> str:
-    return os.environ.get("USER") or os.environ.get("USERNAME") or "phantom"
+def _os_actor() -> str | None:
+    """The authenticated OS identity of the calling process (spec §9).
 
-
-def _acl_actor(explicit_actor: str | None) -> str | None:
-    """The actor identity for ACL enforcement.
-
-    Authoritative source is the ``PHANTOMDOCS_ACTOR`` environment variable
-    (set per-persona by PhantomOrg at deploy time). A ``--actor`` flag is a
-    self-asserted audit label and does NOT establish access. Returns None when
-    no environment actor is set (fail-closed: callers must deny).
+    Derived from the real user id — NOT from environment variables or CLI
+    flags, which a caller (including a capable turn) can set to impersonate
+    another actor (CONTRIBUTING.md §4.2/§4.3). In PhantomOrg's deploy model
+    each persona runs under its own OS account, so the OS username IS the
+    persona identity; PhantomDocs requires that username to be a declared
+    actor id in org.yaml. Returns None when it cannot be resolved (fail-closed).
     """
-    return os.environ.get("PHANTOMDOCS_ACTOR") or None
+    try:
+        import pwd
+
+        return pwd.getpwuid(os.getuid()).pw_name
+    except (ImportError, KeyError, OSError):
+        return None
 
 
-def _require_acl(org_yaml: str | None, explicit_actor: str | None):
+def _require_acl(org_yaml: str | None):
     """Return ``(actor, org)`` for an ACL-gated command, or raise a
     ClickException (fail-closed) when the org model or actor is absent.
 
-    ``--org-yaml`` must be supplied; the actor must come from the
-    environment. Without both, access is denied — never fail-open.
+    ``--org-yaml`` must be supplied; the actor is the authenticated OS
+    credential (``_os_actor``), never caller-controlled input. The OS account
+    must also be a declared actor in the org model. Without all of these,
+    access is denied — never fail-open.
     """
     if not org_yaml:
         raise click.ClickException(
             "access control requires --org-yaml (the authoritative PhantomOrg "
             "org model); refusing to serve/mutate content without it"
         )
-    actor = _acl_actor(explicit_actor)
+    actor = _os_actor()
     if not actor:
         raise click.ClickException(
-            "access control requires PHANTOMDOCS_ACTOR (set per-persona by "
-            "PhantomOrg at deploy time); refusing to serve/mutate content "
-            "without an authenticated actor"
+            "access control requires an authenticated OS identity; could not "
+            "resolve the calling OS account, refusing to serve/mutate content"
         )
-    return actor, load_org(org_yaml)
+    org = load_org(org_yaml)
+    known_actors = {a.get("id") for a in org.get("actors", [])}
+    if actor not in known_actors:
+        raise click.ClickException(
+            f"denied: OS account {actor!r} is not an actor in the org model; "
+            "PhantomDocs derives identity from the OS credential and refuses "
+            "unmapped accounts (fail-closed)"
+        )
+    return actor, org
 
 
 def _audit(
     root: str, actor: str, action: str, urn: str, mac: str, ch: str | None
 ) -> None:
-    audit_append(root, actor or _default_actor(), action, urn, mac, ch)
+    audit_append(root, actor, action, urn, mac, ch)
 
 
 def _resolve_store(root: str, backend: str | None):
@@ -117,9 +129,8 @@ def _resolve_store(root: str, backend: str | None):
 @click.option("--org", required=True, help="Organization id (from org.yaml).")
 @click.option("--namespace", default="docs", show_default=True, help="Namespace name.")
 @click.option("--org-pubkey", default="", help="Org Nostr pubkey for the root MAC.")
-@click.option("--actor", default=None, help="Audit actor id.")
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def init(org: str, namespace: str, org_pubkey: str, actor: str, root: str) -> None:
+def init(org: str, namespace: str, org_pubkey: str, root: str) -> None:
     """Create a new namespace: manifest + local blob store."""
     path = _manifest_path(root)
     if os.path.exists(path):
@@ -128,7 +139,14 @@ def init(org: str, namespace: str, org_pubkey: str, actor: str, root: str) -> No
     os.makedirs(root, exist_ok=True)
     os.makedirs(os.path.join(root, "blobs"), exist_ok=True)
     save(path, empty_manifest(org, namespace, mac))
-    _audit(root, actor, "init", f"urn:{org}:namespace:{namespace}", mac, None)
+    _audit(
+        root,
+        _os_actor() or "phantom",
+        "init",
+        f"urn:{org}:namespace:{namespace}",
+        mac,
+        None,
+    )
     click.echo(f"initialized {org}/{namespace}")
     click.echo(f"  root MAC  {full_id(mac)}")
     click.echo(f"  manifest  {path}")
@@ -148,15 +166,14 @@ def init(org: str, namespace: str, org_pubkey: str, actor: str, root: str) -> No
 @click.option(
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
-@click.option("--actor", default=None, help="Audit actor id (self-asserted; not ACL).")
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def mkdir(name, parent, category, owners, org_yaml, actor, root):
+def mkdir(name, parent, category, owners, org_yaml, root):
     """Create a folder node (a link in the chained MAC hierarchy).
 
-    Access-controlled: requires --org-yaml + PHANTOMDOCS_ACTOR; the actor must
-    be able to write the folder's category (fail-closed).
+    Access-controlled: requires --org-yaml + an authenticated OS identity; the
+    actor must be able to write the folder's category (fail-closed).
     """
-    actor_id, org = _require_acl(org_yaml, actor)
+    actor_id, org = _require_acl(org_yaml)
     if not can_write(org, actor_id, category, list(owners)):
         raise click.ClickException(
             f"denied: {actor_id} cannot write category-{category}"
@@ -197,7 +214,7 @@ def mkdir(name, parent, category, owners, org_yaml, actor, root):
             }
         )
         save(_manifest_path(root), manifest)
-    _audit(root, actor, "mkdir", urn, mac, None)
+    _audit(root, actor_id, "mkdir", urn, mac, None)
     click.echo(f"created {path}")
     click.echo(f"  urn  {urn}")
     click.echo(f"  mac  {full_id(mac)}")
@@ -218,22 +235,21 @@ def mkdir(name, parent, category, owners, org_yaml, actor, root):
 @click.option(
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
-@click.option("--actor", default=None, help="Audit actor id (self-asserted; not ACL).")
 @click.option(
     "--backend", default=None, help="Backend URI (local:// ssh:// gdrive://)."
 )
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def add(path, slug, category, folder, owners, org_yaml, actor, backend, root):
+def add(path, slug, category, folder, owners, org_yaml, backend, root):
     """Ingest a document: compute MAC chain, store blob, register node.
 
-    Access-controlled: requires --org-yaml + PHANTOMDOCS_ACTOR; the actor must
-    be able to write the document's category, and when versioning an existing
-    node, be one of its owners (fail-closed).
+    Access-controlled: requires --org-yaml + an authenticated OS identity; the
+    actor must be able to write the document's category, and when versioning an
+    existing node, be one of its owners (fail-closed).
     """
     with open(path, "rb") as f:
         content = f.read()
 
-    actor_id, org = _require_acl(org_yaml, actor)
+    actor_id, org = _require_acl(org_yaml)
 
     # Load-modify-save under the inter-process lock (see mkdir).
     with manifest_lock(_manifest_path(root)):
@@ -293,7 +309,7 @@ def add(path, slug, category, folder, owners, org_yaml, actor, backend, root):
             }
         )
         save(_manifest_path(root), manifest)
-    _audit(root, actor, "add" if previous is None else "version", urn, mac, ch)
+    _audit(root, actor_id, "add" if previous is None else "version", urn, mac, ch)
 
     verb = "added" if previous is None else "versioned"
     click.echo(f"{verb} {logical}")
@@ -312,13 +328,12 @@ def add(path, slug, category, folder, owners, org_yaml, actor, backend, root):
 @click.option(
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
-@click.option("--actor", default=None, help="Audit actor id (self-asserted; not ACL).")
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def get(ref, mac, cat, backend, org_yaml, actor, root):
+def get(ref, mac, cat, backend, org_yaml, root):
     """Resolve a document by urn, path, slug, ref name, or version MAC.
 
-    Access-controlled: requires --org-yaml + PHANTOMDOCS_ACTOR; content in a
-    category the actor cannot read is denied (fail-closed).
+    Access-controlled: requires --org-yaml + an authenticated OS identity;
+    content in a category the actor cannot read is denied (fail-closed).
     """
     manifest = _load_or_die(root)
     if mac:
@@ -330,7 +345,7 @@ def get(ref, mac, cat, backend, org_yaml, actor, root):
         if node is None:
             raise click.ClickException(f"not found: {ref}")
 
-    actor_id, org = _require_acl(org_yaml, actor)
+    actor_id, org = _require_acl(org_yaml)
     if not can_read(org, actor_id, node.get("category", 0)):
         raise click.ClickException(
             f"denied: {actor_id} cannot read category-{node.get('category')} "
@@ -348,15 +363,14 @@ def get(ref, mac, cat, backend, org_yaml, actor, root):
 @click.option(
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
-@click.option("--actor", default=None, help="Audit actor id (self-asserted; not ACL).")
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def versions(ref, org_yaml, actor, root):
+def versions(ref, org_yaml, root):
     """List the version history (MAC chain) of a document."""
     manifest = _load_or_die(root)
     node = resolve_node(manifest, ref)
     if node is None:
         raise click.ClickException(f"not found: {ref}")
-    actor_id, org = _require_acl(org_yaml, actor)
+    actor_id, org = _require_acl(org_yaml)
     if not can_read(org, actor_id, node.get("category", 0)):
         raise click.ClickException(
             f"denied: {actor_id} cannot read category-{node.get('category')} "
@@ -378,15 +392,14 @@ def versions(ref, org_yaml, actor, root):
 @click.option(
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
-@click.option("--actor", default=None, help="Audit actor id (self-asserted; not ACL).")
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def search(query, org_yaml, actor, root):
+def search(query, org_yaml, root):
     """Search the manifest index (urn, slug, meta).
 
     Access-controlled: only nodes the actor may read are returned (fail-closed).
     """
     manifest = _load_or_die(root)
-    actor_id, org = _require_acl(org_yaml, actor)
+    actor_id, org = _require_acl(org_yaml)
     needle = query.lower()
     hits = []
     for node in manifest.get("nodes", []):
@@ -483,15 +496,14 @@ def verify(backend, root):
 @click.option(
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
-@click.option("--actor", default=None, help="Audit actor id (self-asserted; not ACL).")
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def tag(name, ref, org_yaml, actor, root):
+def tag(name, ref, org_yaml, root):
     """Point a mutable ref (e.g. `latest`, `approved-<date>`) at a version MAC.
 
     Access-controlled: the actor must be able to write the target node's
     category (fail-closed).
     """
-    actor_id, org = _require_acl(org_yaml, actor)
+    actor_id, org = _require_acl(org_yaml)
     with manifest_lock(_manifest_path(root)):
         manifest = _load_or_die(root)
         node = resolve_node(manifest, ref)
@@ -504,7 +516,7 @@ def tag(name, ref, org_yaml, actor, root):
             )
         manifest.setdefault("refs", {})[name] = node["mac"]
         save(_manifest_path(root), manifest)
-    _audit(root, actor, "tag", node["urn"], node["mac"], node.get("contentHash"))
+    _audit(root, actor_id, "tag", node["urn"], node["mac"], node.get("contentHash"))
     click.echo(f"{name} -> {display_id(node['mac'])}  ({node['urn']})")
 
 

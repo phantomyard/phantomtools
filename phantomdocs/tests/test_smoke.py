@@ -1,5 +1,6 @@
 import glob
 import os
+from unittest import mock
 
 import yaml
 from click.testing import CliRunner
@@ -8,7 +9,8 @@ from phantomdocs.cli import main
 
 # A minimal PhantomOrg org.yaml for ACL enforcement in the CLI tests. Two
 # actors: "roberto" (cfo, level-2 -> categories [1,2]) and "elena"
-# (cfo + category-3 actor exception -> [1,2,3]).
+# (cfo + category-3 actor exception -> [1,2,3]). Both hold role "cfo", so a
+# node owned by role id "cfo" is writable by either.
 ORG_YAML = """\
 version: 1
 policies:
@@ -34,12 +36,20 @@ actors:
 """
 
 
+def _real_user() -> str:
+    """The real OS account, matching cli._os_actor() (used by subprocess tests)."""
+    import pwd
+
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
 def _run(args, env=None, actor="roberto"):
     runner = CliRunner()
-    full_env = {**os.environ, "PHANTOMDOCS_ACTOR": actor}
+    full_env = {**os.environ}
     if env:
         full_env.update(env)
-    return runner.invoke(main, args, env=full_env)
+    with mock.patch("phantomdocs.cli._os_actor", return_value=actor):
+        return runner.invoke(main, args, env=full_env)
 
 
 def _org(tmp_path):
@@ -64,6 +74,8 @@ def test_init_add_search_verify(tmp_path):
             "hello.md",
             "--category",
             "1",
+            "--owners",
+            "cfo",
             "--org-yaml",
             org,
             "--root",
@@ -90,7 +102,18 @@ def test_verify_detects_tamper(tmp_path):
     doc.write_text("original", encoding="utf-8")
     assert (
         _run(
-            ["add", str(doc), "--slug", "a.txt", "--org-yaml", org, "--root", root]
+            [
+                "add",
+                str(doc),
+                "--slug",
+                "a.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
         ).exit_code
         == 0
     )
@@ -117,7 +140,19 @@ def test_mkdir_and_nested_add(tmp_path):
     org = _org(tmp_path)
     assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
 
-    r = _run(["mkdir", "--name", "actas", "--org-yaml", org, "--root", root])
+    r = _run(
+        [
+            "mkdir",
+            "--name",
+            "actas",
+            "--owners",
+            "cfo",
+            "--org-yaml",
+            org,
+            "--root",
+            root,
+        ]
+    )
     assert r.exit_code == 0, r.output
     assert "urn:demo:folder:actas" in r.output
 
@@ -131,6 +166,8 @@ def test_mkdir_and_nested_add(tmp_path):
             "minuta.md",
             "--folder",
             "actas",
+            "--owners",
+            "cfo",
             "--org-yaml",
             org,
             "--root",
@@ -153,7 +190,18 @@ def test_tag_refs_and_get_by_ref(tmp_path):
     doc.write_text("data", encoding="utf-8")
     assert (
         _run(
-            ["add", str(doc), "--slug", "a.txt", "--org-yaml", org, "--root", root]
+            [
+                "add",
+                str(doc),
+                "--slug",
+                "a.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
         ).exit_code
         == 0
     )
@@ -184,10 +232,10 @@ def test_audit_log(tmp_path):
             str(doc),
             "--slug",
             "a.txt",
+            "--owners",
+            "cfo",
             "--org-yaml",
             org,
-            "--actor",
-            "pepa",
             "--root",
             root,
         ]
@@ -196,7 +244,9 @@ def test_audit_log(tmp_path):
 
     r = _run(["audit", "--root", root])
     assert r.exit_code == 0, r.output
-    assert "pepa" in r.output
+    # The audit records the authenticated OS actor (roberto), not a
+    # self-asserted --actor label.
+    assert "roberto" in r.output
     assert '"action": "add"' in r.output
 
 
@@ -218,19 +268,58 @@ def test_versioning_and_history(tmp_path):
 
     doc = tmp_path / "a.txt"
     doc.write_text("v1", encoding="utf-8")
-    r = _run(["add", str(doc), "--slug", "a.txt", "--org-yaml", org, "--root", root])
+    r = _run(
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "a.txt",
+            "--owners",
+            "cfo",
+            "--org-yaml",
+            org,
+            "--root",
+            root,
+        ]
+    )
     assert r.exit_code == 0, r.output
     assert "added" in r.output
 
     data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
     v1_mac = data["nodes"][0]["mac"]
 
-    r = _run(["add", str(doc), "--slug", "a.txt", "--org-yaml", org, "--root", root])
+    r = _run(
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "a.txt",
+            "--owners",
+            "cfo",
+            "--org-yaml",
+            org,
+            "--root",
+            root,
+        ]
+    )
     assert r.exit_code == 0, r.output
     assert "unchanged" in r.output
 
     doc.write_text("v2", encoding="utf-8")
-    r = _run(["add", str(doc), "--slug", "a.txt", "--org-yaml", org, "--root", root])
+    r = _run(
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "a.txt",
+            "--owners",
+            "cfo",
+            "--org-yaml",
+            org,
+            "--root",
+            root,
+        ]
+    )
     assert r.exit_code == 0, r.output
     assert "versioned" in r.output
 
@@ -275,6 +364,8 @@ def test_get_denies_category_above_clearance(tmp_path):
                 "secret.md",
                 "--category",
                 "3",
+                "--owners",
+                "cfo",
                 "--org-yaml",
                 org,
                 "--root",
@@ -314,6 +405,8 @@ def test_search_filters_nodes_by_clearance(tmp_path):
                 "pub.md",
                 "--category",
                 "1",
+                "--owners",
+                "cfo",
                 "--org-yaml",
                 org,
                 "--root",
@@ -333,6 +426,8 @@ def test_search_filters_nodes_by_clearance(tmp_path):
                 "secret.md",
                 "--category",
                 "3",
+                "--owners",
+                "cfo",
                 "--org-yaml",
                 org,
                 "--root",
@@ -363,6 +458,8 @@ def test_add_denied_above_clearance(tmp_path):
             "x.md",
             "--category",
             "3",
+            "--owners",
+            "cfo",
             "--org-yaml",
             org,
             "--root",
@@ -385,8 +482,91 @@ def test_write_requires_org_yaml_fail_closed(tmp_path):
     assert "org-yaml" in r.output
 
 
-def test_read_requires_actor_fail_closed(tmp_path):
-    """Without PHANTOMDOCS_ACTOR, content reads are refused (fail-closed)."""
+def test_write_requires_owners_fail_closed(tmp_path):
+    """A write with no declared owners is refused (spec §9: no rule -> denied)."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+    doc = tmp_path / "x.md"
+    doc.write_text("x", encoding="utf-8")
+    r = _run(["add", str(doc), "--slug", "x.md", "--org-yaml", org, "--root", root])
+    assert r.exit_code != 0
+    assert "denied" in r.output
+
+
+def test_write_denies_unrelated_same_category(tmp_path):
+    """An actor who can READ the category but is not an owner is denied write."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+    doc = tmp_path / "x.md"
+    doc.write_text("x", encoding="utf-8")
+    # roberto creates a node owned by the *actor* id "roberto".
+    assert (
+        _run(
+            [
+                "add",
+                str(doc),
+                "--slug",
+                "x.md",
+                "--owners",
+                "roberto",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ],
+            actor="roberto",
+        ).exit_code
+        == 0
+    )
+    # elena can read category 1, but is not an owner -> versioning denied.
+    doc.write_text("x2", encoding="utf-8")
+    r = _run(
+        ["add", str(doc), "--slug", "x.md", "--org-yaml", org, "--root", root],
+        actor="elena",
+    )
+    assert r.exit_code != 0
+    assert "denied" in r.output
+
+
+def test_write_allows_role_owner(tmp_path):
+    """A node owned by a ROLE id is writable by any actor holding that role."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+    doc = tmp_path / "x.md"
+    doc.write_text("x", encoding="utf-8")
+    # elena writes, declaring role owner "cfo"; roberto (same role) re-writes.
+    assert (
+        _run(
+            [
+                "add",
+                str(doc),
+                "--slug",
+                "x.md",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ],
+            actor="elena",
+        ).exit_code
+        == 0
+    )
+    doc.write_text("x2", encoding="utf-8")
+    r = _run(
+        ["add", str(doc), "--slug", "x.md", "--org-yaml", org, "--root", root],
+        actor="roberto",
+    )
+    assert r.exit_code == 0, r.output
+    assert "versioned" in r.output
+
+
+def test_read_denies_unknown_os_account(tmp_path):
+    """An OS account that is not an actor in the org model is refused."""
     root = str(tmp_path)
     org = _org(tmp_path)
     assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
@@ -394,19 +574,57 @@ def test_read_requires_actor_fail_closed(tmp_path):
     doc.write_text("x", encoding="utf-8")
     assert (
         _run(
-            ["add", str(doc), "--slug", "x.md", "--org-yaml", org, "--root", root]
+            [
+                "add",
+                str(doc),
+                "--slug",
+                "x.md",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        ).exit_code
+        == 0
+    )
+
+    r = _run(["get", "x.md", "--org-yaml", org, "--root", root], actor="intruder")
+    assert r.exit_code != 0
+    assert "not an actor" in r.output
+
+
+def test_read_denied_without_os_identity(tmp_path):
+    """When the OS identity cannot be resolved, reads are refused (fail-closed)."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+    doc = tmp_path / "x.md"
+    doc.write_text("x", encoding="utf-8")
+    assert (
+        _run(
+            [
+                "add",
+                str(doc),
+                "--slug",
+                "x.md",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
         ).exit_code
         == 0
     )
 
     runner = CliRunner()
-    r = runner.invoke(
-        main,
-        ["get", "x.md", "--org-yaml", org, "--root", root],
-        env={k: v for k, v in os.environ.items() if k != "PHANTOMDOCS_ACTOR"},
-    )
+    with mock.patch("phantomdocs.cli._os_actor", return_value=None):
+        r = runner.invoke(main, ["get", "x.md", "--org-yaml", org, "--root", root])
     assert r.exit_code != 0
-    assert "PHANTOMDOCS_ACTOR" in r.output
+    assert "OS identity" in r.output
 
 
 def test_audit_chain_verifies(tmp_path):
@@ -418,14 +636,36 @@ def test_audit_chain_verifies(tmp_path):
     doc.write_text("data", encoding="utf-8")
     assert (
         _run(
-            ["add", str(doc), "--slug", "a.txt", "--org-yaml", org, "--root", root]
+            [
+                "add",
+                str(doc),
+                "--slug",
+                "a.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
         ).exit_code
         == 0
     )
     doc.write_text("data2", encoding="utf-8")
     assert (
         _run(
-            ["add", str(doc), "--slug", "a.txt", "--org-yaml", org, "--root", root]
+            [
+                "add",
+                str(doc),
+                "--slug",
+                "a.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
         ).exit_code
         == 0
     )
@@ -455,15 +695,37 @@ def test_local_two_slash_uri(tmp_path):
 
 def test_concurrent_adds_all_survive(tmp_path):
     """Concurrent `pd add` processes each append their own node; none is lost
-    (inter-process manifest lock + unique temp files)."""
+    (inter-process manifest lock + unique temp files).
+
+    Subprocesses resolve the actor via the real OS account, so the org model
+    must declare that account as an actor with write access.
+    """
     import subprocess
     import sys
 
     root = str(tmp_path)
-    org = _org(tmp_path)
+    user = _real_user()
+    org_p = tmp_path / "org.yaml"
+    org_p.write_text(
+        "version: 1\n"
+        "policies:\n"
+        "  access_levels:\n"
+        "    level-2: { label: Operative, categories: [1, 2] }\n"
+        "  security_categories:\n"
+        "    category-1: { label: Public }\n"
+        "roles:\n"
+        "  - id: cfo\n"
+        "    access_level: level-2\n"
+        "    security_exceptions: []\n"
+        "actors:\n"
+        f"  - id: {user}\n"
+        "    role: cfo\n"
+        "    actor_exceptions: []\n",
+        encoding="utf-8",
+    )
     assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
 
-    env = {**os.environ, "PHANTOMDOCS_ACTOR": "roberto"}
+    env = {**os.environ}
     procs = []
     for i in range(6):
         doc = tmp_path / f"doc{i}.md"
@@ -478,8 +740,10 @@ def test_concurrent_adds_all_survive(tmp_path):
                     str(doc),
                     "--slug",
                     f"doc{i}.md",
+                    "--owners",
+                    "cfo",
                     "--org-yaml",
-                    org,
+                    str(org_p),
                     "--root",
                     root,
                 ],

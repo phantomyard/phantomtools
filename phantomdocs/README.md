@@ -12,8 +12,9 @@ It is **standalone**: it consumes PhantomOrg but does not modify it.
   authenticity/tamper-evidence lands with the optional HMAC in SPEC §4.3).
 - **Access control** — resolved from a PhantomOrg `org.yaml` (access levels,
   security categories, role/actor exceptions) and **enforced** on every read
-  and write (`get`, `search`, `versions`, `add`, `mkdir`, `tag`). Fail-closed:
-  no rule → denied.
+  and write (`get`, `search`, `versions`, `add`, `mkdir`, `tag`). The actor is
+  the authenticated OS account; writes require an explicit `owners` scope.
+  Fail-closed: no rule → denied.
 - **Location** — content-addressed blob stores: `local://` filesystem, `ssh://`
   remote, `gdrive://` (delegates to the persona's `workspace.py`).
 - **Search** — index search over the manifest (filtered by the reader's access).
@@ -47,19 +48,21 @@ See `examples/example-org.yaml` and `docs/SPEC.md`.
 pd init --org my-org --root ./docs
 pd derive-manifest --org-yaml organizations/<org>/org.yaml --out ./docs/manifest.yaml
 
-# Access-controlled commands require the actor (env) + the org model.
-# PhantomOrg sets PHANTOMDOCS_ACTOR per persona at deploy time.
-export PHANTOMDOCS_ACTOR=marco
+# Access-controlled commands require the actor + the org model. The actor is
+# the authenticated OS account the persona runs under (never an env var or a
+# flag): the OS username must be a declared actor `id` in org.yaml.
+# PhantomOrg deploys each persona under its own OS account.
 
-# Create a folder, then ingest a document under it
-pd mkdir --name reports --org-yaml organizations/<org>/org.yaml --root ./docs
+# Create a folder, then ingest a document under it. Writes require --owners
+# (a PhantomOrg role id or actor id).
+pd mkdir --name reports --owners cfo --org-yaml organizations/<org>/org.yaml --root ./docs
 pd add ./report.pdf --slug "reports/2026-08-19-q3.pdf" --category 2 \
-  --folder reports --org-yaml organizations/<org>/org.yaml --root ./docs
+  --owners cfo --folder reports --org-yaml organizations/<org>/org.yaml --root ./docs
 
 # Ingest to a remote / cloud backend
-pd add ./report.pdf --slug "reports/q3.pdf" --backend ssh://user@vps:22/var/phantomdocs \
+pd add ./report.pdf --slug "reports/q3.pdf" --owners cfo --backend ssh://user@vps:22/var/phantomdocs \
   --org-yaml organizations/<org>/org.yaml --root ./docs
-pd add ./report.pdf --slug "reports/q3.pdf" --backend gdrive:// \
+pd add ./report.pdf --slug "reports/q3.pdf" --owners cfo --backend gdrive:// \
   --org-yaml organizations/<org>/org.yaml --root ./docs
 
 # Resolve / retrieve (by urn, path, slug, or ref name)

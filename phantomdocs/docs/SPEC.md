@@ -269,19 +269,26 @@ security classification, referencing PhantomOrg's `security_categories`.
 
 **Enforcement (fail-closed):**
 
-- The **actor identity** comes from the `PHANTOMDOCS_ACTOR` environment
-  variable, set per-persona by PhantomOrg at deploy time. A `--actor` flag is
-  a self-asserted audit label only and never establishes access. Without a
-  `--org-yaml` (the authoritative org model) and an actor, read and write are
-  denied — never fail-open.
+- The **actor identity** is the authenticated OS credential of the calling
+  process (the real user id resolved via `pwd.getpwuid(os.getuid())`, not
+  `$USER` / `$USERNAME`). It is **never** taken from an environment variable or
+  a `--actor` flag — both are caller-controlled and forgeable by a capable turn
+  (CONTRIBUTING.md §4.2/§4.3). PhantomOrg deploys each persona under its own
+  OS account, so the OS username IS the persona identity; PhantomDocs requires
+  that username to be a declared actor `id` in `org.yaml`. A caller whose OS
+  account is not an actor is refused. Without `--org-yaml` (the authoritative
+  org model) and a resolvable OS actor, read and write are denied — never
+  fail-open.
 - **Read** — allowed iff the actor's resolved access (`merge_access`) covers
   the node's `category` (i.e. the category number is in the actor's resolved
   category set, or the actor holds a category exception). `category-0` is
   readable only by actors with the `category-0` exception.
 - **Write / delete** — allowed iff read is allowed **and** the actor is in the
-  node's write scope: the node's `owners` list (PhantomOrg role/actor ids) when
-  declared, otherwise the actors in the same reporting chain (`chain` scope
-  rule) whose access covers the category. No rule → denied.
+  node's write scope. In v1 the write scope is the node's explicit `owners`
+  list (PhantomOrg role ids **or** actor ids) and is **required**: a write
+  with no declared owners is denied. (The §9 fallback — the actors in the same
+  reporting `chain` scope — is deferred rather than re-derived in a second,
+  drifting implementation of PhantomOrg's `derive_scopes`.) No rule → denied.
 
 This mirrors the GitHub split exactly: PhantomOrg = the *org* (teams/members =
 roles/actors), the PhantomDocs manifest = the *repo* (CODEOWNERS-style
@@ -316,7 +323,9 @@ Enables queries like "which minutes cite this policy?".
 - **Audit** — an append-only, **hash-chained** log (`audit.log`) records
   `{ts, actor, action, urn, mac, hash, prev}` where `prev` is the SHA-256 of
   the preceding line; `pd verify` walks the chain and reports a deleted or
-  reordered entry. Without this there is no "total guarantee" worth the name.
+  reordered entry. The `actor` field is the **authenticated OS identity** — the
+  same verified actor used for authorization, never a self-asserted label.
+  Without this there is no "total guarantee" worth the name.
 
 ## 13. Update package (what PhantomDocs applies)
 

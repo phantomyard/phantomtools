@@ -8,10 +8,20 @@ All notable changes to PhantomDocs are documented in this file.
 
 - **ACL is enforced, not just declared** (`cli.py`): `get`, `search`,
   `versions`, `add`, `mkdir` and `tag` now require `--org-yaml` (the
-  authoritative org model) and `PHANTOMDOCS_ACTOR` (set per-persona by
-  PhantomOrg at deploy time), and gate every read/write on `can_read` /
-  `can_write`. Absent either is denied (fail-closed). `--actor` remains a
-  self-asserted audit label only.
+  authoritative org model) and an authenticated OS actor, and gate every
+  read/write on `can_read` / `can_write`. Absent either is denied (fail-closed).
+- **Actor identity is the authenticated OS credential** (`cli.py::_os_actor`):
+  resolved from the real user id (`pwd.getpwuid(os.getuid())`), never from an
+  environment variable or a `--actor` flag — both are caller-forgeable by a
+  capable turn (CONTRIBUTING.md §4.2/§4.3). The `--actor` flag is removed from
+  ACL-gated commands (the `acl` introspection command still takes `--actor` as
+  a resolution query, which is not an authorization path).
+- **Write-scope enforces SPEC §9** (`access.py::can_write`): write requires an
+  explicit, non-empty `owners` list plus read access, and `owners` is matched by
+  actor id **or** role id. No owners → denied (the §9 reporting-chain default is
+  deferred rather than re-derived).
+- **Audit records the authenticated actor** (`cli.py`): ACL-gated commands pass
+  the verified OS actor into the hash-chained log, not a self-asserted label.
 - **Cross-org root collision fixed** (`identity.py`): `root_mac` is now
   `H(len(org_id)||org_id||len(pubkey)||pubkey||len(namespace)||namespace)`,
   so two orgs can never collide under the documented defaults. Folder/doc
