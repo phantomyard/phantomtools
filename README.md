@@ -36,6 +36,19 @@ folded back in. New tools are picked up automatically; there's nothing to wire
 up per tool. The installers also refuse to clobber a diverged copy and point you
 at this command.
 
+## Contributing
+
+Most tools here touch a **running phantombot persona** — its identity, its
+encrypted secrets, its accumulated memory, its security perimeter. Before opening
+a PR, read **[CONTRIBUTING.md](./CONTRIBUTING.md)**: it covers what a tool may and
+may not own inside a persona directory, how to emit into the memory system instead
+of rebuilding it, OKF conformance for generated knowledge, and the security
+perimeter rules (including the ones that are hard blocks). It ends with a PR
+checklist.
+
+The one-line version: **a tool is additive — it may create and own things, but it
+may never assume it knows the full contents of something a phantom owns.**
+
 ## License
 
 MIT, unless a tool's own README says otherwise.
