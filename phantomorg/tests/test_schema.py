@@ -27,7 +27,7 @@ class TestSchema(unittest.TestCase):
             load_org_yaml("no/exists/org.yaml")
 
     def test_actor_npub_parsed_from_dict(self):
-        npub = "npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf"
+        npub = "npub16fg8f93njtj7nervk94w6kgtdp4vtze8dzfer2qjc394mx6luzgqavqwgg"
         with tempfile.TemporaryDirectory() as tmp:
             org = Path(tmp) / "org.yaml"
             org.write_text(
@@ -53,7 +53,7 @@ class TestSchema(unittest.TestCase):
         spec = load_org_yaml(AU_ORG)
         self.assertEqual(
             spec.actors[0].npub,
-            "npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf",
+            "npub16fg8f93njtj7nervk94w6kgtdp4vtze8dzfer2qjc394mx6luzgqavqwgg",
         )
 
 

@@ -269,6 +269,7 @@ _CHANNEL_AGENT_KEYS = {
     "relay",
     "bridge_npub",
     "human_npubs",
+    "principal_npubs",
     "public_relays",
 }
 _ENVELOPE_KEYS = {"marker", "ttl_hours"}
@@ -535,7 +536,7 @@ def validate_shape(raw: dict) -> None:
                     str,
                     "communication.channels.agent.bridge_npub",
                 )
-            for list_key in ("human_npubs", "public_relays"):
+            for list_key in ("human_npubs", "principal_npubs", "public_relays"):
                 if list_key in a:
                     _require_string_list(
                         a[list_key], f"communication.channels.agent.{list_key}"

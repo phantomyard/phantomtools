@@ -303,7 +303,7 @@ class TestDuplicateIdError(_AUCopyTestCase):
         # Two actors sharing one npub would make the "which bot do I DM"
         # mapping ambiguous; the validator must flag it.
         doc = self._raw()
-        npub = "npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf"
+        npub = "npub16fg8f93njtj7nervk94w6kgtdp4vtze8dzfer2qjc394mx6luzgqavqwgg"
         doc["actors"][0]["npub"] = npub
         doc["actors"][1]["npub"] = npub
         self.org_path.write_text(

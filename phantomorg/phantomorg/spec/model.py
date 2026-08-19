@@ -204,6 +204,7 @@ class AgentChannel:
     relay: str | None = None
     bridge_npub: str | None = None
     human_npubs: list[str] = field(default_factory=list)
+    principal_npubs: list[str] = field(default_factory=list)
     public_relays: list[str] = field(default_factory=list)
 
     @classmethod
@@ -213,6 +214,7 @@ class AgentChannel:
             relay=d.get("relay"),
             bridge_npub=d.get("bridge_npub"),
             human_npubs=list(d.get("human_npubs", []) or []),
+            principal_npubs=list(d.get("principal_npubs", []) or []),
             public_relays=list(d.get("public_relays", []) or []),
         )
 

@@ -9,9 +9,9 @@ channels (private relay, bridge npub, human npubs) and the actor identities
 with:
 
 - ``relays``: the org private relay first, then the optional public relays.
-- ``allowed_npubs``: explicitly trusted principals only. Human principals are
-  admitted from the channel configuration; relays/bridges and peer actors are
-  never promoted to principal trust merely because they can deliver traffic.
+- ``allowed_npubs``: explicitly designated PRINCIPALS only (``principal_npubs``).
+  The shared human group identity (``human_npubs``), relays, the bridge and
+  peer actors are delivery endpoints, never promoted to principal trust.
 - ``greeted`` is intentionally empty: onboarding must remain visible to the
   operator and must not silently establish trust.
 
@@ -65,13 +65,16 @@ def phantomchat_config(
     if not actor.npub:
         return None
 
-    human_npubs = list(channel.human_npubs or [])
+    principal_npubs = list(channel.principal_npubs or [])
 
     relays = [channel.relay] + list(channel.public_relays or [])
 
-    # A relay/bridge is a transport endpoint, not a principal. Peer actors
-    # are data unless an explicit trust relationship exists upstream.
-    allowed = human_npubs.copy()
+    # ``allowed_npubs`` is a PRINCIPAL trust grant, not a delivery list. Only
+    # the explicitly designated principal keys (``principal_npubs``) are
+    # trusted; the shared human group identity (``human_npubs``), the bridge,
+    # relays and peer actors remain screened by the threat judge. Nothing is
+    # auto-promoted from delivery capability to principal authority.
+    allowed = principal_npubs.copy()
 
     # Do not pre-seed greeted. The runtime onboarding signal must remain
     # observable rather than silently converting delivery into trust.

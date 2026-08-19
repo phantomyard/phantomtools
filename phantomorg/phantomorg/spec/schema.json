@@ -383,6 +383,12 @@
                     "type": "string"
                   }
                 },
+                "principal_npubs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "public_relays": {
                   "type": "array",
                   "items": {

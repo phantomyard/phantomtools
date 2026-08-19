@@ -298,11 +298,11 @@ class TestNpubValidation(unittest.TestCase):
 
     # Real npubs extracted from the AU bots' phantomchat identities.
     VALID: ClassVar[list[str]] = [
-        "npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf",
-        "npub1gecyq3xylqzzvehz08mnsd4rxpjphhm03saq4rx3hx5xee4cg7tqts74vr",
-        "npub14t8u4p6n5lfahlwtfr2zq4zqrggktjmnv99qx0yx0j3wpfuvl2tssf775x",
-        "npub1ggyxfrue07z39dl0ag3lge3z8l7vtunlyrg9quwcdh4r84rnwq4s25aqa9",
-        "npub13wcvzezm4wxxyv3c6nda700zrjt63w06tpevkf52mkuggy3aqf7qlm0mp4",
+        "npub16fg8f93njtj7nervk94w6kgtdp4vtze8dzfer2qjc394mx6luzgqavqwgg",
+        "npub1lq22ue4wzezjy4v06xa925r0ed73h35chm38qme82jerzshtd2wsaujvls",
+        "npub1fcmtmz4ftp6tmdnhxeu0gt5nqqr7lxf9vxlm8qu6s2vmuah5presk0agh9",
+        "npub1ax0ysc0rz74p3j3mreylczfc658setut8g4thqv80qk0y6td3ursy8jhvm",
+        "npub195framkkdk6fx0qqeyqlpmpwynl02kvrwa4u6qulkt9hyz3q6s8qq6flel",
     ]
 
     def setUp(self):
@@ -411,7 +411,7 @@ class TestHumansRegistry(unittest.TestCase):
     """org.yaml ``humans:`` block: optional, validatable registry of
     human counterparts (Board president, treasurer...)."""
 
-    VALID_NPUB = "npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf"
+    VALID_NPUB = "npub16fg8f93njtj7nervk94w6kgtdp4vtze8dzfer2qjc394mx6luzgqavqwgg"
 
     def setUp(self):
         with open(AU_ORG, encoding="utf-8") as f:

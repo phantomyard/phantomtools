@@ -51,10 +51,6 @@ from .scopes import SCOPES_FILENAME, derive_scopes, serialize_scopes
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
-# Marker block used for the org communication norm inside memory/norms.md.
-_NORM_START = "<!-- phantomorg:start -->"
-_NORM_END = "<!-- phantomorg:end -->"
-
 # mkstemp leftovers from a crashed `_atomic_write` (SIGKILL between mkstemp
 # and os.replace) are named `.{name}.{6 alnum}` in the output tree. They are
 # harmless but accumulate; the build cleans ones older than this cutoff so a
@@ -131,11 +127,13 @@ _SEED_FILES: dict[str, str] = {
         "## (no entries yet)\n"
     ),
     "memory/norms.md": (
-        "# Norms\n\nRoutine communication patterns used by the operator.\n"
+        "# Norms\n\nRoutine communication patterns used by the operator. "
         "Channels, expected cadence, request-id conventions, and known "
-        "counterparties belong here.\n\n"
-        "<!-- phantomorg:start -->\n"
-        "<!-- phantomorg:end -->\n"
+        "counterparties belong here. This drawer is owned by the "
+        "capture/heartbeat/nightly pipeline (it is seeded once and never "
+        "overwritten by the compiler).\n\n"
+        "The org communication norm lives in the KB: see "
+        "[[procedures/comunicacion-agentes]].\n"
     ),
     "kb/Home.md": (
         "---\ntype: index\ntitle: Home\ndescription: Persona knowledge-base index.\naliases: [home]\ntags: [navigation]\ncreated: {today}\nupdated: {today}\n---\n\n"
@@ -315,6 +313,37 @@ def _norma_context(spec: OrgSpec) -> dict:
         ),
         "max_hops": spec.communication.max_hops,
     }
+
+
+def _render_norm_protocol(norma_md: str, spec: OrgSpec, t: dict) -> str:
+    """Wrap the rendered communication norm in OKF frontmatter for the KB
+    protocol page. ``type``/``title``/``description``/``aliases`` give it the
+    high-weight BM25F fields so recall queries actually surface it."""
+    org = spec.organization.name
+    org_slug = re.sub(r"[^a-z0-9]+", "-", org.lower()).strip("-")
+    today = datetime.datetime.now(tz=datetime.timezone.utc).date().isoformat()
+    lang = resolve_lang(spec)
+    if lang == "es":
+        title = f"Norma de comunicación entre agentes — {org}"
+        description = "Canales, cadencia, formato de request-id y reglas "
+        "anti-bucle de la comunicación entre agentes de la organización."
+        aliases = "[norma, comunicación, request-id, canales, protocolo]"
+    else:
+        title = f"Agent communication norm — {org}"
+        description = "Channels, cadence, request-id format and anti-loop "
+        "rules for agent-to-agent communication in the organization."
+        aliases = "[norm, communication, request-id, channels, protocol]"
+    return (
+        "---\n"
+        "type: procedure\n"
+        f"title: {title}\n"
+        f"description: {description}\n"
+        f"tags: [comunicacion, norma, {org_slug}]\n"
+        f"aliases: {aliases}\n"
+        f"created: {today}\n"
+        f"updated: {today}\n"
+        "---\n\n" + norma_md.rstrip() + "\n"
+    )
 
 
 def resolve_lang(spec: OrgSpec) -> str:
@@ -592,43 +621,22 @@ def build_actor(
 
     ensure_scaffold(actor_dir)
 
-    # Operational communication norms belong in memory/norms.md because the
-    # threat judge reads that drawer before untrusted turns. Only the marked
-    # PhantomOrg section is owned; operator/runtime content remains intact.
+    # Operational communication norms belong in the KB (an OKF-linked
+    # procedure), NOT in memory/norms.md: that drawer is owned by the
+    # capture/heartbeat/nightly pipeline. The compiler seeds memory/norms.md
+    # once (a pointer to this page) and never overwrites runtime drawer
+    # content; the concise norm is emitted at runtime via
+    # `phantombot memory capture --tag norm --persona <actor>`.
     if spec.communication.human_channel or spec.communication.agent_channel:
         norma_md = env.get_template("norma.j2").render(t=t, **_norma_context(spec))
-        # Keep an optional human-readable protocol page in the canonical KB
-        # category; the judge-facing copy remains memory/norms.md.
+        # Human-readable protocol page in the canonical KB category, with
+        # OKF frontmatter (title/type/aliases) so it ranks on recall.
         procedures_dir = actor_dir / "kb" / "procedures"
         procedures_dir.mkdir(parents=True, exist_ok=True)
         procedure_path = procedures_dir / "comunicacion-agentes.md"
-        procedure_body = norma_md
+        procedure_body = _render_norm_protocol(norma_md, spec, t)
         if write_plain_if_changed(procedure_path, procedure_body):
             written.append(procedure_path)
-        p = actor_dir / "memory" / "norms.md"
-        existing = p.read_text(encoding="utf-8") if p.exists() else "# Norms\n\n"
-        marker = (
-            "<!-- phantomorg:start -->\n"
-            + norma_md.strip()
-            + "\n<!-- phantomorg:end -->"
-        )
-        if (
-            "<!-- phantomorg:start -->" in existing
-            and "<!-- phantomorg:end -->" in existing
-        ):
-            import re as _re
-
-            merged = _re.sub(
-                r"<!-- phantomorg:start -->.*?<!-- phantomorg:end -->",
-                marker,
-                existing,
-                count=1,
-                flags=_re.DOTALL,
-            )
-        else:
-            merged = existing.rstrip() + "\n\n" + marker + "\n"
-        if write_plain_if_changed(p, merged):
-            written.append(p)
 
     # Phantomchat config (phantomchat.json): compiled from org.yaml when the
     # org declares an agent channel AND the actor declares an npub. Same
@@ -689,7 +697,6 @@ def _reconcile_stale_output(spec: OrgSpec, out_dir: Path) -> None:
             _remove_if_exists(
                 actor_dir / "kb" / "procedures" / "comunicacion-agentes.md"
             )
-            _strip_norm_marker(actor_dir / "memory" / "norms.md")
 
     # 3. Obsolete org-level HUMANS.md (no humans block in the model).
     if not spec.humans:
@@ -721,23 +728,6 @@ def _remove_tree(path: Path) -> None:
 def _remove_if_exists(path: Path) -> None:
     if path.exists():
         _remove_tree(path)
-
-
-def _strip_norm_marker(path: Path) -> None:
-    """Remove the ``<!-- phantomorg:start/end -->`` block from a build
-    output ``memory/norms.md`` (the org no longer declares channels)."""
-    if not path.exists():
-        return
-    content = path.read_text(encoding="utf-8")
-    if _NORM_START in content and _NORM_END in content:
-        stripped = re.sub(
-            re.escape(_NORM_START) + r".*?" + re.escape(_NORM_END) + r"\n?",
-            "",
-            content,
-            count=1,
-            flags=re.DOTALL,
-        )
-        _atomic_write(path, stripped)
 
 
 def build(

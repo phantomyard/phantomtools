@@ -189,7 +189,7 @@ roles:
 actors:
   - id: marco
     role: ceo
-    npub: npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf
+    npub: npub16fg8f93njtj7nervk94w6kgtdp4vtze8dzfer2qjc394mx6luzgqavqwgg
     telegram_bot: "@marco_bot"
     tools: [email, drive, calendar]
     tools_excluded: []
@@ -198,7 +198,7 @@ actors:
 
   - id: dana
     role: project_lead
-    npub: npub1ggyxfrue07z39dl0ag3lge3z8l7vtunlyrg9quwcdh4r84rnwq4s25aqa9
+    npub: npub1ax0ysc0rz74p3j3mreylczfc658setut8g4thqv80qk0y6td3ursy8jhvm
     telegram_bot: "@dana_bot"
     tools: [email, drive, notebooklm]
     tools_excluded: []
@@ -239,8 +239,9 @@ communication:
     agent:
       platform: phantomchat
       relay: "ws://relay.example.invalid:7777"
-      bridge_npub: "npub1k5sucm83q6tg4a9qhz8vx6gu8m3x03ecnnr0klv6skzhv8elkfkstydrel"
-      human_npubs: []
+      bridge_npub: "npub1w6huqqg6v56jpzu757j8d6gywxndmfl2fa28neqqzwnjzxete7psswsyx9"
+      human_npubs: []       # delivery identity — screened by the threat judge
+      principal_npubs: []   # explicit principals only (trust); empty = fail-closed
       public_relays: ["wss://relay.damus.io"]
 ```
 

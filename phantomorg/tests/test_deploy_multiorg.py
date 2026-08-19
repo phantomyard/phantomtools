@@ -1146,7 +1146,15 @@ class TestDeployPrune(unittest.TestCase):
 
             result = deploy(au_out, target, prune=True)
             self.assertIn("elias", result.pruned)
-            self.assertFalse((target / "elias").exists())
+            # Prune reverts OWNED content but never removes the persona dir
+            # (it is runtime state): the metadata is gone and the ORG blocks
+            # are stripped, but the dir and its seeds remain.
+            self.assertTrue((target / "elias").exists())
+            self.assertFalse((target / "elias" / ".phantomorg.yaml").exists())
+            self.assertNotIn(
+                "ORG:BEGIN",
+                (target / "elias" / "SOUL.md").read_text(encoding="utf-8"),
+            )
             # the rest stays deployed, untouched
             self.assertTrue((target / "dana").exists())
 
@@ -1416,17 +1424,24 @@ class TestDeployArchive(unittest.TestCase):
             result = deploy(au_out, target, prune=True)
 
             self.assertIn("elias", result.pruned)
-            self.assertFalse((target / "elias").exists())
+            # The persona dir stays (runtime state); the owned SOUL.md was
+            # archived (per-file) and its ORG blocks stripped in place.
+            self.assertTrue((target / "elias").exists())
             archive_root = target.parent / "personas-archive"
             archived_elena = [
                 d for d in archive_root.iterdir() if d.name.startswith("elias-")
             ]
             self.assertEqual(len(archived_elena), 1)  # archived, not deleted
             self.assertTrue((archived_elena[0] / "SOUL.md").exists())
+            # The live SOUL.md lost its owned blocks but kept its manual parts.
+            self.assertNotIn(
+                "ORG:BEGIN",
+                (target / "elias" / "SOUL.md").read_text(encoding="utf-8"),
+            )
 
     def test_prune_preserves_runtime_mind(self):
-        """Prune archives the owned files but leaves the accumulated mind
-        (identity, vault, memory, kb) in place."""
+        """Prune reverts the owned markers/plain files but leaves the
+        accumulated mind (identity, vault, memory, kb) byte-identical."""
         au_spec = load_org_yaml(AU_ORG)
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -1444,13 +1459,80 @@ class TestDeployArchive(unittest.TestCase):
             result = deploy(au_out, target, prune=True)
 
             self.assertIn("elias", result.pruned)
-            # owned files gone, runtime mind preserved
-            self.assertFalse((elias / "SOUL.md").exists())
+            # owned markers gone, runtime mind preserved
+            self.assertNotIn(
+                "ORG:BEGIN",
+                (elias / "SOUL.md").read_text(encoding="utf-8"),
+            )
             self.assertEqual(
                 (elias / "identity.json").read_text(), '{"nsec": "nsec1elena"}'
             )
             self.assertEqual((elias / "vault.sqlite").read_text(), "secrets")
             self.assertTrue((elias / "memory" / "2026-08-19.md").exists())
+
+    def test_prune_preserves_runtime_state_byte_for_byte(self):
+        """Prune reverts ONLY the PhantomOrg-owned regions: identity, vault,
+        memory, KB notes, channel state, and every byte outside the ORG
+        markers survive byte-for-byte (the phantomyard prune regression)."""
+        au_spec = load_org_yaml(AU_ORG)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            au_out, target = tmp / "au_out", tmp / "target"
+            build(au_spec, au_out)
+            deploy(au_out, target)
+
+            elias = target / "elias"
+            # Runtime state PhantomOrg must never touch.
+            (elias / "identity.json").write_text(
+                '{"nsec": "nsec1secret"}', encoding="utf-8"
+            )
+            (elias / "vault.sqlite").write_bytes(b"\x00vault\x01bytes")
+            (elias / "state.json").write_text(
+                '{"default_persona": "elias"}', encoding="utf-8"
+            )
+            daily = elias / "memory" / "2026-08-19.md"
+            daily.write_text("# daily\ncaptured fact\n", encoding="utf-8")
+            kb_note = elias / "kb" / "concepts" / "field-note.md"
+            kb_note.parent.mkdir(parents=True, exist_ok=True)
+            kb_note.write_text(
+                "---\ntype: concept\ntitle: field\n---\n\n# field\n", encoding="utf-8"
+            )
+            # Manual content OUTSIDE the ORG markers in a merge file.
+            soul = elias / "SOUL.md"
+            soul.write_text(
+                soul.read_text(encoding="utf-8")
+                + "\n# Manual note (outside any ORG block)\nkeep me\n",
+                encoding="utf-8",
+            )
+
+            before = {
+                "identity": (elias / "identity.json").read_bytes(),
+                "vault": (elias / "vault.sqlite").read_bytes(),
+                "state": (elias / "state.json").read_bytes(),
+                "daily": daily.read_bytes(),
+                "kb_note": kb_note.read_bytes(),
+                "soul_manual": b"# Manual note (outside any ORG block)\nkeep me\n",
+            }
+
+            shutil.rmtree(au_out / "elias")
+            result = deploy(au_out, target, prune=True)
+            self.assertIn("elias", result.pruned)
+
+            # Byte-for-byte: every runtime file survives exactly.
+            self.assertEqual((elias / "identity.json").read_bytes(), before["identity"])
+            self.assertEqual((elias / "vault.sqlite").read_bytes(), before["vault"])
+            self.assertEqual((elias / "state.json").read_bytes(), before["state"])
+            self.assertEqual(daily.read_bytes(), before["daily"])
+            self.assertEqual(kb_note.read_bytes(), before["kb_note"])
+            # The manual content outside markers survives in SOUL.md.
+            self.assertIn(before["soul_manual"], (elias / "SOUL.md").read_bytes())
+            # But the owned ORG blocks are gone.
+            self.assertNotIn(
+                "ORG:BEGIN",
+                (elias / "SOUL.md").read_text(encoding="utf-8"),
+            )
+            # And the owned metadata is gone.
+            self.assertFalse((elias / ".phantomorg.yaml").exists())
 
     def test_force_adopts_handwritten_preserving_soul(self):
         """--force on a hand-written persona proceeds additively: the
@@ -2096,8 +2178,11 @@ communication:
             )
             self.assertEqual(result.exit_code, 0, result.output)
 
-            # elias WAS actually pruned (metadata org id matches).
-            self.assertFalse((target / "elias").exists())
+            # elias WAS actually pruned (metadata org id matches): its owned
+            # markers are stripped and .phantomorg.yaml removed, but the
+            # persona dir stays (runtime state is never owned/removed).
+            self.assertTrue((target / "elias").exists())
+            self.assertFalse((target / "elias" / ".phantomorg.yaml").exists())
 
             # And the durable journal recorded it under planned_pruned,
             # using the metadata org id — the old folder-name matching

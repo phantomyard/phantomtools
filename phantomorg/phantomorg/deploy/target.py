@@ -41,7 +41,6 @@ never makes on its own.
 from __future__ import annotations
 
 import os
-import re
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -50,7 +49,7 @@ from uuid import uuid4
 
 import yaml
 
-from ..compiler.blocks import has_blocks, merge_content
+from ..compiler.blocks import has_blocks, merge_content, strip_blocks
 from ..compiler.humans import HUMANS_FILENAME
 from ..compiler.scopes import SCOPES_FILENAME
 
@@ -215,13 +214,12 @@ class DeployResult:
     archived: list[tuple[str, str]] = field(default_factory=list)
     """(persona_name, archive_dir) for each pre-overwrite backup made.
 
-    With additive deploy these archive dirs hold PER-FILE backups (the
-    owned files at their relative paths); with ``--reset`` they hold a
-    whole persona directory. ``file_archives`` marks which are which."""
+    Deploy is strictly additive, so these archive dirs always hold
+    PER-FILE backups (the owned files at their relative paths).
+    ``file_archives`` marks their resolved paths for rollback."""
     file_archives: set[str] = field(default_factory=set)
     """Resolved archive-dir paths that contain per-file (additive)
-    backups rather than a whole persona directory. Rollback copies these
-    files back in place instead of moving a directory."""
+    backups. Rollback copies these files back in place."""
     created_archive_dirs: set[Path] = field(default_factory=set)
     """Archive roots created during this deploy (to announce once)."""
     scopes_written: bool = False
@@ -544,8 +542,6 @@ def _preflight(
 #   "plain"  -> fully derived file, plain atomic overwrite (archived first).
 #   "seed"   -> write only if missing (accumulating runtime state; the
 #                live content always outranks the compiled template).
-#   "norm"   -> merge only the <!-- phantomorg:start/end --> block into the
-#                live file (preserving runtime content around it).
 _OWNED_FILES: dict[str, str] = {
     "IDENTITY.md": "merge",
     "SOUL.md": "merge",
@@ -557,7 +553,7 @@ _OWNED_FILES: dict[str, str] = {
     "memory/decisions.md": "seed",
     "memory/lessons.md": "seed",
     "memory/commitments.md": "seed",
-    "memory/norms.md": "norm",
+    "memory/norms.md": "seed",
     "kb/Home.md": "seed",
     "kb/templates/concept.md": "seed",
     "kb/templates/runbook.md": "seed",
@@ -583,37 +579,7 @@ _OWNED_DIRS: tuple[str, ...] = (
     "kb/templates",
 )
 
-_NORM_START = "<!-- phantomorg:start -->"
-_NORM_END = "<!-- phantomorg:end -->"
-
-# Marker file placed inside an archive dir that holds PER-FILE (additive)
-# backups rather than a whole persona directory. Rollback checks for it to
-# choose between "copy files back in place" and "move the directory back".
 PER_FILE_MARKER = ".pf-file-archive"
-
-
-def _merge_norm_block(existing: str, new: str) -> str:
-    """Replace the phantomorg:start/end block in ``existing`` with the
-    one in ``new``; append it if absent. Everything outside the block is
-    preserved byte-for-byte. Returns the merged text."""
-    new_block_m = re.search(
-        re.escape(_NORM_START) + r"(.*?)" + re.escape(_NORM_END),
-        new,
-        re.DOTALL,
-    )
-    if new_block_m is None:
-        return existing
-    new_block = new_block_m.group(0)
-    if _NORM_START in existing and _NORM_END in existing:
-        merged = re.sub(
-            re.escape(_NORM_START) + r".*?" + re.escape(_NORM_END),
-            lambda _m: new_block,
-            existing,
-            count=1,
-            flags=re.DOTALL,
-        )
-        return merged
-    return existing.rstrip() + "\n\n" + new_block + "\n"
 
 
 def _apply_owned_file(
@@ -644,12 +610,6 @@ def _apply_owned_file(
             return None
         live = live_path.read_text(encoding="utf-8")
         merged = merge_content(live, compiled_content)
-        return merged if merged != live else None
-    if strategy == "norm":
-        if not live_path.exists():
-            return compiled_content
-        live = live_path.read_text(encoding="utf-8")
-        merged = _merge_norm_block(live, compiled_content)
         return merged if merged != live else None
     raise DeployError(f"internal error: unknown owned-file strategy {strategy!r}")
 
@@ -707,82 +667,21 @@ def _write_owned_file(live_path: Path, content: str) -> None:
     os.replace(tmp, live_path)
 
 
-def _deploy_reset(
-    compiled_dir: Path,
-    target: Path,
-    force: bool,
-    prune: bool,
-    compiled_actor_dirs: list[Path],
-    prune_list: list[str],
-    has_scopes: bool,
-    has_humans: bool,
-    result: DeployResult,
-    created_flags: set[Path],
-) -> DeployResult:
-    """DESTRUCTIVE reset: archive the whole live persona directory and swap
-    in a pristine compiled scaffold. This is the legacy whole-directory
-    replacement, kept ONLY behind an explicit ``--reset`` (CONTRIBUTING.md
-    §1.4). It is never reached by a normal ``po deploy``."""
-    staging: Path | None = None
-    try:
-        if compiled_actor_dirs or has_scopes or has_humans:
-            staging = _staging_dir(target)
-            staging.mkdir(parents=True, exist_ok=True)
-
-        for actor_dir in compiled_actor_dirs:
-            dest = target / actor_dir.name
-            dest_existed = dest.exists()
-            if staging is None:
-                raise RuntimeError("internal error: staging dir missing")
-            staging_dest = staging / actor_dir.name
-            shutil.copytree(actor_dir, staging_dest)
-            if dest_existed:
-                archived_dir = _move_to_archive(target, actor_dir.name, created_flags)
-                result.archived.append((actor_dir.name, str(archived_dir)))
-            os.replace(staging_dest, dest)
-            result.deployed.append(actor_dir.name)
-            if not dest_existed:
-                result.created.append(actor_dir.name)
-
-        if staging is not None:
-            result.scopes_written, result.scopes_backup, result.scopes_created = (
-                _write_scopes_file(compiled_dir, target, staging)
-            )
-            result.humans_written, result.humans_backup, result.humans_created = (
-                _write_humans_file(compiled_dir, target, staging)
-            )
-    finally:
-        if staging is not None and staging.exists():
-            shutil.rmtree(staging, ignore_errors=True)
-
-    for name in prune_list:
-        archived_dir = _move_to_archive(target, name, created_flags)
-        result.pruned.append(name)
-        result.archived.append((name, str(archived_dir)))
-
-    if created_flags:
-        result.created_archive_dirs.update(created_flags)
-
-    return result
-
-
 def deploy(
     compiled_dir: Path,
     target_dir: Path | None = None,
     force: bool = False,
     prune: bool = False,
-    reset: bool = False,
 ) -> DeployResult:
     """Deploy compiled personas into ``target``.
 
-    By default this is ADDITIVE (CONTRIBUTING.md §1.3): only the files
+    This is strictly ADDITIVE (CONTRIBUTING.md §1): only the files
     PhantomOrg owns are written, in place, atomically per file. The live
-    persona directory is never moved, replaced or archived.
-
-    ``reset=True`` opts into the DESTRUCTIVE whole-directory replacement
-    (archive the live persona dir, then swap in a pristine compiled
-    scaffold). It must only be offered through an unmistakable, confirmed
-    CLI path (``po deploy --reset``).
+    persona directory is never moved, replaced or archived, and every
+    runtime-owned file (identity.json, vault.sqlite, memory/, kb/ notes,
+    daily files, ...) is left exactly as it was. There is no whole-directory
+    replacement mode: a fresh persona is a runtime-owned lifecycle operation
+    (stop/backup/restore), never a compiler deploy.
     """
     target = target_dir or default_personas_dir()
     # C1 (adversarial review, v0.5.5): the deploy tree must not be reached
@@ -840,22 +739,8 @@ def deploy(
             + "\nUse --force if you really want to overwrite."
         )
 
-    if reset:
-        return _deploy_reset(
-            compiled_dir,
-            target,
-            force,
-            prune,
-            compiled_actor_dirs,
-            prune_list,
-            has_scopes,
-            has_humans,
-            result,
-            created_flags,
-        )
-
     # ------------------------------------------------------------------
-    # ADDITIVE deploy (the only path for a normal `po deploy`): write the
+    # ADDITIVE deploy (the only path for `po deploy`): write the
     # files PhantomOrg owns into the LIVE persona directory, in place,
     # atomically per file. The persona directory itself is never moved,
     # replaced or archived, and every runtime-owned file (identity.json,
@@ -912,21 +797,36 @@ def deploy(
             shutil.rmtree(staging, ignore_errors=True)
 
     # Prune AFTER the deploy loop, using the preflight-computed list. A
-    # pruned persona's PhantomOrg-OWNED files are archived per-file and
-    # removed from the live directory; its accumulated mind (identity,
-    # vault, memory, KB notes) is left untouched. If nothing else remains
-    # (a freshly deployed, compiler-only persona), the now-empty scaffold
-    # dirs and the persona dir itself are removed too.
+    # pruned persona's PhantomOrg-OWNED content is archived per-file and
+    # reverted; its accumulated mind (identity, vault, memory, KB notes,
+    # seed files) is left untouched and the persona directory is NEVER
+    # removed (a tool may never own a persona directory):
+    #   - "plain"  -> the whole file is PhantomOrg-owned: archive + unlink.
+    #   - "merge"  -> only the ORG:BEGIN/END blocks are owned: archive, then
+    #                 write back the file with the blocks stripped (manual
+    #                 content outside the markers survives in place).
+    #   - "seed"   -> seed-only runtime files are never owned: leave them.
     for name in prune_list:
         persona_dir = target / name
-        for rel in _OWNED_FILES:
+        for rel, strategy in _OWNED_FILES.items():
             live_path = persona_dir / rel
             if not live_path.exists() or live_path.is_symlink():
                 continue
+            if strategy == "seed":
+                continue
             backup = _archive_file(target, name, rel, archive_dirs, created_flags)
-            if backup is not None:
+            if backup is None:
+                continue
+            if strategy == "merge":
+                # Remove ONLY the owned blocks; keep everything outside them.
+                content = live_path.read_text(encoding="utf-8")
+                stripped = strip_blocks(content)
+                if stripped == content:
+                    continue  # no owned blocks to remove
+                _write_owned_file(live_path, stripped)
+            else:
+                # "plain": fully derived, fully owned — remove the file.
                 live_path.unlink()
-        _remove_empty_dirs_up(persona_dir, target)
         result.pruned.append(name)
 
     for name, archive_dir in archive_dirs.items():
@@ -937,31 +837,3 @@ def deploy(
         result.created_archive_dirs.update(created_flags)
 
     return result
-
-
-def _remove_empty_dirs_up(path: Path, stop_at: Path) -> None:
-    """Remove empty directories under ``path`` (bottom-up) and then ``path``
-    itself and its empty ancestors, stopping AT (never removing)
-    ``stop_at``. Used after a prune to drop the now-empty scaffold dirs
-    and the persona dir itself ONLY when no runtime content remains. The
-    personas root (``stop_at``) and everything above it are never touched."""
-    stop_resolved = stop_at.resolve()
-
-    def _prune_empty(d: Path) -> None:
-        if d.resolve() == stop_resolved or not d.is_dir() or d.is_symlink():
-            return
-        for child in sorted(d.iterdir()):
-            _prune_empty(child)
-        try:
-            d.rmdir()
-        except OSError:
-            pass  # non-empty (runtime content) — leave it
-
-    _prune_empty(path)
-    current = path
-    while current.resolve() != stop_resolved and current != current.parent:
-        try:
-            current.rmdir()
-        except OSError:
-            break
-        current = current.parent

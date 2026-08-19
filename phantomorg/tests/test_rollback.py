@@ -377,7 +377,8 @@ class TestRollbackExecute(unittest.TestCase):
 
     def test_rollback_restores_pruned_personas(self):
         """Deploy with an actor, then deploy --prune after removing it from
-        the build -> rollback brings the pruned actor back."""
+        the build -> the owned markers are stripped but the persona dir and
+        its runtime/seed content stay; rollback restores the owned content."""
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             out = _build_au(tmp)
@@ -385,12 +386,22 @@ class TestRollbackExecute(unittest.TestCase):
 
             deploy(out, target)
             self.assertTrue((target / "elias").exists())
+            elias_soul_before = (target / "elias" / "SOUL.md").read_text(
+                encoding="utf-8"
+            )
 
             # simulate Elias removed from spec: drop from compiled output
             shutil.rmtree(out / "elias")
             result = deploy(out, target, prune=True)
             self.assertIn("elias", result.pruned)
-            self.assertFalse((target / "elias").exists())
+            # The persona dir is NEVER removed by prune (runtime state); only
+            # the owned markers/plain files are reverted.
+            self.assertTrue((target / "elias").exists())
+            self.assertFalse((target / "elias" / ".phantomorg.yaml").exists())
+            self.assertNotIn(
+                "ORG:BEGIN",
+                (target / "elias" / "SOUL.md").read_text(encoding="utf-8"),
+            )
 
             record_session(
                 target,
@@ -405,7 +416,11 @@ class TestRollbackExecute(unittest.TestCase):
             rb = execute_rollback(plan)
 
             self.assertIn("elias", rb.restored)
-            self.assertTrue((target / "elias" / "SOUL.md").exists())
+            # The owned SOUL.md content is restored byte-for-byte.
+            self.assertEqual(
+                (target / "elias" / "SOUL.md").read_text(encoding="utf-8"),
+                elias_soul_before,
+            )
 
     def test_rollback_keeps_preexisting_archive_dir(self):
         """If personas-archive/ existed before (e.g. phantombot archives),

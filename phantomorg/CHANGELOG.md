@@ -4,23 +4,30 @@
 
 **Additive deploy + phantomyard PR #25 review hardening.**
 
-- **Additive deploy** (`deploy/target.py`): a normal `po deploy` now writes
-  only the files PhantomOrg owns, in place, atomically per file — it never
-  moves, replaces, or archives the live persona directory. `identity.json`,
-  `vault.sqlite`, `memory/`, `kb/` notes, and all runtime-owned files survive
-  a redeploy. Overwritten owned files are backed up per-file into
-  `personas-archive/` (marker-tagged), and `po rollback` restores them in
-  place. The destructive whole-directory replacement is now a separate,
-  confirmed `po deploy --reset`.
-- **Trust model**: `phantomchat.json` is seeded once and never overwritten
-  (the allowlist is runtime state); `allowed_npubs` contains only the human
-  principals; `greeted` is left empty so onboarding stays observable.
+- **Additive deploy** (`deploy/target.py`): `po deploy` writes only the files
+  PhantomOrg owns, in place, atomically per file — it never moves, replaces,
+  or archives the live persona directory. `identity.json`, `vault.sqlite`,
+  `memory/`, `kb/` notes, and all runtime-owned files survive a redeploy.
+  Overwritten owned files are backed up per-file into `personas-archive/` and
+  `po rollback` restores them. There is no whole-directory replacement mode:
+  a fresh persona is a runtime-owned lifecycle operation, never a compiler
+  deploy.
+- **Prune reverts only owned regions** (`deploy/target.py`): pruning an actor
+  no longer in the spec archives and removes only PhantomOrg-owned content —
+  "plain" files are removed, "merge" files keep everything outside the
+  ORG:BEGIN/END markers, and "seed"/runtime files are left byte-for-byte.
+  The persona directory itself is never removed.
+- **Principal-only trust** (`phantomchat_gen.py`): `allowed_npubs` now
+  contains only the explicit `principal_npubs` (empty by default, fail-closed).
+  The shared human group identity (`human_npubs`), the bridge and relays are
+  delivery endpoints, never promoted to principal trust. `greeted` stays empty.
+- **memory/norms.md is seed-only**: the drawer is owned by the
+  capture/heartbeat/nightly pipeline; the compiler seeds it once (a pointer)
+  and never overwrites it. The communication norm lives in the KB as an
+  OKF-frontmatter procedure (`kb/procedures/comunicacion-agentes.md`).
 - **SOUL.md**: platform security/trust/prompt-injection content plus voice,
   communication, and working-memory guidance seeded outside ORG blocks;
   access levels labeled non-enforcing.
-- **memory/norms.md** seeded and marker-merged with the communication norm
-  (the judge-facing drawer); the human-readable page lives at
-  `kb/procedures/comunicacion-agentes.md`.
 - **Stale-output reconciliation** (`compiler/build.py`): removed actors and
   obsolete derived artifacts are cleaned when reusing an output directory.
 - **Collision-safe data-file backups** (UUID suffix) and **non-zero exit**
@@ -28,7 +35,8 @@
 - **CI** wired at the repository root: ruff check + format, bandit, mypy, and
   the full test suite.
 - **Synthetic fixtures** throughout organizations/, docs/, CHANGELOG, and
-  tests (fictional org/person/project names only).
+  tests — fictional org/person/project names AND newly generated synthetic
+  npubs (no real keys carried over).
 
 ## v0.5.10 — 2026-08-12
 

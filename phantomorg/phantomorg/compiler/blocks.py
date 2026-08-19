@@ -63,6 +63,14 @@ def has_blocks(content: str) -> bool:
     return _BEGIN_RE.search(content) is not None
 
 
+def strip_blocks(content: str) -> str:
+    """Remove every ORG:BEGIN/END block from ``content``, preserving all
+    text OUTSIDE the blocks (operator/manual content) byte-for-byte. Used
+    by prune to remove only what PhantomOrg owns from a merge file without
+    deleting the file or its manual sections."""
+    return _BLOCK_RE.sub("", content)
+
+
 def _structurally_sound(content: str) -> bool:
     """Stack-based check that BEGIN/END markers nest correctly.
 

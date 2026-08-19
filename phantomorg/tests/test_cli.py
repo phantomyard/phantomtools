@@ -222,7 +222,14 @@ class TestDeployPruneCli(_TmpOrgsTestCase):
             ],
         )
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertFalse((target_dir / "elias").exists())
+        # Prune reverts owned content but never removes the persona dir:
+        # the metadata is gone and the ORG blocks stripped, seeds remain.
+        self.assertTrue((target_dir / "elias").exists())
+        self.assertFalse((target_dir / "elias" / ".phantomorg.yaml").exists())
+        self.assertNotIn(
+            "ORG:BEGIN",
+            (target_dir / "elias" / "SOUL.md").read_text(encoding="utf-8"),
+        )
         self.assertTrue((target_dir / "dana").exists())
 
 

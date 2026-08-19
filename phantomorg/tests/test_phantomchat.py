@@ -42,11 +42,11 @@ AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.ya
 
 # Real AU runtime npubs (extracted non-invasively from the MacBookPro
 # identities) — used to build realistic fixtures.
-PACO_NPUB = "npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf"
-PEPA_NPUB = "npub1gecyq3xylqzzvehz08mnsd4rxpjphhm03saq4rx3hx5xee4cg7tqts74vr"
-ROBERTO_NPUB = "npub14t8u4p6n5lfahlwtfr2zq4zqrggktjmnv99qx0yx0j3wpfuvl2tssf775x"
-ALMA_NPUB = "npub1ggyxfrue07z39dl0ag3lge3z8l7vtunlyrg9quwcdh4r84rnwq4s25aqa9"
-ELENA_NPUB = "npub13wcvzezm4wxxyv3c6nda700zrjt63w06tpevkf52mkuggy3aqf7qlm0mp4"
+PACO_NPUB = "npub16fg8f93njtj7nervk94w6kgtdp4vtze8dzfer2qjc394mx6luzgqavqwgg"
+PEPA_NPUB = "npub1lq22ue4wzezjy4v06xa925r0ed73h35chm38qme82jerzshtd2wsaujvls"
+ROBERTO_NPUB = "npub1fcmtmz4ftp6tmdnhxeu0gt5nqqr7lxf9vxlm8qu6s2vmuah5presk0agh9"
+ALMA_NPUB = "npub1ax0ysc0rz74p3j3mreylczfc658setut8g4thqv80qk0y6td3ursy8jhvm"
+ELENA_NPUB = "npub195framkkdk6fx0qqeyqlpmpwynl02kvrwa4u6qulkt9hyz3q6s8qq6flel"
 
 ALL_NPUBS = [PACO_NPUB, PEPA_NPUB, ROBERTO_NPUB, ALMA_NPUB, ELENA_NPUB]
 
