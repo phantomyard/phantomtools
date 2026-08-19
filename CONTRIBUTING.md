@@ -172,7 +172,7 @@ running. The pipeline:
 ```
   the phantom works
         │
-        ├─ phantombot memory capture "<fact>" --tag decision
+        ├─ phantombot memory capture "<fact>" --tag decision --persona <name>
         │        └─> appends a tagged line to memory/YYYY-MM-DD.md
         │
   heartbeat (every 30 min, mechanical, no LLM)
@@ -194,12 +194,25 @@ file next to the persona dir. It's one line:
 
 ```bash
 phantombot memory capture "Sales sync 2026-08-14: ship Friday; Paco owns rollback" \
-  --tag decision --tag commitment
+  --tag decision --tag commitment --persona <target>
 ```
 
 That single call is indexed on write, promoted by the heartbeat, distilled by the
 nightly, linked into the KB, and searchable by every future turn. A parallel store
 gets none of that, and drifts from the real one within a week.
+
+**Always pass `--persona` when your tool is acting on behalf of a persona.** The CLI
+does *not* infer the persona from the working directory, the org config, or anything
+else in your tool's environment: `resolvePersonaDir()` in `src/cli/memory.ts` is
+`persona ?? config.defaultPersona`, so an omitted flag silently resolves to whatever
+persona the *host* happens to have configured as its default. On a single-persona
+box that is invisible. On a multi-persona box — which is the whole premise of org
+tooling — it is a double failure: the fact lands in an unrelated persona's durable
+memory and threat-judge briefing (contaminating a persona that never attended your
+meeting), while the persona that did attend learns nothing. Neither half raises an
+error, so the only symptom is two personas quietly remembering the wrong things.
+Relying on the default is safe only for an operator deliberately targeting that
+configured default — never for a tool.
 
 ### 2.2 Tools that touch the phantom's world should leave a memory trace
 
@@ -245,8 +258,16 @@ Org communication norms belong in the `norms.md` drawer — but get them there t
 same way as everything else in §2.1, through capture, not by writing the file:
 
 ```bash
-phantombot memory capture "Agents in this org DM each other in <format> — routine" --tag norm
+phantombot memory capture "Agents in this org DM each other in <format> — routine" \
+  --tag norm --persona <target>
 ```
+
+`--persona` matters more here than anywhere else in this document. A norm captured
+without it does not just land in the wrong drawer — it briefs the *wrong persona's*
+threat judge. The persona you meant to teach still treats your protocol traffic as
+unfamiliar and **HELD**s it, and an uninvolved persona is now carrying a routine-ness
+claim about traffic it will never see. Org tooling is multi-persona by definition, so
+treat the flag as required, not optional.
 
 `--tag norm` is the supported path, not a convention: `TAG_TO_DRAWER` in
 `src/lib/heartbeat.ts` maps both `norm` and `norms` to `memory/norms.md`, and the
@@ -593,8 +614,9 @@ in phantombot where everyone gets it, rather than carving around it locally.
 
 **Memory**
 - [ ] Anything the phantom should remember goes through `phantombot memory capture --tag …`
+- [ ] Every capture names its target with `--persona <name>` — a tool never relies on the host's configured default
 - [ ] No parallel state store duplicating what the memory system already does
-- [ ] Org/comms norms are captured with `--tag norm` (never by writing `memory/norms.md` directly), so the threat judge reads them
+- [ ] Org/comms norms are captured with `--tag norm --persona <name>` (never by writing `memory/norms.md` directly), so the *right* persona's threat judge reads them
 - [ ] After this tool runs, the phantom demonstrably knows something new
 
 **KB / OKF**
