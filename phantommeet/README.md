@@ -106,6 +106,11 @@ pm apply --manifest examples/example-org.yaml \
 # prerequisites check for the third-party software PhantomMeet needs.
 pm check-infra --manifest examples/example-org.yaml \
                --target ~/.local/share/phantombot/personas
+
+# Reverse PhantomMeet's owned changes (phantomchat relay, Meetings.md block,
+# MEMORY.md section) without touching unrelated operator configuration.
+pm unapply --manifest examples/example-org.yaml \
+            --target ~/.local/share/phantombot/personas
 ```
 
 The manifest is **derived, not edited**: `derive-manifest` reads the

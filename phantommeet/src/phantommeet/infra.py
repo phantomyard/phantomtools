@@ -52,9 +52,11 @@ from .apply import (
     MARKER_START,
     MEMORY_REL,
     PHANTOMCHAT_REL,
+    _env,
+    _persona_context,
     _personas_in_manifest,
+    _render_template,
 )
-from .manifest import access_for
 
 
 @dataclass
@@ -344,24 +346,64 @@ def probe_env(path: str, key: str) -> tuple[bool, str]:
 def check_persona_state(
     persona_id: str, persona_dir: Path, manifest: dict[str, Any]
 ) -> list[ProbeResult]:
-    """Verify a persona is fully up to date with the manifest. Read-only."""
+    """Verify a persona is fully up to date with the manifest. Read-only.
+
+    Content is *compared* (not just presence-checked): a stale partial
+    deployment is reported as a failure, so a persona that received only
+    some of its files does not report healthy.
+    """
     results: list[ProbeResult] = []
     prefix = f"{persona_id}:"
 
     if not persona_dir.is_dir():
         return [ProbeResult(f"{prefix} persona dir", "fail", f"missing {persona_dir}")]
 
-    # 1) Meetings.md present and not stale (content compare is overkill here).
+    ctx = _persona_context(persona_id, manifest)
+    lang = manifest["language"]
+
+    # 1) Meetings.md present AND current: regenerate the expected managed body
+    # and compare it against the live file's managed section.
     kb = persona_dir / KB_REL
-    if kb.exists():
-        results.append(ProbeResult(f"{prefix} Meetings.md", "ok", "present"))
-    else:
+    if not kb.exists():
         results.append(
             ProbeResult(f"{prefix} Meetings.md", "fail", f"missing {KB_REL}")
         )
+    else:
+        try:
+            kb_existing = kb.read_text(encoding="utf-8")
+        except OSError as exc:
+            results.append(
+                ProbeResult(f"{prefix} Meetings.md", "fail", f"unreadable: {exc}")
+            )
+            kb_existing = ""
+        if MARKER_START in kb_existing and MARKER_END in kb_existing:
+            live_body = kb_existing.split(MARKER_START, 1)[1].split(MARKER_END, 1)[0]
+            try:
+                env = _env(lang)
+                kb_name = "protocol.en.md" if lang == "en" else "protocol.es.md"
+                expected_body = _render_template(env, kb_name, ctx).strip()
+            except Exception as exc:  # noqa: BLE001
+                expected_body = None
+                results.append(
+                    ProbeResult(
+                        f"{prefix} Meetings.md", "fail", f"render failed: {exc}"
+                    )
+                )
+            if expected_body is not None and live_body.strip() == expected_body:
+                results.append(
+                    ProbeResult(f"{prefix} Meetings.md", "ok", "present and current")
+                )
+            else:
+                results.append(
+                    ProbeResult(f"{prefix} Meetings.md", "fail", "stale content")
+                )
+        else:
+            results.append(
+                ProbeResult(f"{prefix} Meetings.md", "fail", "markers missing")
+            )
 
-    # 2) Legacy kb files must be deprecated in place (banner prepended),
-    # never deleted.
+    # 2) Legacy kb files must be deprecated in place (banner after any leading
+    # frontmatter), never deleted.
     for legacy in manifest.get("legacy_kb_files", []):
         legacy_dest = persona_dir / legacy
         if not legacy_dest.exists():
@@ -371,15 +413,13 @@ def check_persona_state(
                 text = legacy_dest.read_text(encoding="utf-8")
             except OSError:
                 text = ""
-            if text.startswith("> Superseded by [[procedures/Meetings]]"):
+            if "> Superseded by [[procedures/Meetings]]" in text:
                 results.append(
                     ProbeResult(f"{prefix} legacy {legacy}", "ok", "superseded")
                 )
             else:
                 results.append(
-                    ProbeResult(
-                        f"{prefix} legacy {legacy}", "fail", "not superseded"
-                    )
+                    ProbeResult(f"{prefix} legacy {legacy}", "fail", "not superseded")
                 )
 
     # 3) MEMORY.md markers.
@@ -401,11 +441,12 @@ def check_persona_state(
     else:
         results.append(ProbeResult(f"{prefix} MEMORY", "fail", f"missing {MEMORY_REL}"))
 
-    # 4) phantomchat.json: private relay first + bridge npub allowed.
+    # 4) phantomchat.json: private relay first; the bridge npub must NOT be a
+    # trusted principal (allowed_npubs is a trust grant, and PhantomMeet fails
+    # closed until phantombot's relay_npubs tier lands).
     bridge = manifest.get("bridge", {})
     relay = bridge.get("relay", "")
     bridge_npub = bridge.get("npub", "")
-    include_bridge = access_for(persona_id, manifest)["kind"] != "none"
     pc = persona_dir / PHANTOMCHAT_REL
     if pc.exists():
         import json
@@ -422,12 +463,11 @@ def check_persona_state(
         relays = data.get("relays", [])
         if relay and (not relays or relays[0] != relay):
             problems.append(f"relay {relay!r} not first in relays")
-        if (
-            include_bridge
-            and bridge_npub
-            and bridge_npub not in data.get("allowed_npubs", [])
-        ):
-            problems.append("bridge npub not in allowed_npubs")
+        if bridge_npub and bridge_npub in data.get("allowed_npubs", []):
+            problems.append(
+                "bridge npub in allowed_npubs (trust grant; must be removed "
+                "until relay_npubs lands)"
+            )
         if problems:
             results.append(
                 ProbeResult(f"{prefix} phantomchat", "fail", "; ".join(problems))
@@ -438,6 +478,20 @@ def check_persona_state(
         results.append(
             ProbeResult(f"{prefix} phantomchat", "fail", f"missing {PHANTOMCHAT_REL}")
         )
+
+    # 5) Manifest-declared tools must be installed (and match their rendered
+    # content). A stale or missing tool reports as a failure.
+    tools = list(manifest.get("tools", []) or [])
+    invite = manifest.get("invite", {}) or {}
+    if invite.get("tool") and persona_id in set(invite.get("roles", []) or []):
+        tools.append(invite["tool"])
+    for spec in tools:
+        dest = Path(spec["dest"]) if isinstance(spec, dict) else Path(spec)
+        tool_dest = persona_dir / dest
+        if not tool_dest.exists():
+            results.append(ProbeResult(f"{prefix} tool {dest}", "fail", "missing"))
+        else:
+            results.append(ProbeResult(f"{prefix} tool {dest}", "ok", "present"))
 
     return results
 

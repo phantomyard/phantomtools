@@ -11,7 +11,7 @@ import click
 import yaml
 
 from . import __version__
-from .apply import apply_manifest
+from .apply import apply_manifest, unapply_manifest
 from .derive import derive_manifest as _derive_manifest
 from .infra import run_checks
 from .manifest import ManifestError, load_manifest
@@ -113,6 +113,45 @@ def apply(
             f"\nApplied {len(result.pending)} change(s); "
             f"{len(result.skipped)} already up to date."
         )
+
+
+@cli.command()
+@click.option(
+    "--manifest",
+    "-m",
+    "manifest_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to the PhantomMeet YAML manifest.",
+)
+@click.option(
+    "--target",
+    "-t",
+    required=True,
+    type=click.Path(file_okay=False),
+    help="Root of the persona installation (directory containing persona subdirs).",
+)
+def unapply(manifest_path: str, target: str) -> None:
+    """Reverse PhantomMeet's owned changes (phantomchat relay, Meetings.md
+    block, MEMORY.md section) without touching unrelated configuration."""
+    try:
+        result = unapply_manifest(manifest_path, target)
+    except ManifestError as exc:
+        click.echo(f"error: {exc}", err=True)
+        sys.exit(1)
+
+    for change in result.changes:
+        click.echo(str(change))
+
+    if result.errors:
+        for err in result.errors:
+            click.echo(f"error: {err}", err=True)
+        sys.exit(1)
+
+    click.echo(
+        f"\nReversed {len(result.pending)} change(s); "
+        f"{len(result.skipped)} already reversed."
+    )
 
 
 @cli.command()

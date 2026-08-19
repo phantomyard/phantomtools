@@ -7,7 +7,13 @@ from pathlib import Path
 
 import yaml
 
-from phantommeet.apply import _persona_context, _tool_env
+from phantommeet.apply import (
+    _contained_dest,
+    _patch_phantomchat,
+    _persona_context,
+    _tool_env,
+    _upsert_kb,
+)
 from phantommeet.manifest import ManifestError, load_manifest
 
 REPO = Path(__file__).resolve().parents[1]
@@ -171,7 +177,9 @@ def test_meetings_md_renders_scoped_responsible_for_lead(tmp_path: Path) -> None
         encoding="utf-8"
     )
     # Scoped responsible: can schedule within scope.
-    assert "Eres **responsable de las reuniones online dentro de tu ámbito**" in meetings
+    assert (
+        "Eres **responsable de las reuniones online dentro de tu ámbito**" in meetings
+    )
     assert "**'example-project-*'**: las agendas con `meeting-invite.sh`" in meetings
     # Out-of-scope escalates to the concrete persona.
     assert "Las reuniones fuera de tu ámbito escalan a **maria**." in meetings
@@ -182,10 +190,14 @@ def test_meetings_md_renders_scoped_responsible_for_lead(tmp_path: Path) -> None
     # Canonical escalation section with @-mention format (out-of-scope only).
     assert "## Escalado de solicitudes de reunión" in meetings
     assert "`@maria <solicitud con los parámetros exactos recibidos>`" in meetings
-    assert "Eres responsable de las reuniones online **dentro de tu ámbito**" in meetings
+    assert (
+        "Eres responsable de las reuniones online **dentro de tu ámbito**" in meetings
+    )
     # Destination is per-scope: the lead answers with their project's folder,
     # not the org-wide recordings folder.
-    assert "`example-meetings` (la carpeta de reuniones de tu ámbito en Drive)" in meetings
+    assert (
+        "`example-meetings` (la carpeta de reuniones de tu ámbito en Drive)" in meetings
+    )
     assert "`Grabaciones`" not in meetings
     # Custody: the lead uploads her scope's recordings; org custodian is backup.
     assert "**Pedro** sube el MP4" in meetings
@@ -318,10 +330,11 @@ def test_meeting_invite_custom_card_renders_manifest_template(tmp_path: Path) ->
     assert "📅 Reunión: Asamblea General" in out
     assert "👥 Destinatarios: @maria,@salvador" in out
     assert "🕐 2026-08-14T18:00:00" in out
-    assert (
-        "🔗 https://meet.example.invalid/2026-08-14-18-00_asamblea_general" in out
-    )
-    assert "🔒 Contraseña: clave42" in out
+    assert "🔗 https://meet.example.invalid/2026-08-14-18-00_asamblea_general" in out
+    # Dry-run redacts the password: the real secret never reaches stdout
+    # (it would otherwise land in logs/terminal history).
+    assert "🔒 Contraseña: ***" in out
+    assert "clave42" not in out
     assert "%TITLE%" not in out
 
 
@@ -371,11 +384,7 @@ def test_invite_card_requires_mandatory_tokens(tmp_path: Path) -> None:
     manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
     # Branded card that forgot the join link: must be rejected.
     manifest["invite"]["card"] = (
-        "Example Org\n"
-        "━━━━━━━━━━━━\n"
-        "📅 Reunión: %TITLE%\n"
-        "🕐 %DATETIME%\n"
-        "━━━━━━━━━━━━"
+        "Example Org\n━━━━━━━━━━━━\n📅 Reunión: %TITLE%\n🕐 %DATETIME%\n━━━━━━━━━━━━"
     )
     bad = tmp_path / "card-sin-link.yaml"
     bad.write_text(yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8")
@@ -482,3 +491,223 @@ def test_check_infra_log_file(tmp_path: Path) -> None:
         env=env,
     )
     assert not (tmp_path / "state" / "phantommeet" / "check-infra.log").exists()
+
+
+# ---------------------------------------------------------------------------
+# PR #21 re-review hardening regressions
+# ---------------------------------------------------------------------------
+
+
+def test_bridge_npub_never_in_allowed_npubs() -> None:
+    """The bridge npub must NOT be added to allowed_npubs: that is a trust
+    grant (allowlisted senders skip the threat judge). PhantomMeet only moves
+    the private relay first and never mutates allowed_npubs."""
+    data = {
+        "relays": ["wss://public.relay", "ws://private.relay"],
+        "allowed_npubs": ["npub1existing"],
+    }
+    patched, relay_added = _patch_phantomchat(
+        data, "ws://private.relay", "npub1bridge", include_bridge=True
+    )
+    # private relay moved to front
+    assert patched["relays"][0] == "ws://private.relay"
+    # allowed_npubs untouched (bridge npub NOT added)
+    assert patched["allowed_npubs"] == ["npub1existing"]
+    # the owned delta is None (relay was already present; no field added)
+    assert relay_added is None
+
+
+def test_patch_phantomchat_records_added_relay_delta() -> None:
+    """When PhantomMeet ADDS the private relay (it was not present), the
+    owned delta records exactly that relay for `pm unapply` to remove."""
+    data = {"relays": ["wss://public.relay"], "allowed_npubs": []}
+    patched, relay_added = _patch_phantomchat(
+        data, "ws://private.relay", "npub1bridge", include_bridge=True
+    )
+    assert patched["relays"] == ["ws://private.relay", "wss://public.relay"]
+    assert relay_added == "ws://private.relay"
+    # allowed_npubs still untouched
+    assert patched["allowed_npubs"] == []
+
+
+def test_contained_dest_refuses_path_escape() -> None:
+    """A manifest tool destination that escapes the persona directory (path
+    traversal) is refused."""
+    persona_dir = Path("/tmp/personas/maria")
+    assert _contained_dest(persona_dir, "../escaped.sh") is None
+    assert _contained_dest(persona_dir, "../../etc/passwd") is None
+    assert _contained_dest(persona_dir, "tools/meeting-invite.sh") is not None
+
+
+def test_upsert_kb_preserves_prefix_and_suffix() -> None:
+    """Operator content on BOTH sides of the managed block survives a re-apply."""
+    frontmatter = "---\ntype: procedure\ntitle: T\n---\n"
+    existing = (
+        frontmatter
+        + "operator note BEFORE the block\n"
+        + "<!-- phantommeet:start -->\nold body\n<!-- phantommeet:end -->\n"
+        + "operator note AFTER the block\n"
+    )
+    out = _upsert_kb(existing, frontmatter, "new body\n")
+    assert "operator note BEFORE the block" in out
+    assert "operator note AFTER the block" in out
+    assert "new body" in out
+    assert "old body" not in out
+    # frontmatter is still first
+    assert out.startswith(frontmatter)
+
+
+def test_apply_refuses_tool_path_escape(tmp_path: Path) -> None:
+    """A manifest tool with a traversing destination aborts the apply with a
+    clear error and does not write anything outside the persona dir."""
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    manifest["tools"] = [{"dest": "../escaped.sh", "chmod": "0o755"}]
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8"
+    )
+    personas = tmp_path / "personas"
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        (personas / pid).mkdir(parents=True, exist_ok=True)
+
+    proc = run_cli(
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--target",
+        str(personas),
+        "--invite-roles",
+        "maria",
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert "escapes the persona directory" in proc.stderr
+    # nothing escaped the persona dir
+    assert not (tmp_path / "escaped.sh").exists()
+
+
+def test_apply_preflight_aborts_before_partial_write(tmp_path: Path) -> None:
+    """An invalid phantomchat.json aborts the apply BEFORE KB/MEMORY.md are
+    written (no partial deployment)."""
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8"
+    )
+    personas = tmp_path / "personas"
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        d = personas / pid
+        d.mkdir(parents=True, exist_ok=True)
+    # maria has a broken phantomchat.json
+    (personas / "maria" / "phantomchat.json").write_text(
+        "{ this is not json", encoding="utf-8"
+    )
+
+    proc = run_cli(
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--target",
+        str(personas),
+        "--invite-roles",
+        "maria",
+    )
+    assert proc.returncode != 0, proc.stdout
+    assert "invalid JSON" in proc.stderr
+    # KB/MEMORY.md must NOT have been written for ANY persona (preflight).
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        assert not (personas / pid / "kb" / "procedures" / "Meetings.md").exists(), pid
+        assert not (personas / pid / "MEMORY.md").exists(), pid
+
+
+def test_unapply_reverses_phantomchat_relay(tmp_path: Path) -> None:
+    """`pm unapply` removes the owned relay delta without touching unrelated
+    configuration."""
+    import json
+
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8"
+    )
+    personas = tmp_path / "personas"
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        (personas / pid).mkdir(parents=True, exist_ok=True)
+    # maria has phantomchat.json WITHOUT the private relay; apply adds it.
+    maria = personas / "maria"
+    (maria / "phantomchat.json").write_text(
+        json.dumps(
+            {
+                "relays": ["wss://public.relay"],
+                "allowed_npubs": ["npub1operator"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    proc = run_cli(
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--target",
+        str(personas),
+        "--invite-roles",
+        "maria",
+    )
+    assert proc.returncode == 0, proc.stderr
+    applied = json.loads((maria / "phantomchat.json").read_text(encoding="utf-8"))
+    assert applied["relays"][0] == "ws://relay.example.invalid:7777"
+
+    # unapply removes the owned relay, keeps the operator's npub.
+    proc = run_cli(
+        "unapply",
+        "--manifest",
+        str(manifest_path),
+        "--target",
+        str(personas),
+    )
+    assert proc.returncode == 0, proc.stderr
+    restored = json.loads((maria / "phantomchat.json").read_text(encoding="utf-8"))
+    assert restored["relays"] == ["wss://public.relay"]
+    assert restored["allowed_npubs"] == ["npub1operator"]
+    # delta file consumed
+    assert not (maria / ".phantommeet-phantomchat.delta.json").exists()
+
+
+def test_meeting_invite_shell_quotes_manifest_scalars() -> None:
+    """A manifest value with a closing quote + command must NOT execute when
+    the rendered script starts (render-time shell injection)."""
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    manifest["invite"]["phantombot_bin"] = 'phantombot"; touch /tmp/pm-injected; echo "'
+    ctx = _persona_context("maria", manifest)
+    rendered = _tool_env("es").get_template("meeting-invite.sh.j2").render(**ctx)
+
+    marker = Path("/tmp") / "pm-injected"
+    marker.unlink(missing_ok=True)
+    script = REPO / "_test_inject.sh"
+    script.write_text(rendered)
+    try:
+        # Actually RUN the script (dry-run): the assignment of the malicious
+        # PHANTOMBOT_BIN is the line that would execute the injected command.
+        # With shell-quoting it is a literal single-quoted string, so the
+        # touch never runs.
+        proc = subprocess.run(
+            [
+                "bash",
+                str(script),
+                "--title",
+                "x",
+                "--datetime",
+                "2026-08-14T18:00:00",
+                "--recipients",
+                "@maria",
+                "--dry-run",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        script.unlink(missing_ok=True)
+    assert not marker.exists(), "malicious phantombot_bin value must not execute"
+    # The script still ran to completion (the injected value is inert).
+    assert proc.returncode == 0, proc.stderr

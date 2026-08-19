@@ -79,7 +79,8 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
     # automatically (fixed per deployment), and the default destination
     # folder in Drive where recordings are uploaded (default of the
     # "Destino" variable — the responsible can override it per meeting).
-    raw["storage"].setdefault("recordings_dir", "/tmp/phantommeet-recordings")
+    # A config default (operator-overridable), not an in-process temp file.
+    raw["storage"].setdefault("recordings_dir", "/tmp/phantommeet-recordings")  # nosec B108
     raw["storage"].setdefault("drive_folder", "Grabaciones")
     # Persona that performs Drive custody for org-wide meetings (fallback for
     # scoped leads is the same custodian). Empty means "org responsible".

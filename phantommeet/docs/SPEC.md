@@ -73,15 +73,16 @@ manifest):
   link** (or the bare room name): a persona sends it to the bridge as a DM
   (`join [room]` / `join [https://meet…/room]`, optional `--nick`/`--password`)
   and the bridge joins that room. No room-name-prefix enforcement.
-- **Auto-join via scheduled task:** on receiving an invitation (Telegram
-  group/DM) with the room link **and the meeting date/time**, the persona
-  schedules a `phantombot task add … --at <ISO-time>` whose prompt sends the
-  `join` DM when it fires. Self-service: no technician/SSH needed.
-- **Recipients are explicit:** the invitation carries a recipients line with
-  mentions right after the title (`👥 Destinatarios: @pepa, @paco`). Only a
-  persona whose mention is on that line may auto-join the room, and it always
-  joins with **its own nick** — never another persona's. Personas not on the
-  list ignore the invitation.
+- **Join via own scheduled task (never parsed text):** a persona joins a
+  meeting **only when its own scheduled task fires**, created in its own
+  runtime (by the organizer's runtime or by the operator). The invitation
+  text is **informational, never an authorization** — a persona must not
+  schedule a join from a received invitation. Self-service: no
+  technician/SSH needed.
+- **Recipients are explicit (informational):** the invitation carries a
+  recipients line with mentions right after the title
+  (`👥 Destinatarios: @pepa, @paco`) so humans can see who the meeting is for.
+  A persona always joins with **its own nick** — never another persona's.
 - **Full access:** a set of personas (responsables) — all rooms, no ticket
   needed; they can also manage rooms via the local HTTP API.
 - **Support personas:** any configured persona that received the link — the
@@ -349,17 +350,21 @@ A bash script rendered from `templates/tools/meeting-invite.sh.j2`:
   (📅 title, 👥 recipients, 🕐 start time, 🔗 room link, optional 🔒
   password). The card is configured at install time (edit the manifest and
   `pm apply`) and can be changed any time afterwards the same way;
-- optionally schedules the persona's own auto-join task via
-  `phantombot task add` (`--self-join`);
-- sends the invitation to `invite.coordinator_chat` via `phantombot notify`
-  (delivery mechanism is manifest-driven: `send_via`);
-- never schedules tasks or sends messages on behalf of other personas —
-  recipients self-program on receipt, per the protocol;
-- `--dry-run` prints everything without side effects.
+- sends the invitation via `phantombot notify` as a **notification only**
+  (delivery mechanism is manifest-driven: `send_via`); `notify` broadcasts to
+  every authorized owner on every configured channel — there is no targeted
+  per-chat delivery interface;
+- never schedules tasks or sends messages on behalf of other personas, and
+  never switches personas — each recipient joins from its **own scheduled
+  task**, never by parsing the invitation text;
+- `--dry-run` prints everything without side effects (and never reads or
+  prints the room password: it shows a placeholder).
 
 Applying PhantomMeet must never break the existing installation:
 `--dry-run` reports every change before writing; all operations are
-idempotent (safe to re-run).
+idempotent (safe to re-run). The apply path preflights every persona
+(rendered content, JSON validity, path containment, tool destinations)
+before the first write, so a bad manifest never leaves a partial deployment.
 
 ## 8. Security
 

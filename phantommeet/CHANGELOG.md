@@ -2,8 +2,46 @@
 
 ## Unreleased
 
+- **PR #21 re-review hardening round 2** — see
+  `docs/pr-reviews/pr21-phantommeet-review-response.md`:
+  - **Bridge npub never in `allowed_npubs`** (fail-closed): `allowed_npubs` is
+    a trust grant (allowlisted senders skip the threat judge), so PhantomMeet
+    never adds the bridge there — it only moves the private relay first. Bridge
+    DMs stay gated until phantombot's `relay_npubs` tier (phantomyard/phantombot#400).
+  - **Tool destinations fully contained**: `install_tools` resolves every
+    manifest `dest` with the same path-traversal + symlink refusal as
+    `legacy_kb_files` (previously a `dest: ../escaped.sh` wrote outside the
+    persona directory).
+  - **Shell-quoting serializer**: every manifest scalar rendered into
+    `meeting-invite.sh` is `shlex.quote`-d (single-quoted), so a manifest
+    value can no longer break out of an assignment and execute; the card is
+    shell-quoted instead of a terminable heredoc.
+  - **Password redacted from stdout**: dry-run never reads the real secret
+    (vault *or* file), and the real run's summary redacts the password — it
+    never reaches logs or terminal history.
+  - **Preflight + atomic writes**: `pm apply` preflights every persona
+    (rendered content, JSON validity, contained destinations, tool specs)
+    before the first write; a single error aborts with no partial deployment.
+    Writes are temp + `os.replace`.
+  - **Reversible patch via owned delta**: `.phantommeet-phantomchat.orig.json`
+    (a frozen snapshot) is replaced by `.phantommeet-phantomchat.delta.json`
+    recording only the relay PhantomMeet added; a new `pm unapply` reverses it
+    without touching unrelated operator config.
+  - **`notify` claim corrected**: `phantombot notify` broadcasts to every
+    authorized owner; the script no longer claims it delivered to a specific
+    coordination group.
+  - **Docs/SPEC sanitized**: the human workflow no longer teaches trusting the
+    recipients line or creating a free-text join task from an invitation — the
+    invitation is informational, and joining is driven by the persona's own
+    scheduled task.
+  - **`_upsert_kb` preserves prefix + suffix** (operator content on both sides
+    of the managed block survives a re-apply); the superseded banner is
+    inserted *after* any leading OKF frontmatter so it keeps parsing.
+  - **`check-infra` compares content**, not just presence: a stale Meetings.md
+    body, a missing tool, or a bridge npub still in `allowed_npubs` is a FAIL.
+
 - **PR #21 hardening (security + additive-contract fixes)** — see
-  `docs/SOURCES.md` (or the review response) for the full audit map:
+  `docs/pr-reviews/pr21-phantommeet-review-response.md` for the full audit map:
   - **Inbound text is never authorization**: removed the "check the recipients
     line" and "schedule it yourself" steps from the meeting protocol; the
     invitation is informational, and a persona joins only from its own

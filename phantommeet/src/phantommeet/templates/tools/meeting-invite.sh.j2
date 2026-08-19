@@ -41,18 +41,17 @@ set -euo pipefail
 # =========================================================================
 # Installation configuration (rendered from the manifest — edit per install)
 # =========================================================================
-PHANTOMBOT_BIN="{{ invite.phantombot_bin | default('phantombot') }}"
-PERSONA="{{ name }}"                      # the persona running this script
-COORD_GROUP="{{ invite.coordinator_chat | default('') }}"
-MEET_BASE_URL="{{ invite.meet_base_url | default('') }}"
-ROOM_NAMING="{{ rooms.naming | default('{YYYY-MM-DD}-{HH-MM}_{topic}') }}"
-LANGUAGE="{{ language }}"
+# Every scalar is shell-quoted at render time (single-quoted, shlex-style),
+# so a manifest value can never break out of an assignment and execute.
+PHANTOMBOT_BIN={{ invite.phantombot_bin | default('phantombot') | shquote }}
+PERSONA={{ name | shquote }}                      # the persona running this script
+MEET_BASE_URL={{ invite.meet_base_url | default('') | shquote }}
+ROOM_NAMING={{ rooms.naming | default('{YYYY-MM-DD}-{HH-MM}_{topic}') | shquote }}
+LANGUAGE={{ language | shquote }}
 # Personalized announcement card (optional). Empty string = built-in format.
-# A heredoc keeps multi-line manifests intact in the rendered script.
-CARD_TEMPLATE=$(cat <<'CARD_EOF'
-{{ invite.card | default('') }}
-CARD_EOF
-)
+# Shell-quoted at render time; multi-line cards survive verbatim and cannot
+# terminate the script or inject commands.
+CARD_TEMPLATE={{ invite.card | default('') | shquote }}
 # =========================================================================
 {% raw %}
 usage() {
@@ -104,17 +103,23 @@ if [[ -n "$PASSWORD_VAULT" && -n "$PASSWORD_FILE" ]]; then
   echo "error: use either --password-vault or --password-file, not both" >&2
   exit 1
 fi
-if [[ -n "$PASSWORD_VAULT" ]]; then
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    # Never print the real secret on a dry run: note the vault reference.
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  # A dry run never reads or prints the real secret: the placeholder stands
+  # in for whatever the source holds, and nothing else leaks to stdout.
+  if [[ -n "$PASSWORD_VAULT" ]]; then
     PASSWORD="***"
     echo "[dry-run] password from vault: ${PASSWORD_VAULT}"
-  else
+  elif [[ -n "$PASSWORD_FILE" ]]; then
+    PASSWORD="***"
+    echo "[dry-run] password from file: ${PASSWORD_FILE}"
+  fi
+else
+  if [[ -n "$PASSWORD_VAULT" ]]; then
     PASSWORD="$("${PHANTOMBOT_BIN}" vault get "${PASSWORD_VAULT}" 2>/dev/null || true)"
     [[ -n "$PASSWORD" ]] || { echo "error: vault entry ${PASSWORD_VAULT} is empty/missing" >&2; exit 1; }
+  elif [[ -n "$PASSWORD_FILE" ]]; then
+    PASSWORD="$(<"${PASSWORD_FILE}")"
   fi
-elif [[ -n "$PASSWORD_FILE" ]]; then
-  PASSWORD="$(<"$PASSWORD_FILE")"
 fi
 
 # --- resolve the phantombot binary (skipped in --dry-run) ------------------
@@ -225,21 +230,26 @@ fi
 # No cross-persona scheduling and no persona switch happen here. Each
 # recipient's own runtime decides, from its own scheduled state, whether to
 # join — the invitation text is informational, never an authorization.
-if [[ -n "$COORD_GROUP" ]]; then
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "[dry-run] would notify: ${PHANTOMBOT_BIN} notify --message \"${invite_text}\" --persona ${PERSONA}"
-  else
-    "${PHANTOMBOT_BIN}" notify --message "${invite_text}" --persona "${PERSONA}"
-    echo "invitation sent to ${COORD_GROUP}"
-  fi
+# `phantombot notify` broadcasts to every authorized owner on every
+# configured channel; there is no targeted per-chat delivery interface.
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "[dry-run] would notify: ${PHANTOMBOT_BIN} notify --message \"${invite_text}\" --persona ${PERSONA}"
 else
-  echo "warning: invite.coordinator_chat is empty — invitation not sent (set it in the manifest)"
+  "${PHANTOMBOT_BIN}" notify --message "${invite_text}" --persona "${PERSONA}"
+  echo "invitation broadcast via phantombot notify"
 fi
 
 # --- summary ----------------------------------------------------------------
+# Redact the password: the real secret never reaches stdout or terminal
+# history. The invitation sent to recipients keeps it; this echo does not.
+if [[ -n "$PASSWORD" && "$PASSWORD" != "***" ]]; then
+  display="${invite_text//${PASSWORD}/***}"
+else
+  display="$invite_text"
+fi
 echo "---"
 echo "room       : ${room_name}"
 echo "invite     :"
-echo "${invite_text}"
+echo "${display}"
 exit 0
 {% endraw %}
