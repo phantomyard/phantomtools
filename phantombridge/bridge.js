@@ -83,28 +83,28 @@ const PAUSED = {
 // CONFIG.pauseFile (opcional) customiza el path; default junto al config.
 const PAUSE_FILE = CONFIG.pauseFile || path.join(path.dirname(CONFIG_PATH), '.bridge-pause.json');
 
-// persistPause() — kill-switch durable. Mismo patrón que persistConfig():
+// persistPause() — durable kill-switch. Same pattern as persistConfig():
 // escribir + fsync(fd) + close + rename + fsync del directorio padre.
 // DEVUELVE true/false para que setPaused() y el handler HTTP puedan
 // distinguir "pause aplicado y durable" de "pause solo en RAM".
 //
-// Corrección clave: el contenido se escribe con fs.writeSync(fd, ...) SOBRE EL
-// MISMO fd que se abrió, para que fs.fsyncSync(fd) sincronice el descriptor que
-// realmente escribió los datos. El código previo usaba fs.writeFileSync(tmp, ...)
-// (que abre y cierra OTRO descriptor internamente) y luego hacía fsync del fd
-// original -> fsync sobre un descriptor equivocado, sin garantía de durabilidad.
+// Key fix: the content is written with fs.writeSync(fd, ...) ON THE SAME
+// fd that was opened, so fs.fsyncSync(fd) syncs the descriptor that
+// actually wrote the data. The previous code used fs.writeFileSync(tmp, ...)
+// (which opens/closes ANOTHER descriptor internally) and then did fsync on the fd
+// original -> fsync on the wrong descriptor, with no durability guarantee.
 //
-// Además, tras el renameSync se sincroniza el directorio padre para que el
-// cambio de nombre en sí llegue al almacenamiento persistente (segunda ventana
-// de crash/power-loss). Sin esto, el contenido podría estar durable pero el
+// Additionally, after renameSync the parent directory is synced so the
+// rename itself reaches persistent storage (second crash/power-loss window).
+// Without this, the content could be durable but the rename remains unconfirmed.
 // rename no confirmado.
 function persistPause() {
   let fd = null;
   let tmp = null;
   try {
-    // Nombre temporal único por escritura: pid+Date.now() no garantiza
-    // unicidad entre procesos que compartan pauseFile. randomBytes(16) hace
-    // la colisión despreciable. Precondición: un bridge por pauseFile.
+    // Unique temp name per write: pid+Date.now() does not guarantee
+    // uniqueness across processes sharing pauseFile. randomBytes(16) makes
+    // collision negligible. Precondition: one bridge per pauseFile.
     tmp = PAUSE_FILE + '.tmp.' + crypto.randomBytes(16).toString('hex');
     const data = Buffer.from(JSON.stringify({jitsi: !!PAUSED.jitsi, nostr: !!PAUSED.nostr}, null, 2) + '\n', 'utf8');
     fd = fs.openSync(tmp, 'w', 0o600);
@@ -112,7 +112,7 @@ function persistPause() {
     fs.fsyncSync(fd);            // durabilidad del contenido (al almacenamiento persistente)
     fs.closeSync(fd);
     fd = null;
-    fs.renameSync(tmp, PAUSE_FILE); // atómico en el mismo filesystem
+    fs.renameSync(tmp, PAUSE_FILE); // atomic on the same filesystem
     tmp = null;
     // fsync el directorio padre para que el rename sea durable.
     try {
@@ -122,9 +122,9 @@ function persistPause() {
       // Fail-closed: el contrato de persistPause() es `true = pause
       // durable`. Si el fsync del directorio no se pudo realizar (FS que no
       // soporta sincronizar directorios: Windows, ciertos overlay), el rename
-      // podría no ser durable en un crash inmediato -> NO podemos afirmar
-      // durabilidad. En Linux/ext4/XFS (escenario normal del bridge) este
-      // catch no se ejecuta.
+      // might not be durable on an immediate crash -> we CANNOT claim
+      // durability. On Linux/ext4/XFS (normal bridge scenario) this
+      // catch never runs.
       if (fd !== null) { try { fs.closeSync(fd); } catch (_) {} fd = null; }
       console.error('[bridge] fsync de directorio no disponible, pause NO durable:', e.message);
       return false;
@@ -193,8 +193,8 @@ function loadPause() {
     if (typeof legacy.jitsi === 'boolean') PAUSED.jitsi = legacy.jitsi;
     if (typeof legacy.nostr === 'boolean') PAUSED.nostr = legacy.nostr;
     console.log('[bridge] pause migrado del .bridge-state.json (legacy): jitsi=' + PAUSED.jitsi + ' nostr=' + PAUSED.nostr);
-    // La migración debe ser durable: si no podemos crear el nuevo fichero
-    // dedicado, la migración solo vivió en RAM y el pause se perdería en el
+    // The migration must be durable: if we cannot create the new file
+    // the migration only lived in RAM and the pause would be lost on the
     // siguiente reinicio. Esto es un fallo de arranque (FAIL-CLOSED), NO se
     // traga: el kill-switch no puede quedar solo en RAM.
     if (!persistPause()) {
@@ -215,9 +215,9 @@ function isPaused(side) {
 // (fail-closed in both directions):
 //
 //   pause=true  (activar kill-switch) -> mutar RAM primero, luego persistir.
-//     Si la persistencia falla, LANZAMOS pero la RAM quedó pausada: el bridge
+//     If persistence fails, we THROW but RAM stayed paused: the bridge
 //     sigue efectivamente parado (fail-closed) y la persistencia es un problema
-//     que el operador verá corregir tras el crash. Nunca se responde ok:true
+//     which the operator will see fixed after the crash. Never answer ok:true
 //     sin durabilidad.
 //
 //   pause=false (reanudar)           -> persistir PRIMERO, y solo publicar el
@@ -229,10 +229,10 @@ function isPaused(side) {
 // * activar fallido -> RAM pausada + disco (posible) viejo; nunca reanuda
 // * reanudar fallido -> RAM pausada + disco pausado; consistente
 //
-// persistPause() es síncrono y atómico (temp + fsync + rename + fsync(dir)),
+// persistPause() is synchronous and atomic (temp + fsync + rename + fsync(dir)),
 // por lo que no hay intercalado entre llamadas HTTP del mismo proceso.
-// Precondición documentada: un bridge por PAUSE_FILE (multi-instancia
-// compartiendo el fichero no está soportado: el último writer pisa al otro).
+// Documented precondition: one bridge per PAUSE_FILE (multi-instance
+// sharing the file is not supported: the last writer overwrites the other).
 function setPaused(side, val) {
   const v = !!val;
   if (side !== 'jitsi' && side !== 'nostr' && side !== 'both') throw new Error('invalid side: ' + side + ' (jitsi|nostr|both)');
@@ -242,19 +242,19 @@ function setPaused(side, val) {
   else { target[side] = v; }
 
   if (v) {
-    // Activando: aplicar en RAM (fail-closed), luego persistir.
+    // Activating: apply to RAM (fail-closed), then persist.
     if (side === 'both') { PAUSED.jitsi = true; PAUSED.nostr = true; }
     else PAUSED[side] = true;
     if (!persistPause()) {
       throw new Error('no se pudo persistir el pause de forma durable (kill-switch solo en RAM, pero aplicado)');
     }
   } else {
-    // Reanudando: persistir primero; solo mutar RAM si el disco lo confirma.
+    // Resuming: persist first; only mutate RAM if the disk confirms it.
     const prevJ = PAUSED.jitsi, prevN = PAUSED.nostr;
     if (side === 'both') { PAUSED.jitsi = false; PAUSED.nostr = false; }
     else PAUSED[side] = false;
     if (!persistPause()) {
-      // Fallback fail-closed: volvemos al estado persistido original en RAM.
+      // Fallback fail-closed: revert to the original persisted state in RAM.
       PAUSED.jitsi = prevJ; PAUSED.nostr = prevN;
       throw new Error('no se pudo reanudar de forma durable; el kill-switch permanece activo');
     }
@@ -275,54 +275,54 @@ const STATE_OVERLAP_SECS = 120; // margin to avoid losing boundary events
 const STATE_FLUSH_MS = 5000;    // escritura debounced
 const SEEN_IDS_MAX = 200;       // buffer de IDs de gift-wraps ya procesados
 const REJECTED_IDS_MAX = 200;   // LOW-8: cap del caché de frames rechazados (anti-reintento efímero)
-// M-04/M-05: límites del pipeline Nostr entrante (antes de unwrapEvent()).
-// El kind 1059 es un gift-wrap diminuto por diseño ({kind,tags,content,pubkey,…});
-// un frame enorme indica abuso/anomalía y aún así no debe entrar a la cripto
-// (unwrapEvent) sin un tope, para no quemar CPU/memoria antes de poder descartarlo.
+// M-04/M-05: incoming Nostr pipeline limits (before unwrapEvent()).
+// Kind 1059 is a tiny gift-wrap by design ({kind,tags,content,pubkey,…});
+// an oversized frame indicates abuse/anomaly and must not enter the crypto
+// (unwrapEvent) without a cap, so CPU/memory are not burned before discarding.
 const NOSTR_MAX_FRAME_BYTES = CONFIG.nostrMaxFrameBytes || (64 * 1024);  // 64KB por frame (mismo tope que el HTTP MAX_BODY)
-const NOSTR_MAX_CONCURRENCY = CONFIG.nostrMaxConcurrency || 4;           // unwraps simultáneos
-const NOSTR_MAX_QUEUE = CONFIG.nostrMaxQueue || 32;                      // pendientes máx. encolados (backpressure)
-const DROPPED_MAX = 5000;                                                // tope del ledger persistente de descartados
-// AUDIT-2 (MEDIO): el ledger `delivery` debe ser acotado. Cada entrada se
-// escribe con fsync síncrono (markDelivery → flushStateNow), así que un id
-// único por evento entrante sin TTL/cap convierte la durabilidad en un DoS de
-// I/O (estado → JSON → disco cada vez mayor). Política explícita:
-//   - delivered: NO se expira por reloj de pared. Se conserva hasta que el
-//     cursor de recuperación (lastSeen) demuestra que el relay ya no puede
-//     re-entregar ese id dentro de la ventana de replay (watermark). Un
-//     downtime largo congela lastSeen -> delivered no expira -> no replay.
+const NOSTR_MAX_CONCURRENCY = CONFIG.nostrMaxConcurrency || 4;           // simultaneous unwraps
+const NOSTR_MAX_QUEUE = CONFIG.nostrMaxQueue || 32;                      // max queued (backpressure)
+const DROPPED_MAX = 5000;                                                // persistent dropped-ledger cap
+// AUDIT-2 (MEDIUM): the `delivery` ledger must be bounded. Each entry is
+// written with a synchronous fsync (markDelivery → flushStateNow), so a unique id
+// per incoming event with no TTL/cap turns durability into an I/O DoS
+// (state → JSON → ever-growing disk). Explicit policy:
+//   - delivered: NOT wall-clock-expired. Kept until the
+//     recovery cursor (lastSeen) proves the relay can no longer
+//     re-deliver that id within the replay window (watermark). A
+//     long downtime freezes lastSeen -> delivered does not expire -> no replay.
 //     Ver deliveredSafeToExpire().
-//   - pending:   se expira por reloj de pared (PENDING_TTL_SECS, generoso y
-//     configurable): un pending que nunca termina indica un crash en mitad de
-//     la operación; el relay lo re-entregará al reanudar, así que no hay
-//     riesgo de pérdida ni de replay (la garantía es distinta a delivered).
-//   - cap duro:  DELIVERY_MAX acota el tamaño del estado (I/O). NUNCA se
-//     evicta un delivered todavía dentro de su ventana de watermark para
-//     hacer sitio: si el ledger está lleno con delivered inmaduros, se
-//     aplica backpressure (no se admite más) en vez de perder exactly-once.
-// Limpieza perezosa en markDelivery (no en el hot path del fsync): se barre el
-// objeto solo cuando se supera el cap O al insertar, evitando escaneos caros
-// por evento normal.
+//   - pending:   wall-clock-expired (PENDING_TTL_SECS, generous and
+//     configurable): a pending that never finishes indicates a crash mid-
+//     operation; the relay re-delivers it on resume, so there is no
+//     risk of loss or replay (the guarantee differs from delivered).
+//   - hard cap:  DELIVERY_MAX bounds state size (I/O). NEVER
+//     evict a delivered still inside its watermark window to
+//     make room: if the ledger is full of immature delivered, it
+//     applies backpressure (admits no more) instead of losing exactly-once.
+// Lazy sweep in markDelivery (not on the fsync hot path): the object is swept
+// only when the cap is exceeded OR on insert, avoiding costly scans
+// on normal events.
 const PENDING_TTL_SECS = CONFIG.pendingTtlSecs || (24 * 3600); // wall-clock; pending crash deja retry vía relay
-const DELIVERED_WATERMARK_MARGIN_SECS = 120; // margen extra sobre STATE_OVERLAP_SECS
-// AUDIT-M01-OPCION2-FIX (🔴 BLOQUEANTE kaieriksen): incremento MÁXIMO que un
-// único evento procesado puede avanzar recoveryWatermark. El watermark debe
-// representar el rango que el relay HA CONFIRMADO como recorrido, NO el reloj
-// local. Un salto libre a Date.now() tras un downtime de meses expira delivered
-// que el relay aún no ha demostrado haber recorrido (break exactly-once). Este
-// paso acota cada avance a una ventana corta de backlog confirmado: tras un
-// downtime, el watermark avanza de forma incremental conforme el relay
-// re-entrega el backlog, nunca de golpe. Elegir un múltiplo del overlap para
-// que sea coherente con el solapamiento del replay (STATE_OVERLAP_SECS).
+const DELIVERED_WATERMARK_MARGIN_SECS = 120; // extra margin over STATE_OVERLAP_SECS
+// AUDIT-M01-OPTION2-FIX (🔴 BLOCKING kaieriksen): MAXIMUM step a
+// single processed event may advance recoveryWatermark. The watermark must
+// represent the range the relay HAS CONFIRMED as traversed, NOT the local
+// clock. A free jump to Date.now() after months of downtime expires delivered
+// the relay has not yet proven to have traversed (break exactly-once). This
+// step bounds each advance to a short confirmed-backlog window: after a
+// downtime, the watermark advances incrementally as the relay
+// re-delivers the backlog, never all at once. Pick a multiple of the overlap so
+// it stays consistent with the replay overlap (STATE_OVERLAP_SECS).
 const RECOVERY_WATERMARK_STEP_SECS = CONFIG.recoveryWatermarkStepSecs || 300; // 5 min por evento procesado
-const DELIVERY_MAX = 10000;             // cap duro del ledger durable de entregas
+const DELIVERY_MAX = 10000;             // hard cap of the durable delivery ledger
 const DELIVERY_SOFT_LIMIT = Math.floor(DELIVERY_MAX * 0.9); // AUDIT-6: umbral de limpieza agresiva + re-scan
-let backpressureRejected = 0;           // AUDIT-5: contador de admisiones rechazadas (fail-closed)
-const nostrQueue = [];          // gift-wraps esperando a ser procesados
-let nostrInflight = 0;          // gifts-wraps en medio de handleIncomingGiftWrap
-// Encolar + despachar con límite de concurrencia (M-05). Si la cola está llena,
-// el gift-wrap se descarta (backpressure duro): el relay lo re-entregará en el
-// siguiente since-overlap, no se pierde de forma irrecuperable.
+let backpressureRejected = 0;           // AUDIT-5: rejected-admission counter (fail-closed)
+const nostrQueue = [];          // gift-wraps waiting to be processed
+let nostrInflight = 0;          // gift-wraps mid-handleIncomingGiftWrap
+// Enqueue + dispatch with a concurrency limit (M-05). If the queue is full,
+// the gift-wrap is dropped (hard backpressure): the relay re-delivers it on the
+// next since-overlap; it is not lost irrecoverably.
 function enqueueGiftWrap(gw) {
   if (nostrQueue.length >= NOSTR_MAX_QUEUE) {
     // H-NEW-01 (ALTO): dropping under backpressure must stay RECOVERABLE.
@@ -367,21 +367,21 @@ function pumpNostrQueue() {
   releasePendingSinceIfRecovered();
 }
 let bridgeState = null;         // {relay, lastSeen, seenIds[], antiloop?} | null
-// 🟡 BAJO (AUDIT-13): contador incremental del tamaño del ledger de delivery.
-// Evita Object.keys(bridgeState.delivery).length repetido en caminos calientes
-// (markDelivery, medición de progreso del rescan), que es O(n) por llamada y
-// un atacante autorizado puede amplificar llenando el ledger (DELIVERY_MAX=10000).
-// Se mantiene sincronizado con TODA mutación del ledger (inserción en
-// markDelivery, borrados en evictDeliveryLedger y finishDelivery rejected).
+// 🟡 LOW (AUDIT-13): incremental counter for the delivery-ledger size.
+// Avoids Object.keys(bridgeState.delivery).length repeated on hot paths
+// (markDelivery, rescan-progress measurement), which is O(n) per call and
+// an authorized attacker could amplify by filling the ledger (DELIVERY_MAX=10000).
+// It stays in sync with EVERY ledger mutation (insert in
+// markDelivery, deletions in evictDeliveryLedger and finishDelivery rejected).
 let deliverySize = 0;
 let stateDirty = false;
 let stateTimer = null;
-// LOW-8 (audit 462e62b): caché de IDs de frames RECHAZADOS (p.ej. demasiado
-// grandes). Separado de seenIds[] (dedup de eventos PROCESABLES) para que un
-// atacante no pueda inyectar IDs arbitrarios y contaminar/degadar la dedup
-// legítima. Es efímero (no se persiste): solo evita reintentos infinitos del
-// relay hacia el mismo frame; si se pierde en un restart, el frame volverá a
-// rechazarse por tamaño al reintentarse. Entradas {id, ts} con propio cap/TTL.
+// LOW-8 (audit 462e62b): cache of REJECTED frame IDs (e.g. too large).
+// Separate from seenIds[] (dedup of PROCESSABLE events) so an attacker
+// cannot inject arbitrary IDs and poison/degrade the legitimate dedup.
+// It is ephemeral (not persisted): it only prevents infinite retries of the
+// relay towards the same frame; if lost on restart, the frame will be
+// rejected again by size on retry. Entries {id, ts} with their own cap/TTL.
 let rejectedIds = [];
 
 // H-04: persist the anti-loop admission identity + rate/ride state so a
@@ -453,32 +453,32 @@ function loadState() {
       const seenIds = raw.map(e => (typeof e === 'string' ? {id: e, ts: 0} : e));
       bridgeState = {relay: s.relay, lastSeen: s.lastSeen, seenIds, antiloop: s.antiloop || null, pendingSince: (typeof s.pendingSince === 'number' ? s.pendingSince : null), dropped: Array.isArray(s.dropped) ? s.dropped.filter(d => d && d.id) : [], droppedOverflow: !!s.droppedOverflow, recoveryWatermark: (typeof s.recoveryWatermark === 'number' ? s.recoveryWatermark : s.lastSeen), delivery: (s.delivery && typeof s.delivery === 'object') ? s.delivery : {}};
       // AUDIT-13: contador incremental — inicializar al cargar estado (tras
-      // restart, sin esto deliverySize quedaría en 0 y markDelivery usaría un
-      // tamaño erróneo para el soft-limit/cap).
+      // restart, without this deliverySize would stay 0 and markDelivery would use a
+      // wrong size for the soft-limit/cap).
       deliverySize = bridgeState.delivery ? Object.keys(bridgeState.delivery).length : 0;
       console.log('[nostr] previous state:', bridgeState.relay, 'last event', new Date(bridgeState.lastSeen * 1000).toISOString(), '(' + bridgeState.seenIds.length + ' ids seen)');
       // NOTE: deserializeAntiloop(s.antiloop) is NOT called here — ANTILOOP
       // (a const) is not initialized yet at this point in module init (TDZ).
       // The anti-loop state is restored right after `const ANTILOOP` is defined.
     } else {
-      // LOW-9: JSON válido pero forma de estado INESPERADA (sin relay/lastSeen
-      // válidos). Tampoco podemos confiar en qué se procesó -> fail-closed.
+      // LOW-9: valid JSON but UNEXPECTED state shape (no valid relay/lastSeen).
+      // We cannot trust what was processed either -> fail-closed.
       throw new SyntaxError('forma de estado inesperada (falta relay/lastSeen válidos)');
     }
   } catch (e) {
-    // LOW-9 (audit 462e62b): distinguir los casos. Antes, ENOENT / JSON
-    // corrupto / EACCES caían juntos en "full backlog", lo que podía causar
-    // REPLAY silencioso (re-procesar DMs ya entregados) si el archivo existía
-    // pero estaba dañado o era ilegible.
+    // LOW-9 (audit 462e62b): tell the cases apart. Before, ENOENT / JSON
+    // corrupt / EACCES fell together into "full backlog", which could cause
+    // silent REPLAY (re-processing already-delivered DMs) if the file existed
+    // but was corrupted or unreadable.
     if (e && e.code === 'ENOENT') {
-      // Primer arranque sin archivo de estado: backlog completo es legítimo.
+      // First boot with no state file: full backlog is legitimate.
       console.log('[nostr] sin archivo de estado previo: subscription de backlog completo.');
       return;
     }
-    // Cualquier otra cosa (JSON corrupto, EACCES/EPERM, EIO, forma inválida):
-    // NO sabemos qué se procesó -> fail-closed. Abortar evita re-entregar o
-    // perder DMs; el operador puede inspeccionar/quitar .bridge-state.json
-    // (o el backup) y arrancar limpio con intención explícita.
+    // Anything else (corrupt JSON, EACCES/EPERM, EIO, invalid shape):
+    // we do NOT know what was processed -> fail-closed. Aborting avoids re-delivering or
+    // losing DMs; the operator can inspect/remove .bridge-state.json
+    // (or the backup) and boot clean with explicit intent.
     const motivo = e && e.code
       ? e.code + ': ' + e.message
       : (e && e.message ? e.message : String(e));
@@ -535,21 +535,21 @@ function markSeen(id) {
 // `createdAt` (opcional): el created_at REAL del evento descartado, si se
 // conoce en el punto del drop. AUDIT-16 (🔴 ALTO): el cursor de Nostr es
 // temporal y pendingSince no debe anclarse solo a la hora LOCAL de rechazo
-// (Date.now) sino también al created_at del evento, que puede ser anterior
-// (backlog): un wrap atrasado con created_at=1000 rechazado en el instante
-// t=5000 solo es re-alcanzable si el `since` de la próxima suscripción cubre
-// >= created_at. Guardamos ese created_at en la entrada para (a) que
-// pendingSince = min(pendingSince, dropped.created_at) y (b) permitir la
-// recuperación puntual por id en subscribeIncoming (ver fetchDroppedByIds).
+// (Date.now) but also the event's created_at, which may be earlier
+// (backlog): a late wrap with created_at=1000 rejected at instant
+// t=5000 is only re-reachable if the next subscription's `since` covers
+// >= created_at. We store that created_at in the entry so (a)
+// pendingSince = min(pendingSince, dropped.created_at) and (b) allow
+// point recovery by id in subscribeIncoming (see fetchDroppedByIds).
 function recordDropped(id, createdAt) {
   if (!bridgeState || !id) return;
   if (!bridgeState.dropped) bridgeState.dropped = [];
   if (bridgeState.dropped.some(d => d && d.id === id)) return; // already tracked
   const entry = {id, ts: Math.floor(Date.now() / 1000)};
-  // Si el created_at del evento es un timestamp válido y anterior a la hora
-  // local, lo conservamos: el rango [created_at, ...] es lo que el relay
-  // debe re-entregar, no la hora de recepción local (que puede estar muy
-  // por delante para un wrap llegado tarde por backlog).
+  // If the event's created_at is a valid timestamp and earlier than the local
+  // time, we keep it: the range [created_at, ...] is what the relay
+  // must re-deliver, not the local reception time (which may be far
+  // ahead for a wrap that arrived late due to backlog).
   if (typeof createdAt === 'number' && createdAt > 0) {
     entry.created_at = createdAt;
     if (bridgeState.pendingSince == null || createdAt < bridgeState.pendingSince) {
@@ -609,8 +609,8 @@ function isSeen(id) {
   return bridgeState.seenIds.includes(id); // legacy plain-string fallback
 }
 
-// LOW-8: caché efímero de IDs de frames RE-CHAZADOS (por tamaño, etc.). No
-// toca seenIds[] (dedup de eventos procesables). Con propio cap/TTL.
+// LOW-8: ephemeral cache of REJECTED frame IDs (by size, etc.). Does not
+// touch seenIds[] (dedup of processable events). With its own cap/TTL.
 function isRejected(id) {
   if (!id || !rejectedIds) return false;
   const now = Math.floor(Date.now() / 1000);
@@ -618,7 +618,7 @@ function isRejected(id) {
 }
 function markRejected(id) {
   if (!id) return;
-  if (isRejected(id)) return; // ya rechazado recientemente
+  if (isRejected(id)) return; // already rejected recently
   const now = Math.floor(Date.now() / 1000);
   rejectedIds.unshift({id, ts: now});
   if (rejectedIds.length > REJECTED_IDS_MAX) rejectedIds.length = REJECTED_IDS_MAX;
@@ -695,64 +695,64 @@ function nowSec() {
   return Math.floor(Date.now() / 1000);
 }
 
-// AUDIT-4 (SECURITY, opción B del auditor): expiración por WATERMARK, no por
-// reloj de pared. Un `delivered` es seguro de borrar SOLO cuando el cursor de
-// recuperación (lastSeen) ya demuestra que el relay no puede re-entregarlo:
-// el replay pide `since = cursor - STATE_OVERLAP_SECS`, así que un evento
-// entregado en `ts` ya es inalcanzable cuando lastSeen > ts + OVERLAP + margen.
-// Durante un downtime largo lastSeen NO avanza -> el delivered NO expira -> no
-// hay replay tras una caída >30 min. A diferencia de delivered, `pending` SI
-// expira por reloj de pared (PENDING_TTL_SECS): un pending que nunca termina
-// indica un crash en mitad de la operación, y el relay lo re-entregará al
-// reanudar (no hay riesgo de replay como con delivered). La garantía es
+// AUDIT-4 (SECURITY, auditor's option B): expiration by WATERMARK, not by
+// wall clock. A `delivered` is safe to delete ONLY when the recovery cursor
+// (lastSeen) already proves the relay cannot re-deliver it:
+// the replay asks `since = cursor - STATE_OVERLAP_SECS`, so an event
+// delivered at `ts` is already unreachable when lastSeen > ts + OVERLAP + margin.
+// During a long downtime lastSeen does NOT advance -> delivered does NOT expire -> no
+// replay after a >30 min outage. Unlike delivered, `pending` DOES
+// expire by wall clock (PENDING_TTL_SECS): a pending that never finishes
+// indicates a crash mid-operation, and the relay re-delivers it on
+// resume (no replay risk as with delivered). The guarantee is
 // distinta y por eso el TTL es distinto.
 //
-// Cap fail-closed (AUDIT-4, MEDIO): DELIVERY_MAX acota el estado para el
-// DoS de I/O, pero NUNCA expulsa silenciosamente un `delivered` todavía
-// dentro de su ventana de watermark para hacer sitio — eso perdería
-// exactly-once. Si el ledger está lleno con delivered inmaduros, se prefieren
-// expulgar primero pending viejos y delivered ya inalcanzables; si aún así no
-// cabe y habría que borrar un delivered inmaduro, NO se evicta (fail-closed).
+// Fail-closed cap (AUDIT-4, MEDIUM): DELIVERY_MAX bounds the state against the
+// I/O DoS, but NEVER silently evicts a `delivered` still
+// within its watermark window to make room — that would lose
+// exactly-once. If the ledger is full of immature delivered, we prefer
+// evicting first old pending and already-unreachable delivered; if it still
+// does not fit and an immature delivered would have to be deleted, we do NOT
 function deliveredCanExpire(e, lastEnd) {
   if (!e || !e.ts) return false;
-  // Un delivered sin watermark de recuperación (nunca hubo procesamiento
-  // confirmado) nunca se puede descartar.
+  // A delivered with no recovery watermark (there was never confirmed
+  // processing) can never be discarded.
   if (!lastEnd || lastEnd <= 0) return false;
-  // lastEnd - (ts + OVERLAP + margen) >= 0  ->  el cursor ya pasó la ventana.
+  // lastEnd - (ts + OVERLAP + margin) >= 0  ->  the cursor already passed the window.
   return e.ts + STATE_OVERLAP_SECS + DELIVERED_WATERMARK_MARGIN_SECS < lastEnd;
 }
 
-// AUDIT-10 (raíz): separar el cursor de RECEPCIÓN (lastSeen) del
-// watermark de RECUPERACIÓN (recoveryWatermark). El ALTO-7 vino de mezclarlos:
-// updateLastSeen() avanza lastSeen por la hora de recepción ANTES de que el
-// evento se autentique/admita, así que una ráfaga de no-admitidos podía
-// inflar lastSeen y deliveredCanExpire() consideraba inalcanzables delivered
-// que el relay aún podía re-entregar (break exactly-once) o dejaba un L
-// legítimo fuera del overlap (pérdida).
+// AUDIT-10 (root): separate the RECEPTION cursor (lastSeen) from the
+// RECOVERY watermark (recoveryWatermark). HIGH-7 came from mixing them:
+// updateLastSeen() advances lastSeen by reception time BEFORE the event is
+// authenticated/admitted, so a burst of non-admitted events could inflate
+// lastSeen and deliveredCanExpire() would consider delivered unreachable
+// that the relay could still re-deliver (break exactly-once) or leave a
+// legitimate L outside the overlap (loss).
 //
-// La única base legítima para deliveredCanExpire() es el watermark de
-// recuperación: SOLO avanza cuando hay EVIDENCIA de que el relay ya recorrió
-// el rango (markDelivery exitoso de un evento real). Un frame recibido pero
-// rechazado/no-admitido NO mueve recoveryWatermark, por mucho que avance
-// lastSeen. CRÍTICO: el watermark NUNCA se fija a Date.now() de una llamada
-// interna cualquiera — un downtime largo congela el watermark y un único
-// evento NO puede confirmar que el relay recorrió todo el tiempo transcurrido
-// (recorrer un backlog de meses lleva muchos mensajes, no uno). Cada evento
-// procesado confirma a lo sumo una ventana corta adicional de backtrack
-// (RECOVERY_WATERMARK_STEP_SECS); el avance es incremental y nunca supera el
-// reloj local. El primer establecimiento (0 -> X) también queda acotado a ese
-// paso: un arranque frío expira como mucho delivered anteriores a
-// (first + overlap + margen), nunca la totalidad del tiempo caído.
+// The only legitimate basis for deliveredCanExpire() is the recovery
+// watermark: it ONLY advances when there is EVIDENCE the relay already
+// traversed the range (successful markDelivery of a real event). A frame
+// received but rejected/not-admitted does NOT move recoveryWatermark, no
+// matter how much lastSeen advances. CRITICAL: the watermark is NEVER set to
+// Date.now() of any internal call — a long downtime freezes the watermark and
+// a single event CANNOT confirm the relay traversed all elapsed time
+// (traversing months of backlog takes many messages, not one). Each processed
+// event confirms at most one extra short backtrack window
+// (RECOVERY_WATERMARK_STEP_SECS); the advance is incremental and never
+// exceeds the local clock. The initial establishment (0 -> X) is also bounded
+// to that step: a cold boot expires at most delivered older than
+// (first + overlap + margin), never the entire fallen time.
 function advanceRecoveryWatermark() {
   if (!bridgeState) return;
   const now = Math.floor(Date.now() / 1000);
   const prev = bridgeState.recoveryWatermark || 0;
-  // Límite de avance confirmado por este evento: 1 paso de backlog, NUNCA un
-  // salto libre al reloj local. prev + step, capado a `now` por reloj local
-  // (un evento no puede confirmar progreso más allá del momento actual).
+  // Advance limit confirmed by this event: 1 backlog step, NEVER a free
+  // jump to the local clock. prev + step, capped at `now` by local clock
+  // (an event cannot confirm progress beyond the current moment).
   const target = Math.min(prev + RECOVERY_WATERMARK_STEP_SECS, now);
-  // Solo si realmente avanzamos (cubre el primer establecimiento 0 -> step, y
-  // los avances incrementales). Nunca retrocede (target >= prev por la suma).
+  // Only if we actually advanced (covers initial 0 -> step, and incremental
+  // advances). Never goes backward (target >= prev by the sum).
   if (target > prev) {
     bridgeState.recoveryWatermark = target;
     markStateDirty();
@@ -763,39 +763,39 @@ function evictDeliveryLedger(aggressive) {
   if (!bridgeState || !bridgeState.delivery) return 0;
   const d = bridgeState.delivery;
   const now = nowSec();
-  // AUDIT-10: usar el watermark de RECUPERACIÓN (no lastSeen). Un delivered
-  // solo es seguro de borrar cuando SE PROCESÓ suficiente tráfico real como
-  // para demostrar que el relay ya no puede re-entregarlo.
+  // AUDIT-10: use the RECOVERY watermark (not lastSeen). A delivered is
+  // only safe to delete when enough real traffic was PROCESSED to prove the
+  // relay can no longer re-deliver it.
   const lastEnd = bridgeState.recoveryWatermark || 0;
   let changed = 0;
   for (const id of Object.keys(d)) {
     const e = d[id];
     if (!e) continue;
     if (e.status === 'delivered') {
-      // delivered: SOLO por watermark (seguro de borrar cuando el cursor ya no
-      // puede re-entregarlo). Nunca por reloj de pared.
+      // delivered: only by watermark (safe to delete when the cursor can no longer
+      // re-deliver it). Never by wall clock.
       if (deliveredCanExpire(e, lastEnd)) { delete d[id]; changed++; deliverySize--; }
     } else {
-      // pending: por reloj de pared (crash en mitad de op; el relay reintenta).
+      // pending: by wall clock (crash mid-op; the relay retries).
       if (e.ts && (now - e.ts) >= PENDING_TTL_SECS) { delete d[id]; changed++; deliverySize--; }
     }
   }
-  // Cap: evicta los expirables (pending viejos y delivered ya inalcanzables)
-  // primero, FIFO por ts (AUDIT-4). AUDIT-5: en esta segunda fase SOLO se
-  // eliminan `pending` que YA pasaron su TTL (now-ts >= PENDING_TTL_SECS);
-  // nunca un pending todavia vigente (perderia la evidencia durable de una
-  // operacion en vuelo). Si no hay suficientes expirables para bajar del cap,
-  // NO se borra pending vigente ni delivered inmaduro -> fail-closed: el
-  // admision rechaza mas (backpressure) en vez de perder exactly-once.
+  // Cap: evict the expirables first (old pending and already-unreachable delivered)
+  // via FIFO by ts (AUDIT-4). AUDIT-5: in this second phase ONLY
+  // `pending` entries that ALREADY passed their TTL are removed (now-ts >= PENDING_TTL_SECS);
+  // never a still-valid pending (would lose the durable evidence of an
+  // in-flight operation). If there aren't enough expirables to drop below the cap,
+  // NO valid pending nor immature delivered is deleted -> fail-closed:
+  // admission keeps rejecting (backpressure) instead of losing exactly-once.
   const ids = Object.keys(d);
   if (ids.length > DELIVERY_MAX) {
     ids.sort((a, b) => {
       const ea = d[a], eb = d[b];
       return (ea && eb ? (ea.ts || 0) - (eb.ts || 0) : 0);
     });
-    // Contador incremental en vez de Object.keys(d).length dentro del loop
-    // (SÍ O(n²) con ledgers grandes: Object.keys es O(n) y se llamaba en cada
-    // iteración, colgando el proceso con >DELIVERY_MAX delivered inmaduros).
+    // Incremental counter instead of Object.keys(d).length inside the loop
+    // (avoid O(n²) on large ledgers: Object.keys is O(n) and was called on every
+    // iteration, hanging the process with >DELIVERY_MAX immature delivered).
     let size = ids.length;
     for (const id of ids) {
       const e = d[id];
@@ -804,37 +804,37 @@ function evictDeliveryLedger(aggressive) {
       }
       if (size <= DELIVERY_MAX) break;
     }
-    // Si tras purgar pending expirados sigue por encima, NO evictamos delivered
-    // inmaduros ni pending vigentes (fail-closed; backpressure abajo).
-    // (fail-closed: se admite backpressure abajo, no pérdida silenciosa.)
+    // If after purging expired pending it is still above the cap, we do NOT evict
+    // immature delivered nor valid pending (fail-closed; backpressure below).
+    // (fail-closed: backpressure is accepted below, no silent loss.)
   }
   return changed;
 }
 
-// AUDIT-6 (MEDIO): mecanismo operacional de escape contra el bloqueo PERMANENTE
-// de admision. Si el ledger llega a DELIVERY_MAX lleno de delivered protegidos
-// por watermark (lastSeen atrasado por condicion de recuperacion/backpressure),
-// markDelivery de un pending nuevo devolveria false para siempre -> DoS de
-// admision aunque NO haya mensaje duplicado ni perdida. Este flag se activa
-// cuando la limpieza normal no libera espacio suficiente y hay entrada en
-// backpressure, pidiendo un re-scan/reintento para que el cursor avance y
+// AUDIT-6 (MEDIUM): operational escape mechanism against a PERMANENT admission
+// lock. If the ledger reaches DELIVERY_MAX full of watermark-protected delivered
+// entries (lastSeen stalled by a recovery/backpressure condition),
+// markDelivery of a new pending would return false forever -> admission DoS even
+// though there is NO duplicate message or loss. This flag activates when normal
+// cleanup does not free enough space and we are in backpressure, requesting a
+// re-scan/retry so the cursor advances and frees already-unreachable delivered.
 // libere delivered ya inalcanzables.
-// AUDIT-8 (MEDIO): el rescan de recuperación NO debe convertirse en un bucle
-// de reconexiones contra el relay/el proceso. Si el ledger permanece lleno
-// (lastSeen no avanza) y cada evento no admitido reinvoca requestDeliveryRescan(),
-// tendríamos connect/close/connect/close... indefinidamente. Al hardenitzar
-// AUDIT-7 (recordDropped + pendingSince sticky en el rechazo fail-closed) el
-// anchor NO se libera hasta que el drop se recupere -> si el ledger no se
-// vacía, el rescan se re-solicita en cada evento -> DoS de reconexión.
-// Fix: backoff exponencial + límite de rescans por ventana temporal.
-//   RESCAN_MIN_INTERVAL_MS : separación mínima entre rescans (respetar el
-//     ciclo natural de reconexión del WS, que ya tiene su propio 5s).
-//   RESCAN_MAX_BACKOFF_MS  : techo del backoff exponencial.
-//   RESCAN_MAX_PER_MINUTE  : tope duro de rescans por ventana de 60s.
-// El backoff se aplica por resistencia: cada reintento fallido (que no
-// libera espacio) duplica la espera hasta el techo, y el contador de
-// ventana evita ráfagas. La reconexión NATURAL del WS (onclose -> 5s) NO
-// pasa por aquí y no está limitada por estas constantes.
+// AUDIT-8 (MEDIUM): the recovery rescan must NOT become a reconnection loop
+// against the relay/process. If the ledger stays full (lastSeen does not advance)
+// and every rejected event re-invokes requestDeliveryRescan(), we would get
+// connect/close/connect/close... indefinitely. When hardening AUDIT-7
+// (recordDropped + sticky pendingSince on the fail-closed rejection) the anchor
+// is not released until the drop is recovered -> if the ledger does not empty,
+// the rescan is re-requested on every event -> reconnection DoS.
+// Fix: exponential backoff + rescan limit per time window.
+//   RESCAN_MIN_INTERVAL_MS : minimum separation between rescans (respect the
+//     WS natural reconnection cycle, which already has its own 5s).
+//   RESCAN_MAX_BACKOFF_MS  : ceiling of the exponential backoff.
+//   RESCAN_MAX_PER_MINUTE  : hard limit of rescans per 60s window.
+// Backoff is applied by resistance: each failed retry (that frees no space)
+// doubles the wait up to the ceiling, and the window counter prevents bursts.
+// The NATURAL WS reconnection (onclose -> 5s) does NOT go through here and is
+// not limited by these constants.
 const RESCAN_MIN_INTERVAL_MS = CONFIG.rescanMinIntervalMs || 5000;
 const RESCAN_MAX_BACKOFF_MS = CONFIG.rescanMaxBackoffMs || 60000;
 const RESCAN_MAX_PER_MINUTE = CONFIG.rescanMaxPerMinute || 6;
@@ -873,13 +873,13 @@ let reconnectIncoming = null;
 // para evitar bucles de reconexion; el siguiente ciclo natural la rearma.
 function requestDeliveryRescan() {
   deliveryRescanNeeded = true;
-  if (deliveryRescanScheduled) return; // un rescan ya está en progreso; la
-  // petición queda registrada en deliveryRescanNeeded y se consume al emitir.
+  if (deliveryRescanScheduled) return; // a rescan is already in progress; the
+  // request is recorded in deliveryRescanNeeded and consumed on emission.
 
-  // AUDIT-9 (MEDIO): estado BACKPRESSURE explícito. Si el rescan no demostró
-  // progreso real (ver requestDeliveryRescanProgress), NO emitir más rescans
-  // hasta que expire el respiro de cooldown. La reconexión NATURAL del WS
-  // (onclose -> 5s) NO pasa por aquí y sigue operativa.
+  // AUDIT-9 (MEDIUM): explicit BACKPRESSURE state. If the rescan did not show
+  // real progress (see requestDeliveryRescanProgress), do NOT emit more rescans
+  // until the cooldown breather expires. The NATURAL WS reconnection
+  // (onclose -> 5s) does NOT go through here and stays operational.
   const nowMs = Date.now();
   if (rescanStalled) {
     if (rescanStalledSince !== 0 && nowMs - rescanStalledSince < RESCAN_STALL_COOLDOWN_MS) {
@@ -887,13 +887,13 @@ function requestDeliveryRescan() {
         Math.ceil((RESCAN_STALL_COOLDOWN_MS - (nowMs - rescanStalledSince)) / 1000) + 's');
       return;
     }
-    // Respiro cumplido: permitimos un reintento (el siguiente ciclo lo reevalúa).
+    // Breather fulfilled: we allow one retry (the next cycle reassesses it).
     rescanStalled = false;
     rescanStalledSince = 0;
     rescanAttempts = 0;
   }
 
-  // AUDIT-8: window reset por minuto.
+  // AUDIT-8: per-minute window reset.
   const now = Date.now();
   if (rescanWindowStart === 0 || now - rescanWindowStart >= 60000) {
     rescanWindowStart = now;
@@ -901,21 +901,21 @@ function requestDeliveryRescan() {
     rescanAttempts = 0;
   }
 
-  // Si ya llevamos los rescans de la ventana, NO programar más: quedamos
-  // `deliveryRescanNeeded = true` pero sin bucle. El siguiente ciclo natural
-  // (reconexión del WS o un evento que admita y libere espacio) rearmará.
+  // If we already used this window's rescans, do NOT schedule more: we stay
+  // `deliveryRescanNeeded = true` but without a loop. The next natural cycle
+  // (WS reconnection or an event that admits and frees space) will re-arm it.
   if (rescanWindowCount >= RESCAN_MAX_PER_MINUTE) {
     console.warn('[nostr] rescan suprimido: techo de ' + RESCAN_MAX_PER_MINUTE + ' rescans/min alcanzado (el ledger sigue lleno), se reintenta en el proximo ciclo');
     return;
   }
 
-  // Backoff exponencial tras ráfagas: si el reintento NO libera espacio y
-  // volvemos a pedir, la espera se alarga hasta el techo. El primer rescan
-  // tras un respiro de >= maxBackoff vuelve a min-interval.
+  // Exponential backoff after bursts: if the retry does NOT free space and
+  // we ask again, the wait lengthens up to the ceiling. The first rescan
+  // after a breather of >= maxBackoff returns to min-interval.
   const sinceLast = now - lastRescanAt;
   const waitMs = (lastRescanAt === 0 || sinceLast >= RESCAN_MAX_BACKOFF_MS)
-    ? RESCAN_MIN_INTERVAL_MS            // arranque de ventana: espera mínima
-    : rescanBackoffMs();                 // en ráfaga: exponencial
+    ? RESCAN_MIN_INTERVAL_MS            // window start: minimum wait
+    : rescanBackoffMs();                 // in burst: exponential
 
   deliveryRescanScheduled = true;
   rescanAttempts++;
@@ -926,7 +926,7 @@ function requestDeliveryRescan() {
   // conexion de suscripcion; su onclose vuelve a llamar subscribeIncoming(),
   // que recalcula el cursor (anclado a pendingSince si hay drops) y re-scanea.
   // AUDIT-9 (MEDIO): registrar el estado ANTES de emitir, para poder medir
-  // progreso tras la reconexión: recoveryWatermark, tamaño del ledger y el
+  // progress after reconnection: recoveryWatermark, ledger size and the
   // conjunto de drops pendientes.
   const beforeWatermark = bridgeState ? (bridgeState.recoveryWatermark || 0) : 0;
   const beforeDeliveryCount = bridgeState ? deliverySize : 0;
@@ -935,16 +935,16 @@ function requestDeliveryRescan() {
 
   setTimeout(() => {
     deliveryRescanScheduled = false;
-    // AUDIT-8: emitir el rescan. Si siguen pendientes peticiones (ráfaga) y
-    // aún hay presupuesto de ventana, el siguiente call reprogramará con
-    // backoff — NUNCA se reconecta en bucle sin límite. Al alcanzar el techo
-    // de rescans/minuto, requestDeliveryRescan() suprime el próximo y deja
-    // deliveryRescanNeeded=true para el siguiente ciclo natural.
+    // AUDIT-8: emit the rescan. If requests are still pending (burst) and
+    // there is still window budget, the next call will reschedule with
+    // backoff — it NEVER reconnects in an unbounded loop. When the rescans/min
+    // ceiling is reached, requestDeliveryRescan() suppresses the next one and
+    // leaves deliveryRescanNeeded=true for the next natural cycle.
     deliveryRescanNeeded = false;
-    // AUDIT-9 (MEDIO): disparar la reconexión si hay suscripción iniciada; la
-    // medición de progreso SIEMPRE se ejecuta (incluso sin reconnectIncoming,
-    // p.ej. en tests o si el WS no está iniciado) para poder detectar que el
-    // rescan no consiguió nada y entrar en BACKPRESSURE.
+    // AUDIT-9 (MEDIUM): trigger the reconnection if a subscription is started;
+    // progress measurement ALWAYS runs (even without reconnectIncoming,
+    // e.g. in tests or if the WS is not started) so we can detect that the
+    // rescan achieved nothing and enter BACKPRESSURE.
     let reconnected = false;
     if (typeof reconnectIncoming === 'function') {
       reconnectIncoming();
@@ -952,41 +952,41 @@ function requestDeliveryRescan() {
     } else {
       console.warn('[nostr] re-scan solicitado pero la conexion de suscripcion no esta iniciada');
     }
-    // AUDIT-9 (MEDIO): el reinicio de la suscripción procesa el backlog de
-    // forma asíncrona (onmessage -> enqueue/markDelivery). El progreso real
-    // se mide unos segundos después (espacio para que el relay re-entregue
-    // y se liberen delivered inalcanzables).
-    // AUDIT-12 (🟡 MEDIO): el criterio de progreso NO usa pendingSince por sí
-    // solo — pendingSince cambia al registrar OTRO drop, sin recuperar nada
-    // (retrasa la detección de un rescan realmente estancado). Progreso real =
-    //   - recoveryWatermark avanzó (el relay recorrió rango nuevo), O
-    //   - el ledger liberó entradas (delivered expirados / pending purgados), O
-    //   - un dropped CONCRETO fue re-admitido vía markDelivery (existe en delivery).
-    // lastSeen (recepción cruda) tampoco cuenta: no demuestra recuperación.
+    // AUDIT-9 (MEDIUM): the subscription restart processes the backlog
+    // asynchronously (onmessage -> enqueue/markDelivery). Real progress is
+    // measured a few seconds later (room for the relay to re-deliver
+    // and free unreachable delivered).
+    // AUDIT-12 (🟡 MEDIUM): the progress criterion does NOT use pendingSince by
+    // itself — pendingSince changes when ANOTHER drop is recorded, without
+    // recovering anything (delays detection of a truly stalled rescan). Real
+    //   - recoveryWatermark advanced (the relay traversed new range), OR
+    //   - the ledger freed entries (expired delivered / purged pending), OR
+    //   - a CONCRETE dropped was re-admitted via markDelivery (exists in delivery).
+    // lastSeen (raw reception) does not count either: it proves no recovery.
     //
-    // 🟠 MEDIO (AUDIT-17): un ID que DESAPARECE de `dropped` NO es progreso por
-    // sí solo — puede salir por pruning/overflow/limpieza sin procesarse. El
-    // rescan mide RECUPERACIÓN: que el ID entró en `delivery` (markDelivery),
-    // no solo que ya no está en el ledger de drops (evita falsos positivos de
-    // progreso que retrasan el BACKPRESSURE).
+    // 🟠 MEDIUM (AUDIT-17): an ID that DISAPPEARS from `dropped` is NOT progress
+    // by itself — it may leave by pruning/overflow/cleanup without being
+    // processed. The rescan measures RECOVERY: that the ID entered `delivery`
+    // (markDelivery), not just that it no longer is in the drops ledger (avoids
+    // false progress positives that delay the BACKPRESSURE).
     setTimeout(() => {
       const afterWatermark = bridgeState ? (bridgeState.recoveryWatermark || 0) : 0;
       const afterDeliveryCount = bridgeState ? deliverySize : 0;
       const delivery = (bridgeState && bridgeState.delivery)
         ? bridgeState.delivery : {};
-      // AUDIT-17 (🟠 MEDIO): NO basta con que el ID saliera de `dropped` (eso
-      // ocurre también con pruning/overflow/limpieza sin procesar el mensaje).
-      // Progreso de recolocación = un dropped CONCRETO volvió a ENTRAR en
-      // `delivery` vía markDelivery (re-admisión) / recoverDropped, lo que
-      // demuestra procesamiento real. Antes usábamos `afterDropped` (conjunto
-      // posterior) y un ID desaparecido por cualquiera de esas vías no
-      // relacionadas daba un falso positivo de progreso.
+      // AUDIT-17 (🟠 MEDIUM): it is NOT enough that the ID left `dropped` (that
+      // also happens with pruning/overflow/cleanup without processing the
+      // message). Relocation progress = a CONCRETE dropped came BACK INTO
+      // `delivery` via markDelivery (re-admission) / recoverDropped, which
+      // proves real processing. We used to use `afterDropped` (later set) and
+      // an ID disappearing through any of those unrelated paths gave a false
+      // positive of progress.
       let droppedRecovered = false;
       for (const id of beforeDropped) {
         if (Object.prototype.hasOwnProperty.call(delivery, id)
             && delivery[id] && delivery[id].status !== 'dropped') {
-          // El dropped previo ahora está en `delivery` con un estado admitido
-          // (delivered/pending), no solo ausente del ledger de drops.
+          // The previous dropped is now in `delivery` with an admitted status
+          // (delivered/pending), not merely absent from the drops ledger.
           droppedRecovered = true;
           break;
         }
@@ -1004,54 +1004,54 @@ function requestDeliveryRescan() {
             (reconnected ? '' : ' (sin reconexion disponible)'));
         }
       } else {
-        // Hubo progreso: reiniciar la ráfaga de estancamiento.
+        // There was progress: reset the stall burst.
         rescanAttempts = 0;
       }
-    }, RESCAN_MIN_INTERVAL_MS * 2); // ~2x el mínimo: da tiempo a procesar el backlog
+    }, RESCAN_MIN_INTERVAL_MS * 2); // ~2x the minimum: time to process the backlog
   }, waitMs);
 }
 
 function markDelivery(id, status, createdAt) {
   if (!bridgeState || !id) return false;
   if (!bridgeState.delivery) bridgeState.delivery = {};
-  // AUDIT-4 + AUDIT-5 (fail-closed): si el ledger está lleno de delivered
-  // inmaduros / pending vigentes y no hay sitio para un nuevo pending sin
-  // romper la garantía, NO admitimos -> devolvemos FALSE y el caller DEBE
-  // abortar (no procesar el comando). El relay re-entregará el evento. Sin
-  // esto, el handler ejecutaría la operación sin una entrada durable
-  // `pending`, y un replay posterior la re-ejecutaría (break exactly-once).
-  // AUDIT-6: al llegar al soft-limit se fuerza limpieza agresiva (re-scan del
-  // cursor) para intentar liberar espacio ANTES de rechazar; nunca evictando
-  // delivered aún protegido ni pending vigente. Si tras la limpieza sigue
-  // lleno con delivered inmaduros legítimos, se rechaza fail-closed (evitando
-  // el bloqueo permanente al encadenar el re-scan en el siguiente ciclo).
+  // AUDIT-4 + AUDIT-5 (fail-closed): if the ledger is full of immature
+  // delivered / valid pending and there is no room for a new pending without
+  // breaking the guarantee, we do NOT admit -> we return FALSE and the caller
+  // MUST abort (do not process the command). The relay will re-deliver the
+  // event. Without this, the handler would run the operation without a
+  // durable `pending` entry, and a later replay would re-run it (break
+  // AUDIT-6: on reaching the soft-limit we force aggressive cleanup (re-scan
+  // of the cursor) to try to free space BEFORE rejecting; never evicting a
+  // still-protected delivered nor valid pending. If after cleanup it is still
+  // full with legitimate immature delivered, it rejects fail-closed (avoiding
+  // the permanent lock by chaining the re-scan in the next cycle).
   const pruned = evictDeliveryLedger(status === 'pending' && deliverySize >= DELIVERY_SOFT_LIMIT);
   const n = deliverySize;
   if (status === 'pending' && n >= DELIVERY_MAX && !bridgeState.delivery[id]) {
-    // AUDIT-6: pedir re-scan para que el cursor avance y libere delivered ya
-    // inalcanzables; si el relay no tiene más que entregar no habrá promoción,
-    // pero esto evita que un lastSeen congelado congele para siempre la admisión.
+    // AUDIT-6: request a re-scan so the cursor advances and frees already
+    // unreachable delivered; if the relay has nothing more to deliver there
+    // will be no promotion, but this prevents a frozen lastSeen from freezing
     deliveryRescanNeeded = true;
     console.warn('[nostr] delivery ledger lleno; admision rechazada (fail-closed, backpressure) y re-scan programado');
     backpressureRejected++;
-    // NEW-AUDIT (ALTO, no-perdida): el rechazo fail-closed por ledger lleno es
-    // UN DROP que el relay NO re-entregará a menos que el `since` de la próxima
-    // suscripción lo cubra. updateLastSeen() (llamado antes de la admisión, en
-    // el handler) ya avanzó lastSeen con la hora de recepción, y el cursor de
-    // la siguiente suscripción se anclaría a lastSeen (solo a pendingSince si
-    // hay drop registrado). Sin esto, un `L` legítimo rechazado aquí caería
-    // fuera del overlap (lastSeen - 120) durante una ráfaga -> el relay no lo
-    // re-entrega -> pérdida PERMANENTE de un DM legítimo (no solo DoS).
-    // Reutilizamos el mecanismo ALTO-2 de enqueueGiftWrap: registrar el id en
-    // el ledger de drops y anclar pendingSince STICKY hasta que el drop sea
-    // re-visto, para que el `since` nunca salte por delante de `L`.
+    // NEW-AUDIT (HIGH, no-loss): the fail-closed rejection for a full ledger is
+    // A DROP the relay will NOT re-deliver unless the `since` of the next
+    // subscription covers it. updateLastSeen() (called before admission, in
+    // the handler) already advanced lastSeen with the reception time, and the
+    // next subscription cursor would anchor to lastSeen (only to pendingSince
+    // if a drop is registered). Without this, a legitimate `L` rejected here
+    // would fall outside the overlap (lastSeen - 120) during a burst -> the
+    // relay does not re-deliver it -> PERMANENT loss of a legitimate DM (not
+    // just DoS). We reuse the ALTO-2 enqueueGiftWrap mechanism: register the
+    // id in the drops ledger and anchor pendingSince STICKY until the drop is
+    // re-seen, so the `since` never jumps ahead of `L`.
     if (bridgeState) {
-      // El created_at del evento descartado (cuando el caller lo conoce: el
-      // camino por backlog via handleIncomingGiftWrap pasa el wrap real) se
-      // usa para anclar pendingSince al MIN(cursor local, created_at) y para
-      // la recuperación puntual por id. AUDIT-16 (🔴): anclar SOLO a la hora
-      // local de rechazo pierde un evento atrasado con created_at anterior
-      // (el relay no lo re-entrega si el `since` no cubre su created_at).
+      // The created_at of the discarded event (when the caller knows it: the
+      // backlog path via handleIncomingGiftWrap passes the real wrap) is used
+      // to anchor pendingSince to MIN(local cursor, created_at) and for
+      // point recovery by id. AUDIT-16 (🔴): anchoring ONLY to the local
+      // rejection time loses a delayed event with an earlier created_at (the
+      // relay will not re-deliver it if the `since` does not cover its
       recordDropped(id, createdAt);
       const nowTs = Math.floor(Date.now() / 1000);
       if (bridgeState.pendingSince == null || nowTs < bridgeState.pendingSince) {
@@ -1060,24 +1060,24 @@ function markDelivery(id, status, createdAt) {
       }
     }
     requestDeliveryRescan();
-    return false; // no admission; el relay re-entregará
+    return false; // no admission; the relay will re-deliver
   }
-  // AUDIT-10 (raíz): el watermark de recuperación se avanza vía
-  // processWatermark() con el timestamp del EVENTO confirmado real
-  // (procesado/admitido), NO por Date.now() de una admisión interna — eso
-  // expiraría delivered que el relay jamás confirmó haber recorrido (break
-  // exactly-once tras downtime). La evicción usa el watermark ya establecido.
+  // AUDIT-10 (root): the recovery watermark advances via processWatermark()
+  // with the timestamp of the REAL confirmed event (processed/admitted), NOT
+  // by Date.now() of an internal admission — that would expire delivered the
+  // relay never confirmed traversing (break exactly-once after downtime).
+  // Eviction uses the already-established watermark.
   evictDeliveryLedger(false);
   bridgeState.delivery[id] = {status, ts: nowSec()};
   deliverySize++;
   if (pruned) markStateDirty();
   flushStateNow();
-  // AUDIT-9 (MEDIO): una admisión exitosa (o una promoción a delivered) es
-  // PROGRESO REAL del ledger -> salir de BACKPRESSURE y reiniciar la ráfaga
-  // de estancamiento. Solo consideramos progreso si realmente liberamos/avanzamos:
-  // un pending nuevo que entra no libera, pero una promoción/rechazo sí; aquí
-  // tratamos cualquier escritura del ledger como actividad de recuperación y
-  // reiniciamos el contador para no penalizar el ciclo de admisión normal.
+  // AUDIT-9 (MEDIUM): a successful admission (or a promotion to delivered)
+  // is REAL ledger progress -> exit BACKPRESSURE and reset the stall burst.
+  // We only consider progress if we really freed/advanced: a new pending
+  // entering does not free, but a promotion/rejection does; here we treat
+  // any ledger write as recovery activity and reset the counter so the
+  // normal admission cycle is not penalized.
   if (rescanStalled) {
     rescanStalled = false;
     rescanStalledSince = 0;
@@ -1114,17 +1114,17 @@ function finishDelivery(id, ok, rejected) {
     return;
   }
   if (ok) {
-    // AUDIT-M01-OPCION2 (kaieriksen, 🔴 BLOQUEANTE): el watermark pasa a
-    // avanzar con el RELOJ LOCAL del bridge (progreso confirmado del stream:
-    // el ledger confirmó el procesamiento de un evento real), NUNCA con el
-    // `created_at` del gift-wrap (input controlado por el emisor). Antes se
-    // llamaba processWatermark(wrapTs) con giftWrap.created_at, de modo que
-    // un sender AUTORIZADO podía adelantar recoveryWatermark hasta +23h con un
-    // created_at fabricado, y el watermark es la base de la evicción de
-    // delivered (deliveredCanExpire) — manipulable por el emisor, no por el
-    // progreso del relay. advanceRecoveryWatermark() usa Date.now() local y
-    // respeta AUDIT-10 (no da el primer salto desde 0 sin evidencia de
-    // watermark previo): el reloj del bridge no lo controla ningún emisor.
+    // AUDIT-M01-OPCION2 (kaieriksen, 🔴 BLOCKING): the watermark now advances
+    // with the bridge's LOCAL clock (confirmed stream progress: the ledger
+    // confirmed the processing of a real event), NEVER with the gift-wrap's
+    // `created_at` (input controlled by the sender). Previously it called
+    // processWatermark(wrapTs) with giftWrap.created_at, so an AUTHORIZED
+    // sender could advance recoveryWatermark up to +23h with a forged
+    // created_at, and the watermark drives delivered eviction
+    // (deliveredCanExpire) — manipulable by the sender, not by relay progress.
+    // advanceRecoveryWatermark() uses local Date.now() and
+    // honors AUDIT-10 (no first jump from 0 without prior watermark evidence):
+    // the bridge clock is not controlled by any sender.
     markDelivery(id, 'delivered');
     advanceRecoveryWatermark();
   }
@@ -1167,8 +1167,8 @@ process.on('SIGINT', () => { flushState(); process.exit(0); });
 
 // Initialize the durable kill-switch (pause) FIRST, in ANY mode (jitsi,
 // nostr, both). It must not depend on bridgeState (which only exists in
-// NOSTR_MODE) — sin un fichero propio, un deployment solo-jitsi perdería
-// el pause en el reinicio.
+// NOSTR_MODE) — without its own file, a jitsi-only deployment would lose
+// the pause on restart.
 loadPause();
 
 // Initialize state only in nostr/both mode (where the subscription exists)
@@ -1257,22 +1257,22 @@ try {
     console.warn('[bridge] org.yaml no encontrado (' + ORG_FILE + '); usando routing manual del config.json.');
     DERIVED = null;
   } else {
-    // M-09 FAIL-CLOSED: org.yaml está presente pero es inválido/ilegible.
-    // NO arrancamos con un routing manual posiblemente permisivo/obsoleto que
-    // se desvíe de la fuente de verdad normativa. Abortar es lo seguro.
+    // M-09 FAIL-CLOSED: org.yaml is present but invalid/unreadable.
+    // We do NOT start with a possibly-permissive/outdated manual routing that
+    // deviates from the normative source of truth. Aborting is the safe move.
     console.error('[bridge] ERROR FATAL (fail-closed): ' + e.message);
     console.error('[bridge] Corrige org.yaml o elimínalo si quieres volver al routing manual.');
     throw e;
   }
 }
 if (DERIVED) {
-  // MEDIO-5 (audit 462e62b): org.yaml es la ÚNICA fuente de verdad de
-  // identidad cuando existe y es válido. Antes se hacía
+  // MEDIO-5 (audit 462e62b): org.yaml is the ONLY source of truth for
+  // identity when it exists and is valid. Previously it did
   //   CONFIG.agents = Object.assign({}, DERIVED.agents, CONFIG.agents || {})
-  // lo que permitía que un 'alma' (o un 'superadmin' inexistente) del
-  // config.json SOBRESCRIBIERA el npub derivado de org.yaml, escalando
-  // privilegios o violando la fuente de verdad. Ahora: sin merge. Los agents
-  // manuales SOLO se usan si org.yaml no existe (fallback legacy abajo).
+  // which allowed an 'alma' (or a non-existent 'superadmin') from the
+  // config.json to OVERWRITE the npub derived from org.yaml, escalating
+  // privileges or violating the source of truth. Now: no merge. Manual agents
+  // are ONLY used if org.yaml does not exist (legacy fallback below).
   if (CONFIG.agents && Object.keys(CONFIG.agents).length) {
     console.warn('[bridge] WARNING: agents del config.json IGNORADOS — org.yaml (' + ORG_FILE + ') es la única fuente de verdad de identidad (MEDIO-5).');
   }
@@ -1984,22 +1984,22 @@ function subscribeIncoming() {
   reconnectIncoming = () => { try { ws.close(); } catch (_) {} };
   // `since`: start from the last PROCESSED event (with an overlap margin) so
   // the historical backlog is not reprocessed on every reconnect.
-  // El cursor de procesamiento es recoveryWatermark (el rango que el relay ha
-  // confirmado como recorrido al admitir/procesar realmente), NO lastSeen —
-  // lastSeen es el receive cursor (última recepción local, avanza por
-  // Date.now() ANTES de admitir), así que NO representa qué rango se ha
-  // procesado. Anclar `since` a lastSeen puro podría saltar eventos recibidos
-  // pero aún sin admitir bajo backlog+backpressure. H-NEW-01: si hay drops
-  // pendientes, pendingSince (STICKY) es el ancla más conservadora y nunca
-  // deja pasar un drop no recuperado.
+  // The processing cursor is recoveryWatermark (the range the relay has
+  // confirmed as traversed by actually admitting/processing), NOT lastSeen —
+  // lastSeen is the receive cursor (last local reception, advances by
+  // Date.now() BEFORE admitting), so it does NOT represent which range was
+  // processed. Anchoring `since` to raw lastSeen could skip received events
+  // not yet admitted under backlog+backpressure. H-NEW-01: if there are
+  // pending drops, pendingSince (STICKY) is the most conservative anchor and
+  // never lets an unrecovered drop slip past.
   // No previous state -> full backlog (original behavior).
   let since = null;
   if (bridgeState && bridgeState.relay === CONFIG.nostr.relay) {
     const recovery = bridgeState.recoveryWatermark || 0;
-    // Ancla base: el cursor de procesamiento (rango confirmado como recorrido).
+    // Base anchor: the processing cursor (range confirmed as traversed).
     let cursor = recovery;
-    // Si hay drops sin recuperar, pendingSince es anterior y conservador: lo
-    // usamos como ancla (nunca pasar por delante de un drop no recuperado).
+    // If there are unrecovered drops, pendingSince is earlier and conservative:
+    // we use it as the anchor (never pass ahead of an unrecovered drop).
     if (bridgeState.pendingSince != null) {
       cursor = (cursor === 0 || bridgeState.pendingSince < cursor)
         ? bridgeState.pendingSince : cursor;
@@ -2015,22 +2015,22 @@ function subscribeIncoming() {
   }
   const REQ_FILTER = {kinds: [1059], '#p': [bridgePk]};
   if (since !== null) REQ_FILTER.since = since;
-  // AUDIT-16 (🔴 ALTO): recuperación puntual por ID. El `since` es un cursor
-  // temporal: un wrap atrasado por backlog (created_at muy anterior) puede
-  // quedar fuera del [since, ahora] aun con pendingSince anclado a su
-  // created_at (los relays no garantizan entrega ordenada). Para no depender
-  // solo del cursor temporal, pedimos además al relay CADA id de los drops
-  // pendientes de forma explícita (filtro `ids`), fuera del rango temporal.
-  // Los EVENT de esta sub se enrutan igual por enqueueGiftWrap -> markSeen ->
-  // recoverDropped, así que cada drop recuperado se quita del ledger y,
-  // cuando se vacía, releasePendingSinceIfRecovered libera el ancla.
+  // AUDIT-16 (🔴 HIGH): point recovery by ID. The `since` is a temporal
+  // cursor: a wrap delayed by backlog (much-earlier created_at) can fall
+  // outside [since, now] even with pendingSince anchored to its created_at
+  // (relays do not guarantee ordered delivery). To not rely only on the
+  // temporal cursor, we also ask the relay for EACH pending drop id
+  // explicitly (`ids` filter), outside the temporal range. The EVENTs of
+  // this sub route the same way via enqueueGiftWrap -> markSeen ->
+  // recoverDropped, so each recovered drop is removed from the ledger and,
+  // when it empties, releasePendingSinceIfRecovered frees the anchor.
   const droppedIds = (bridgeState && bridgeState.dropped && bridgeState.dropped.length)
     ? bridgeState.dropped.filter(d => d && d.id).map(d => d.id)
     : [];
   const sendReq = () => {
     ws.send(JSON.stringify(['REQ', 'bridge-in', REQ_FILTER]));
-    // Fetch puntual por id: solo si hay drops pendientes, en lotes para no
-    // emitir un filtro `ids` gigante (respetar límites de frame del relay).
+    // Point fetch by id: only if there are pending drops, in batches to avoid
+    // emitting a giant `ids` filter (respect the relay's frame limits).
     if (droppedIds.length > 0) {
       const BATCH = 100;
       for (let i = 0; i < droppedIds.length; i += BATCH) {
@@ -2052,18 +2052,18 @@ function subscribeIncoming() {
     }, 800);
   };
   ws.onmessage = async (e) => {
-    // M-04: tope de tamaño del frame crudo antes de parsear/desencriptar.
-    // Un gift-wrap supera el tope -> se descarta sin entrar a unwrapEvent().
+    // M-04: cap on the raw frame size before parsing/decrypting.
+    // A gift-wrap exceeding the cap is discarded without entering unwrapEvent().
     const rawBytes = typeof e.data === 'string' ? Buffer.byteLength(e.data) : (e.data && e.data.byteLength !== undefined ? e.data.byteLength : -1);
     if (rawBytes !== -1 && rawBytes > NOSTR_MAX_FRAME_BYTES) {
       console.warn('[nostr] frame demasiado grande (' + rawBytes + ' B > ' + NOSTR_MAX_FRAME_BYTES + ' B): ignorado antes de parsear/desencriptar');
-      // Marcamos seen para no reintentar sin fin un event que siempre fallará por tamaño
-      // (evita un mini-DoS de reintentos del relay). LOW-8: usamos el caché
-      // markRejected (SEPARADO de seenIds) para no contaminar la dedup.
+      // Mark as seen so we do not infinitely retry an event that will always
+      // fail by size (avoids a mini-DoS of relay retries). LOW-8: we use the
+      // markRejected cache (SEPARATE from seenIds) to not pollute dedup.
       try {
         const big = JSON.parse(e.data.toString());
         if (big[0] === 'EVENT' && big[2] && big[2].id) markRejected(big[2].id);
-      } catch (_) { /* frame gigante no-parseable: no hay id que marcar */ }
+      } catch (_) { /* giant non-parseable frame: no id to mark */ }
       return;
     }
     let m;
@@ -2078,7 +2078,7 @@ function subscribeIncoming() {
       // is processed as unauthenticated and live streaming never arrives.
       setTimeout(() => { if (!reqSent) { reqSent = true; sendReq(); } }, 300);
     } else if (m[0] === 'EVENT') {
-      // M-05: encolar con backpressure en vez de lanzar N handlers async sin límite.
+      // M-05: enqueue with backpressure instead of launching N unbounded async handlers.
       enqueueGiftWrap(m[2]);
     }
   };
@@ -2098,13 +2098,13 @@ async function handleIncomingGiftWrap(giftWrap) {
     // must be RETRIED — otherwise a transient publish failure would mark it
     // seen and drop it forever (MEDIO-4), and a crash before the 5s flush
     // could re-deliver a committed DM (ALTO-3).
-    // AUDIT-4 (downtime replay): el dedup se apoya en el ledger durable como
-    // fuente AUTORITATIVA de "ya entregado". isSeen() (seenIds) expira a los
-    // ~180s, así que tras un downtime largo isSeen(id) es false aunque el
-    // delivery sea delivered — exigir AMBAS re-ejecutaría el comando. Por
-    // eso la compuerta es deliveryStatus==='delivered' (persistente por
-    // watermark) y NO requiere isSeen(). isSeen se mantiene como atajo
-    // rápido solo para el caso dentro de la ventana (aunque redundante).
+    // AUDIT-4 (downtime replay): the dedup relies on the durable ledger as the
+    // AUTHORITATIVE source of "already delivered". isSeen() (seenIds) expires
+    // after ~180s, so after a long downtime isSeen(id) is false even though the
+    // delivery is delivered — requiring BOTH would re-run the command. That is
+    // why the gate is deliveryStatus==='delivered' (durable, watermark-backed)
+    // and does NOT require isSeen(). isSeen stays as a fast shortcut
+    // only for the in-window case (though redundant).
     if (deliveryStatus(giftWrap.id) === 'delivered') {
       console.log('[nostr] duplicate gift-wrap (ya entregado) ignorado:', giftWrap.id.slice(0, 8));
       return;
@@ -2180,9 +2180,9 @@ async function handleIncomingGiftWrap(giftWrap) {
     if (giftWrap.id) {
       // AUDIT-16: propagar el created_at real del wrap al camino fail-closed
       // para que pendingSince se ancle al MIN(cursor local, created_at) y se
-      // conserve en el ledged de drops (recuperación puntual por id). Un wrap
-      // atrasado por backlog tiene created_at anterior a la hora local de
-      // rechazo; anclar solo a Date.now() lo haría inalcanzable.
+      // stays in the drops ledger (point recovery by id). A wrap delayed by
+      // backlog has a created_at earlier than the local rejection time;
+      // anchoring only to Date.now() would make it unreachable.
       const admitted = markDelivery(giftWrap.id, 'pending', giftWrap.created_at);
       if (!admitted) {
         console.warn('[nostr] admision durable rechazada; NO se procesa (backpressure fail-closed, relay reintentara)');
@@ -2196,8 +2196,8 @@ async function handleIncomingGiftWrap(giftWrap) {
     // --- Comandos comunes ---
     if (cmd === 'status' || cmd === 'help' || cmd === 'routes') {
       const ok = await publishDM(senderPk, buildHelp(senderName), 'Bridge').catch(err => { console.error('[bridge] DM failed:', err.message); return false; });
-      // AUDIT-M01-OPCION2: status/help/routes son comandos de LECTURA sin
-      // efecto sobre el stream; no avanzan el watermark (reloj local).
+      // AUDIT-M01-OPCION2: status/help/routes are READ-only commands with
+      // no effect on the stream; they do not advance the watermark (local clock).
       finishDelivery(giftWrap.id, !!ok, false);
       return;
     }
@@ -2311,17 +2311,17 @@ async function handleRoute(fromName, fromPk, route, giftWrapId) {
   const toPk = agentByName.get(route.to);
   if (!toPk) {
     await publishDM(fromPk, 'Agente desconocido: @' + route.to + '. Agentes: ' + [...agentByName.keys()].join(', '), 'Bridge').catch(err => console.warn('[routing] aviso "agente desconocido" no entregado a', fromPk.slice(0, 8) + ':', err.message));
-    // 🟡 BAJO (auditoría): rechazo DETERMINISTA — el retry nunca cambiará el
-    // resultado (el agente no existe). Finalizar para no dejar un `pending`
-    // inútil consumiendo el ledger hasta PENDING_TTL_SECS.
+    // 🟡 LOW (audit): DETERMINISTIC rejection — the retry will never change
+    // the result (the agent does not exist). Finish to not leave a useless
+    // `pending` consuming the ledger until PENDING_TTL_SECS.
     finishDelivery(giftWrapId, false, true);
     return;
   }
   if (!routingAllowed(fromName, route.to, routingPerms, routingDefault)) {
     console.log('[routing] bloqueado:', fromName, '->', route.to);
     await publishDM(fromPk, 'No tienes permiso para escribir a @' + route.to + '.', 'Bridge').catch(err => console.warn('[routing] aviso "sin permiso" no entregado a', fromPk.slice(0, 8) + ':', err.message));
-    // 🟡 BAJO (auditoría): rechazo DETERMINISTA — sin permiso no cambiará en
-    // el retry. Finalizar (rejected) para liberar el ledger de este pending.
+    // 🟡 LOW (audit): DETERMINISTIC rejection — no permission will not change
+    // on retry. Finish (rejected) to free the ledger from this pending.
     finishDelivery(giftWrapId, false, true);
     return;
   }
@@ -2331,9 +2331,9 @@ async function handleRoute(fromName, fromPk, route, giftWrapId) {
   const loop = antiLoopCheck(fromName, route.to, route.text);
   if (!loop.ok) {
     console.warn('[antiloop] message blocked (' + loop.reason + '):', loop.detail);
-    // 🟡 BAJO (auditoría): rechazo DETERMINISTA — el anti-loop volverá a
-    // bloquear en el retry (mismo contenido/spam/duplicado). Finalizar
-    // (rejected) para no dejar un pending inútil en el ledger.
+    // 🟡 LOW (audit): DETERMINISTIC rejection — the anti-loop will keep
+    // blocking on retry (same content/spam/duplicate). Finish (rejected) to
+    // not leave a useless pending in the ledger.
     finishDelivery(giftWrapId, false, true);
     return;
   }
@@ -2352,13 +2352,13 @@ async function handleRoute(fromName, fromPk, route, giftWrapId) {
     return false;
   });
   if (ok) {
-    // ALTO-3 + MEDIO-4: entregado de forma durable ANTES de notificar al
-    // emisor, para que un crash posterior no lo re-distribuya ni lo pierda.
+    // ALTO-3 + MEDIO-4: delivered durably BEFORE notifying the sender, so a
+    // later crash does not re-distribute or lose it.
     if (giftWrapId) {
       markDelivery(giftWrapId, 'delivered');
-      // AUDIT-M01-OPCION2: el routing exitoso también confirma procesamiento
-      // real -> el watermark avanza con el RELOJ LOCAL del bridge (progreso
-      // confirmado del stream), nunca con un created_at del emisor.
+      // AUDIT-M01-OPCION2: a successful routing also confirms real processing
+      // -> the watermark advances with the bridge's LOCAL clock (confirmed
+      // stream progress), never with a sender-created created_at.
       advanceRecoveryWatermark();
     }
     await publishDM(fromPk, `Mensaje entregado a @${route.to}.`, 'Bridge').catch(() => {});
@@ -2427,11 +2427,11 @@ for (const [room, agents] of Object.entries(CONFIG.roomAgents || {})) {
 //     legacy behaviour (any authenticated agent) for backward compatibility.
 // AUDIT M01 (fail-closed, kaieriksen): distinguir "bloque permissions AUSENTE"
 // (legacy/open) de "bloque PRESENTE" (fail-closed por defecto). Un bloque
-// presente pero vacío o mal formado NO debe activar legacy: el operador que
-// escribió "permissions": {} espera "no he concedido nada -> nadie opera",
-// y un "permissions" con forma inválida (p.ej. full: "alice" en vez de
-// array, o un objeto no booleano) tampoco debe abrir el puente. Usamos
-// hasOwnProperty para detectar el bloque aunque esté vacío ({}) o mal formado.
+// present but empty or malformed must NOT activate legacy: the operator who
+// wrote "permissions": {} expects "I granted nothing -> nobody operates",
+// and a "permissions" with an invalid shape (e.g. full: "alice" instead of
+// an array, or a non-boolean object) must not open the bridge either. We use
+// hasOwnProperty to detect the block even if it is empty ({}) or malformed.
 const permConfigured = Object.prototype.hasOwnProperty.call(CONFIG, 'permissions');
 const permObject = permConfigured && CONFIG.permissions
   && typeof CONFIG.permissions === 'object' && !Array.isArray(CONFIG.permissions)
@@ -2464,17 +2464,17 @@ function agentCanOperateRoom(senderName, room /* string|null */) {
   return false;
 }
 
-// Lógica pura de decisión de permisos, extraída de agentCanOperateRoom para
-// poder testear la matriz de configuración de forma aislada (sin cargar todo
-// el módulo, que necesita un config completo y red NIP-17 valid — ver crítica
-// de la revisión kaieriksen §4: "los tests no prueban realmente la matriz").
-// Resuelve "¿puede sender operar room?" contra un objeto permissions crudo:
-//   undefined / sin bloque            -> legacy (open)
-//   {} / mal formado / sin grants     -> fail-closed (deny)
-//   { full: [names] }                 -> full: cualquier sala + room-agnostic
-//   { restricted: {room:[names]} }    -> solo en rooms listadas, room-agnostic exige full
-// Devuelve true si el bloque está ausente (legacy) o el sender cumple la
-// regla; false en cualquier otro caso (fail-closed).
+// Pure permission decision logic, extracted from agentCanOperateRoom to be
+// able to test the configuration matrix in isolation (without loading the
+// whole module, which needs a full config and NIP-17 valid network — see the
+// kaieriksen review §4 criticism: "the tests do not actually test the matrix").
+// Resolves "can sender operate room?" against a raw permissions object:
+//   undefined / no block            -> legacy (open)
+//   {} / malformed / no grants      -> fail-closed (deny)
+//   { full: [names] }                 -> full: any room + room-agnostic
+//   { restricted: {room:[names]} }    -> only in listed rooms, room-agnostic needs full
+// Returns true if the block is absent (legacy) or the sender meets the rule;
+// false in any other case (fail-closed).
 function evalRoomPermission(permConfig, senderName, room /* string|null */) {
   if (!senderName) return false;
   const configured = permConfig !== undefined;
@@ -2505,11 +2505,11 @@ let xmpp = null;
 // only when jitsi mode is active.
 let handleJoinLeaveFn = null;
 // joinRoom/leaveRoom viven dentro del bloque JITSI (block-scoped) y NO son
-// visibles fuera de él. El handler HTTP (http.createServer, fuera del bloque)
-// las referencia -> ReferenceError 'joinRoom is not defined' al llamar
-// POST /join o /leave. Exponemos alias a nivel de módulo (mismo patrón que
-// handleJoinLeaveFn) y los asignamos dentro del bloque. Única vía para que
-// el HTTP /join /leave funcionen en modo Jitsi/both.
+// visible outside it. The HTTP handler (http.createServer, outside the block)
+// references them -> ReferenceError 'joinRoom is not defined' when calling
+// POST /join or /leave. We expose module-level aliases (same pattern as
+// handleJoinLeaveFn) and assign them inside the block. The only way for
+// HTTP /join /leave to work in Jitsi/both mode.
 let joinRoomFn = null;
 let leaveRoomFn = null;
 if (JITSI_MODE) {
@@ -2763,14 +2763,14 @@ if (JITSI_MODE) {
 // persistConfig — serialized atomic writer for the config file.
 // ---------------------------------------------------------------------------
 // AUDIT kaieriksen M04 (🔴 BLOQUEANTE): `/register` y `persistRoomTimeout`
-// escribían CONFIG_PATH+'.tmp' con writeFileSync+renameSync SIN serializar.
-// Dos peticiones HTTP concurrentes (o /register + un join con timeout)
-// podían usar el mismo `.tmp`, y un rename de una pisaba el temp/el destino
-// de la otra -> pérdida de registros de salas o timeouts.
+// wrote CONFIG_PATH+'.tmp' with writeFileSync+renameSync WITHOUT serializing.
+// Two concurrent HTTP requests (or /register + a join with timeout) could use
+// the same `.tmp`, and a rename of one overwrote the other's temp/destination
+// -> loss of room records or timeouts.
 //
-// Fix: una única cola de promesas (writeConfigChain) serializa TODAS las
-// escrituras; cada una usa un nombre temporal ÚNICO (pid+counter) y renombra
-// atómicamente. Nunca dos writers comparten el mismo `.tmp`.
+// Fix: a single promise queue (writeConfigChain) serializes ALL writes; each
+// one uses a UNIQUE temp name (pid+counter) and renames atomically. Two
+// writers never share the same `.tmp`.
 let _cfgWriteSeq = 0;
 let writeConfigChain = Promise.resolve();
 function persistConfig() {
@@ -2779,30 +2779,30 @@ function persistConfig() {
   const op = () => new Promise((resolve, reject) => {
     let fd = null;
     try {
-      // AUDIT kaieriksen M04 (fsync / crash durability, MEDIO): writeFileSync
-      // + renameSync daba atomicidad de NOMBRE pero, sin fsync, un crash o
-      // power-loss justo después del rename podía recuperar el estado anterior
-      // o una transición no durable. Para una garantía estricta de no pérdida
-      // de configuración: escribir -> fsync(fd) -> close -> rename -> fsync
-      // del directorio padre (para que el rename en sí llegue al almacenamiento
-      // persistente). writeFileSync ya hace flush del buffer del kernel al
-      // disco vía close interno, pero añadimos fsync explícito del fd y del
-      // directorio para cubrir la durabilidad del rename.
+      // AUDIT kaieriksen M04 (fsync / crash durability, MEDIUM): writeFileSync
+      // + renameSync gave NAME atomicity but, without fsync, a crash or
+      // power-loss right after the rename could restore the previous state or
+      // a non-durable transition. For strict no-loss of configuration:
+      // write -> fsync(fd) -> close -> rename -> fsync of the parent directory
+      // (so the rename itself reaches persistent storage). writeFileSync
+      // already flushes the kernel buffer to disk via its internal close, but
+      // we add explicit fsync of the fd and the directory to cover the
+      // durability of the rename.
       const data = Buffer.from(JSON.stringify(CONFIG, null, 2), 'utf8');
       fd = fs.openSync(tmp, 'w', 0o600);
       fs.writeSync(fd, data, 0, data.length, 0);
-      fs.fsyncSync(fd);       // durabilidad del contenido (al almacenamiento persistente)
+      fs.fsyncSync(fd);       // durability of the content (to persistent storage)
       fs.closeSync(fd);
       fd = null;
-      fs.renameSync(tmp, CONFIG_PATH); // atómico en el mismo filesystem
-      // fsync el directorio padre para que el rename sea durable.
+      fs.renameSync(tmp, CONFIG_PATH); // atomic on the same filesystem
+      // fsync the parent directory so the rename is durable.
       try {
         const dirFd = fs.openSync(path.dirname(CONFIG_PATH), 'r');
         try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
       } catch (e) {
-        // fsync de directorio no soportado en algunos FS (Windows, ciertos
-        // overlay). No es fatal: el contenido ya es durable; solo el rename
-        // podría no serlo en un crash inmediato. Log y continúa.
+        // Directory fsync unsupported on some FS (Windows, certain overlays).
+        // Not fatal: the content is already durable; only the rename might
+        // not survive an immediate crash. Log and continue.
         console.warn('[persistConfig] fsync de directorio no soportado:', e.message);
       }
       resolve();
@@ -2812,9 +2812,9 @@ function persistConfig() {
       reject(e);
     }
   });
-  // AUDIT kaieriksen M04 (🔴 ALTO, cola envenenada): ... ver nota completa
-  // más arriba en esta función. Un fallo aísla la operación pero nunca envenena
-  // la cadena.
+  // AUDIT kaieriksen M04 (🔴 HIGH, poisoned queue): ... see the full note
+  // further up in this function. A failure isolates the operation but never
+  // poisons the chain.
   const chained = writeConfigChain.then(op);
   writeConfigChain = chained.catch(() => {});
   return chained;
@@ -2826,7 +2826,7 @@ async function persistRoomTimeout(room, timeout) {
     roomTimeouts.set(room, n);
     CONFIG.roomTimeouts = CONFIG.roomTimeouts || {};
     CONFIG.roomTimeouts[room] = n;
-    // AUDIT M04: escritura atómica serializada (única cola, temp único).
+    // AUDIT M04: atomic serialized write (single queue, unique temp).
     await persistConfig();
   }
 
@@ -2946,18 +2946,18 @@ async function persistRoomTimeout(room, timeout) {
 // ---------------------------------------------------------------------------
 // API HTTP local
 // ---------------------------------------------------------------------------
-// MEDIO-7 (audit 462e62b): los endpoints HTTP de MUTACIÓN (/join, /leave,
-// /promote, /register, /pause) permitían que CUALQUIER proceso local operara
-// el bridge o disparara acciones de administración XMPP sin credencial. Ahora
-// requieren un token secreto (Bearer / X-Admin-Token). También los GET de
-// solo lectura (/status, /recordings...) requieren auth: localhost no es un
-// límite de autorización en un host compartido.
+// MEDIO-7 (audit 462e62b): the HTTP MUTATION endpoints (/join, /leave,
+// /promote, /register, /pause) allowed ANY local process to operate the bridge
+// or trigger XMPP admin actions without a credential. Now they require a
+// secret token (Bearer / X-Admin-Token). The read-only GETs (/status,
+// /recordings...) also require auth: localhost is not an authorization
+// boundary on a shared host.
 //
-// El token se toma de CONFIG.httpAdminTokenFile, CONFIG.httpAdminToken o
-// PHANTOMBRIDGE_ADMIN_TOKEN. Si el operador no lo configura, se genera uno
-// ALEATORIO en runtime (fail-closed) y
-// se loguea UNA vez al arrancar para que el operador pueda recuperarlo. Nunca
-// dejamos un endpoint admin abierto sin credencial.
+// The token is taken from CONFIG.httpAdminTokenFile, CONFIG.httpAdminToken or
+// PHANTOMBRIDGE_ADMIN_TOKEN. If the operator does not configure it, a RANDOM
+// one is generated at runtime (fail-closed) and
+// logged ONCE at startup so the operator can retrieve it. We never leave an
+// admin endpoint open without a credential.
 let ADMIN_TOKEN;
 if (CONFIG.httpAdminTokenFile) {
   const tokenFile = path.resolve(path.dirname(CONFIG_PATH), CONFIG.httpAdminTokenFile);
@@ -2973,7 +2973,7 @@ if (CONFIG.httpAdminTokenFile) {
 if (ADMIN_TOKEN.length < 16) throw new Error('HTTP admin token must be at least 16 characters');
 function getAdminToken() { return ADMIN_TOKEN; }
 
-// Devuelve true si la petición trae el token de admin correcto.
+// Returns true if the request carries the correct admin token.
 function hasAdminAuth(req) {
   const h = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
   const x = req.headers['x-admin-token'] || '';
@@ -2982,11 +2982,11 @@ function hasAdminAuth(req) {
   try {
     return require('crypto').timingSafeEqual(Buffer.from(provided), Buffer.from(ADMIN_TOKEN));
   } catch (e) {
-    return false; // longitudes distintas -> timingSafeEqual lanza -> no autorizado
+    return false; // different lengths -> timingSafeEqual throws -> not authorized
   }
 }
 
-// Guard para endpoints de mutación: 401 si falta el token.
+// Guard for mutation endpoints: 401 if the token is missing.
 function requireAdmin(req, res) {
   if (hasAdminAuth(req)) return true;
   res.statusCode = 401;
@@ -3072,14 +3072,14 @@ const server = http.createServer((req, res) => {
       } catch (e) { res.statusCode = e.statusCode || 500; res.end(JSON.stringify({ok: false, error: e.message})); }
     });
   } else if (req.method === 'GET' && req.url === '/recordings') {
-    // AUDIT kaieriksen M05 (🔴 BLOQUEANTE 1): el listado /recordings era
-    // PÚBLICO y mimta los bearer URLs de descarga (mintDownloadUrl -> token
-    // HMAC válido 24h). Cualquier cliente que alcanzara el HTTP server podía
-    // obtener las signed URLs y descargar cada MP4 vía /dl/... , saltándose
-    // el requireAdmin añadido a /recordings/:name. Fail-closed: este endpoint
-    // TAMBIÉN exige el admin token. El listado para agentes Nostr autenticados
-    // sigue cubierto por el DM `recordings` (gate M01 via agentCanOperateRoom),
-    // que no expone el HTTP server.
+    // AUDIT kaieriksen M05 (🔴 BLOCKING 1): the /recordings listing was
+    // PUBLIC and minted download bearer URLs (mintDownloadUrl -> HMAC token
+    // valid 24h). Any client reaching the HTTP server could get the signed
+    // URLs and download every MP4 via /dl/..., bypassing the requireAdmin
+    // added to /recordings/:name. Fail-closed: this endpoint ALSO requires
+    // the admin token. The listing for authenticated Nostr agents remains
+    // covered by the `recordings` DM (M01 gate via agentCanOperateRoom),
+    // which does not expose the HTTP server.
     if (!requireAdmin(req, res)) { req.pause(); return; }
     const recs = listRecordings();
     if (!Array.isArray(recs)) {
@@ -3089,13 +3089,13 @@ const server = http.createServer((req, res) => {
     recs.forEach(r => { r.url = mintDownloadUrl(r.name); });
     res.end(JSON.stringify({ok: true, recordings: recs}));
   } else if (req.method === 'GET' && req.url.startsWith('/recordings/')) {
-    // AUDIT kaieriksen M05 (🔴 BLOQUEANTE): el download directo de recordings
-    // estaba SIN autenticar — bind a 127.0.0.1 no es una barrera de auth en un
-    // host compartido (cualquier proceso/usuario local que alcance el puerto
-    // podía leer cada MP4). Fix: exigir el admin token en esta ruta también,
-    // igual que en los endpoints de mutación. El listado /recordings (nombres
-    // + URLs firmadas con expiración) sigue funcionando para agentes auth;
-    // la descarga directa queda protegida.
+    // AUDIT kaieriksen M05 (🔴 BLOCKING): the direct recordings download was
+    // UNAUTHENTICATED — binding to 127.0.0.1 is not an auth barrier on a
+    // shared host (any local process/user reaching the port could read every
+    // MP4). Fix: require the admin token on this route too, same as the
+    // mutation endpoints. The /recordings listing (names + URLs signed with
+    // expiry) still works for auth agents;
+    // the direct download stays protected.
     if (!requireAdmin(req, res)) { req.pause(); return; }
     const raw = req.url.slice('/recordings/'.length);
     let name;
@@ -3302,25 +3302,25 @@ module.exports = {
   deliveryStatus,
   // AUDIT-M01-BLOCKER2: finishDelivery expuesto para probar el invariante de
   // que un evento rejected (denegado) NO avanza el watermark y que el avance
-  // ocurre solo en el path de éxito (ok=true).
+  // occurs only on the success path (ok=true).
   finishDelivery,
-  // AUDIT-10 (raíz): watermark de recuperación (avanza SOLO con eventos
-  // procesados/admitido, no con recepción cruda). Exposed para tests.
+  // AUDIT-10 (root): recovery watermark (advances ONLY with processed/admitted
+  // events, not with raw reception). Exposed for tests.
   advanceRecoveryWatermark,
-  // AUDIT-M01-OPCION2-FIX: processWatermark(ts) ELIMINADO. Alimentar el cursor
-  // desde timestamps externos (created_at del emisor) reintroduce la
-  // superficie de ataque; el único avance legítimo es advanceRecoveryWatermark()
-  // con paso acotado (nunca un salto libre a Date.now() ni un ts del wire).
-  // AUDIT-5/6: primitivos `let` -> expuestos como GETTERS vivos para que los
-  // tests lean el valor ACTUAL (exportar el primitivo por valor los congela).
+  // AUDIT-M01-OPCION2-FIX: processWatermark(ts) REMOVED. Feeding the cursor
+  // from external timestamps (sender's created_at) reintroduces the attack
+  // surface; the only legitimate advance is advanceRecoveryWatermark() with a
+  // bounded step (never a free jump to Date.now() nor a ts from the wire).
+  // AUDIT-5/6: the primitive `let`s are exposed as LIVE GETTERS so tests
+  // read the CURRENT value (exporting the primitive by value freezes them).
   get backpressureRejected() { return backpressureRejected; },
-  requestDeliveryRescan,  // AUDIT-6: solicitar re-scan de recuperación (lectura para tests)
+  requestDeliveryRescan,  // AUDIT-6: request recovery re-scan (read for tests)
   get deliveryRescanNeeded() { return deliveryRescanNeeded; },
-  // AUDIT-8: estado del backoff/límite de rescans (lectura para tests)
+  // AUDIT-8: backoff/rescan-limit state (read for tests)
   get rescanWindowCount() { return rescanWindowCount; },
   get rescanWindowStart() { return rescanWindowStart; },
   get lastRescanAt() { return lastRescanAt; },
-  // AUDIT-9: estado BACKPRESSURE del rescan (lectura para tests)
+  // AUDIT-9: BACKPRESSURE rescan state (read for tests)
   get rescanStalled() { return rescanStalled; },
   get rescanStalledSince() { return rescanStalledSince; },
   get rescanAttempts() { return rescanAttempts; },
@@ -3328,8 +3328,8 @@ module.exports = {
   flushStateNow,
   STATE_FILE,
   getBridgeState: () => bridgeState,
-  // AUDIT-10 (raíz): watermark de recuperación (solo avanza con eventos
-  // procesados/admitidos, no con recepción cruda). Lectura para tests.
+  // AUDIT-10 (root): recovery watermark (only advances with processed/admitted
+  // events, not with raw reception). Read for tests.
   get recoveryWatermark() { return bridgeState ? bridgeState.recoveryWatermark : 0; },
   get lastSeen() { return bridgeState ? bridgeState.lastSeen : 0; },
   // Test-only: seed the module-level state so ALTO-2 regression tests can
@@ -3337,11 +3337,11 @@ module.exports = {
   _setBridgeStateForTest: (bs) => { bridgeState = bs; if (bs && bs.delivery) deliverySize = Object.keys(bs.delivery).length; else deliverySize = 0; },
   server,   // HTTP API (para tests: server.listen(0) y fetch)
   getAdminToken, // MEDIO-7: token de admin para que los tests autentiquen los POST
-  // AUDIT kaieriksen M01: gate de autorización por sender+room para paths
-  // controlados por agente (join/leave/inject/recordings). Expuesto para tests.
+  // AUDIT kaieriksen M01: authorization gate by sender+room for agent-controlled
+  // paths (join/leave/inject/recordings). Exposed for tests.
   agentCanOperateRoom,
   buildUntrustedRoomRelayPayload,
   evalRoomPermission, // lógica pura de la matriz de permisos (test aislado)
-  // LOW-10: decisión de bypass TLS (solo hosts locales) para tests.
+  // LOW-10: TLS bypass decision (local hosts only) for tests.
   CONFIG,
 };
