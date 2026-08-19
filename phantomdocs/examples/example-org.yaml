@@ -2,11 +2,9 @@
 #
 # The manifest is DERIVED from a PhantomOrg org model, not hand-edited:
 #   pd derive-manifest --org-yaml organizations/<org>/org.yaml \
-#                      --org <org-id> --namespace docs \
-#                      --out <org>.yaml
+#                      --namespace docs --out <org>.yaml
 #
-# (v0.1.0 ships `pd init` which writes this shape directly; `derive-manifest`
-#  is the next increment and will fill it from org.yaml.)
+# (The org id is read from organization.id in org.yaml — never typed by hand.)
 
 manifest:
   version: 1

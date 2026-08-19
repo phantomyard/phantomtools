@@ -68,9 +68,21 @@ def validate(data: dict[str, Any]) -> list[str]:
     return errors
 
 
+def urn_path(urn: str) -> str:
+    """urn:<org>:<kind>:<path> -> <path>."""
+    return urn.split(":", 3)[-1]
+
+
 def node_by_urn(data: dict[str, Any], urn: str) -> dict[str, Any] | None:
     for node in data.get("nodes", []):
         if node.get("urn") == urn:
+            return node
+    return None
+
+
+def node_by_path(data: dict[str, Any], path: str) -> dict[str, Any] | None:
+    for node in data.get("nodes", []):
+        if urn_path(node.get("urn", "")) == path:
             return node
     return None
 
@@ -82,6 +94,9 @@ def node_by_slug(data: dict[str, Any], slug: str) -> dict[str, Any] | None:
     return None
 
 
-def urn_path(urn: str) -> str:
-    """urn:<org>:<kind>:<path> -> <path>."""
-    return urn.split(":", 3)[-1]
+def resolve_node(data: dict[str, Any], ref: str) -> dict[str, Any] | None:
+    """Resolve a node by urn, logical path, slug, or ref name."""
+    node = node_by_urn(data, ref) or node_by_path(data, ref) or node_by_slug(data, ref)
+    if node is None and ref in data.get("refs", {}):
+        node = node_by_urn(data, data["refs"][ref])
+    return node

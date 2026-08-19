@@ -34,3 +34,10 @@ def test_self_describing_forms():
     assert identity.full_id(mac) == f"sha2-256-256:{mac}"
     assert identity.display_id(mac) == f"sha2-256-128:{mac[:32]}"
     assert len(mac[:32]) == 32  # 128-bit truncation floor
+
+
+def test_is_valid_hex64():
+    assert identity.is_valid_hex64("a" * 64) is True
+    assert identity.is_valid_hex64("g" * 64) is False
+    assert identity.is_valid_hex64("a" * 63) is False
+    assert identity.is_valid_hex64("A" * 64) is False

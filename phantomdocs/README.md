@@ -12,8 +12,8 @@ modify it.
 - **Access control** — resolved from a PhantomOrg `org.yaml` (access levels,
   security categories, role/actor exceptions); PhantomDocs only declares each
   node's `category`. Fail-closed: no rule → denied.
-- **Location** — a `local://` content-addressed blob store today; `ssh://` and
-  `gdrive://` adapters are stubbed for the next release.
+- **Location** — content-addressed blob stores: `local://` filesystem, `ssh://`
+  remote, `gdrive://` (delegates to the persona's `workspace.py`).
 - **Search** — index search over the manifest.
 
 The operating model is **git / GitHub** (see `docs/SPEC.md` §5): the chained
@@ -41,18 +41,28 @@ See `examples/example-org.yaml` and `docs/SPEC.md`.
 ## Usage
 
 ```bash
-# Create a namespace
+# Create a namespace (or derive it from a PhantomOrg org model)
 pd init --org my-org --root ./docs
+pd derive-manifest --org-yaml organizations/<org>/org.yaml --out ./docs/manifest.yaml
 
-# Ingest a document (local:// blob store)
-pd add ./report.pdf --slug "reports/2026-08-19-q3.pdf" --category 2 --root ./docs
+# Create a folder, then ingest a document under it
+pd mkdir --name reports --root ./docs
+pd add ./report.pdf --slug "reports/2026-08-19-q3.pdf" --category 2 --folder reports --root ./docs
 
-# Resolve / retrieve
+# Ingest to a remote / cloud backend
+pd add ./report.pdf --slug "reports/q3.pdf" --backend ssh://user@vps:22/var/phantomdocs --root ./docs
+pd add ./report.pdf --slug "reports/q3.pdf" --backend gdrive:// --root ./docs
+
+# Resolve / retrieve (by urn, path, slug, or ref name)
 pd get "reports/2026-08-19-q3.pdf" --root ./docs
 pd get "reports/2026-08-19-q3.pdf" --cat --root ./docs
 
 # Search the index
 pd search "q3" --root ./docs
+
+# Version pointers (refs)
+pd tag latest "reports/2026-08-19-q3.pdf" --root ./docs
+pd refs --root ./docs
 
 # Verify integrity (MAC chain + content hashes)
 pd verify --root ./docs
@@ -60,8 +70,12 @@ pd verify --root ./docs
 # Resolve an actor's access from a PhantomOrg org.yaml
 pd acl --org-yaml organizations/<org>/org.yaml --actor cfo --category 2
 
-# Summary
+# Audit trail + summary
+pd audit --root ./docs
 pd status --root ./docs
+
+# Self-update check
+pd update --repo owner/phantomdocs
 ```
 
 ## Repository layout
@@ -71,22 +85,24 @@ phantomdocs/
 ├── README.md
 ├── LICENSE            # MIT
 ├── CHANGELOG.md
-├── pyproject.toml     # package phantomdocs v0.1.0, Python ≥3.10, PyYAML + click
+├── pyproject.toml     # package phantomdocs, Python ≥3.10, PyYAML + click
 ├── install.sh         # portable install (symlinks bin/ to PATH)
 ├── bin/               # CLI wrappers: pd, phantomdocs (+ .cmd for Windows)
 ├── docs/SPEC.md       # specification
 ├── examples/          # reference manifest (org-agnostic placeholders)
-├── src/phantomdocs/   # package: identity, manifest, storage, access, cli
+├── src/phantomdocs/   # identity, manifest, storage, access, audit, derive, update, cli
 ├── tests/             # unit + smoke tests
 └── .github/workflows/ci.yml  # lint (ruff/bandit) + tests + smoke
 ```
 
 ## Status
 
-- **2026-08-19** — v0.1.0 scaffold: chained MAC identity, manifest,
-  `local://` store, `pd init/add/get/search/verify/acl/status`, ACL resolved
-  from PhantomOrg `org.yaml`, smoke-tested. `ssh://`/`gdrive://` adapters,
-  folders, refs (version pointers) and the audit log are the next increments.
+- **2026-08-19** — v0.2.0: folders, refs, audit log, `derive-manifest`,
+  `ssh://`/`gdrive://` adapters and `pd update --check` on top of the v0.1.0
+  core (chained MAC identity, manifest, `local://` store, ACL from PhantomOrg).
+  `ssh://`/`gdrive://` live I/O needs a reachable host / the persona's
+  `workspace.py`; per-URN version history and `pd update` install are the next
+  increments.
 
 ## License
 

@@ -25,6 +25,11 @@ def _sha256(data: bytes) -> bytes:
     return hashlib.sha256(data).digest()
 
 
+def is_valid_hex64(value: str) -> bool:
+    """True iff value is a 64-char lowercase hex string (a SHA-256 digest)."""
+    return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
 def content_hash(data: bytes) -> str:
     """SHA-256 hex digest of raw content bytes."""
     return _sha256(data).hex()
@@ -37,12 +42,12 @@ def root_mac(org_pubkey: str, namespace: str) -> str:
 
 def component_for_folder(slug: str) -> bytes:
     """Folder component = slug (folders are structural)."""
-    return slug.encode("utf-8")
+    return slug.encode()
 
 
 def component_for_doc(slug: str, content: bytes) -> bytes:
     """Document component = slug || H(content) (identity bound to content)."""
-    return slug.encode("utf-8") + _sha256(content)
+    return slug.encode() + _sha256(content)
 
 
 def node_mac(parent_mac: str, component: bytes) -> str:
