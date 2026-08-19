@@ -13,10 +13,36 @@ from typing import Any
 
 import yaml
 
+# The PhantomOrg org.yaml schema version PhantomDocs resolves access from.
+# PhantomOrg's own model declares ``version: 1`` (top-level int) and validates
+# it as ``Organization.version``. PhantomDocs does not assume forward
+# compatibility: an unknown or missing version is refused, not tolerated.
+REQUIRED_ORG_SCHEMA_VERSION = 1
+
+
+def validate_org_schema(org: dict[str, Any]) -> None:
+    """Fail-closed: the org.yaml must declare the schema version PhantomDocs
+    resolves access from.
+
+    A missing or different ``version`` is refused (rather than assumed
+    compatible) so that a future PhantomOrg schema bump surfaces loudly here
+    instead of silently mis-resolving access.
+    """
+    version = org.get("version")
+    if version != REQUIRED_ORG_SCHEMA_VERSION:
+        raise ValueError(
+            f"org.yaml schema version must be {REQUIRED_ORG_SCHEMA_VERSION} "
+            f"(got {version!r}); PhantomDocs resolves access from PhantomOrg's "
+            "version-1 org model and refuses unknown schema versions "
+            "(fail-closed)"
+        )
+
 
 def load_org(org_yaml_path: str) -> dict[str, Any]:
     with open(org_yaml_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+        org = yaml.safe_load(f) or {}
+    validate_org_schema(org)
+    return org
 
 
 def resolved_categories(org: dict[str, Any], actor_id: str) -> list[int]:

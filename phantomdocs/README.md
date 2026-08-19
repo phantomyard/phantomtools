@@ -125,6 +125,13 @@ PhantomDocs consumes the PhantomOrg `org.yaml` schema (org/version 1:
 `pd derive-manifest` reads `organization.id` and validates the access model at
 resolution time.
 
+**Schema version contract:** PhantomDocs requires `version: 1` (top-level
+integer) in the `org.yaml`, matching PhantomOrg's `Organization.version`
+model. The version is enforced fail-closed on every `org.yaml` load (all
+ACL-gated commands and `derive-manifest`): a missing or unknown `version` is
+refused rather than assumed compatible. A future PhantomOrg schema bump must
+be accommodated here explicitly — do not silently accept a newer schema.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

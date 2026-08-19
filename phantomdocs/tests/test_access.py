@@ -3,6 +3,7 @@ import textwrap
 from phantomdocs.access import can_read, load_org, resolved_categories
 
 ORG_YAML = textwrap.dedent("""\
+    version: 1
     policies:
       access_levels:
         level-3: { label: Executive, categories: [1, 2, 3] }
@@ -45,3 +46,34 @@ def test_can_read_fail_closed(tmp_path):
     assert can_read(org, "roberto", 2) is True
     assert can_read(org, "roberto", 3) is False
     assert can_read(org, "unknown", 1) is False
+
+
+def test_load_org_accepts_version_1(tmp_path):
+    assert load_org(str(_org_path(tmp_path))) is not None
+
+
+def test_load_org_rejects_missing_version(tmp_path):
+    p = tmp_path / "org.yaml"
+    p.write_text(
+        "policies:\n  access_levels: {}\n  security_categories: {}\n",
+        encoding="utf-8",
+    )
+    import pytest
+
+    with pytest.raises(ValueError, match="schema version must be 1"):
+        load_org(str(p))
+
+
+def test_load_org_rejects_unknown_version(tmp_path):
+    p = tmp_path / "org.yaml"
+    p.write_text("version: 2\norganization:\n  id: demo\n", encoding="utf-8")
+    import pytest
+
+    with pytest.raises(ValueError, match="schema version must be 1"):
+        load_org(str(p))
+
+
+def _org_path(tmp_path):
+    p = tmp_path / "org.yaml"
+    p.write_text(ORG_YAML, encoding="utf-8")
+    return p

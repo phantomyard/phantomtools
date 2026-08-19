@@ -10,6 +10,7 @@ from phantomdocs.cli import main
 # actors: "roberto" (cfo, level-2 -> categories [1,2]) and "elena"
 # (cfo + category-3 actor exception -> [1,2,3]).
 ORG_YAML = """\
+version: 1
 policies:
   access_levels:
     level-3: { label: Executive, categories: [1, 2, 3] }
@@ -201,7 +202,7 @@ def test_audit_log(tmp_path):
 
 def test_derive_manifest(tmp_path):
     org = tmp_path / "org.yaml"
-    org.write_text("organization:\n  id: demo-org\n", encoding="utf-8")
+    org.write_text("version: 1\norganization:\n  id: demo-org\n", encoding="utf-8")
     out = tmp_path / "manifest.yaml"
     r = _run(["derive-manifest", "--org-yaml", str(org), "--out", str(out)])
     assert r.exit_code == 0, r.output

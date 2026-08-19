@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .access import validate_org_schema
 from .identity import root_mac
 from .manifest import empty_manifest
 
@@ -17,6 +18,7 @@ from .manifest import empty_manifest
 def derive_manifest(
     org: dict[str, Any], namespace: str, org_pubkey: str = ""
 ) -> dict[str, Any]:
+    validate_org_schema(org)
     org_id = (org.get("organization") or {}).get("id")
     if not org_id:
         raise ValueError("org.yaml is missing organization.id")
