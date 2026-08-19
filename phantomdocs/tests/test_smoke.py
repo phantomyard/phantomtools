@@ -85,7 +85,8 @@ def test_tag_refs_and_get_by_ref(tmp_path):
 
     r = _run(["tag", "latest", "a.txt", "--root", root])
     assert r.exit_code == 0, r.output
-    assert "latest -> urn:demo:doc:a.txt" in r.output
+    assert "latest -> " in r.output
+    assert "urn:demo:doc:a.txt" in r.output
 
     r = _run(["refs", "--root", root])
     assert r.exit_code == 0, r.output
@@ -119,3 +120,42 @@ def test_derive_manifest(tmp_path):
     data = yaml.safe_load(out.read_text(encoding="utf-8"))
     assert data["manifest"]["org"] == "demo-org"
     assert data["manifest"]["rootMac"]
+
+
+def test_versioning_and_history(tmp_path):
+    root = str(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+
+    doc = tmp_path / "a.txt"
+    doc.write_text("v1", encoding="utf-8")
+    r = _run(["add", str(doc), "--slug", "a.txt", "--root", root])
+    assert r.exit_code == 0, r.output
+    assert "added" in r.output
+
+    data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    v1_mac = data["nodes"][0]["mac"]
+
+    r = _run(["add", str(doc), "--slug", "a.txt", "--root", root])
+    assert r.exit_code == 0, r.output
+    assert "unchanged" in r.output
+
+    doc.write_text("v2", encoding="utf-8")
+    r = _run(["add", str(doc), "--slug", "a.txt", "--root", root])
+    assert r.exit_code == 0, r.output
+    assert "versioned" in r.output
+
+    r = _run(["versions", "a.txt", "--root", root])
+    assert r.exit_code == 0, r.output
+    assert "v1" in r.output and "v2" in r.output and "(current)" in r.output
+
+    r = _run(["get", "a.txt", "--mac", v1_mac, "--cat", "--root", root])
+    assert r.exit_code == 0, r.output
+    assert "v1" in r.output
+
+    r = _run(["get", "a.txt", "--cat", "--root", root])
+    assert r.exit_code == 0, r.output
+    assert "v2" in r.output
+
+    r = _run(["verify", "--root", root])
+    assert r.exit_code == 0, r.output
+    assert "verified 2 node" in r.output

@@ -64,6 +64,10 @@ pd search "q3" --root ./docs
 pd tag latest "reports/2026-08-19-q3.pdf" --root ./docs
 pd refs --root ./docs
 
+# Version history (re-add with new content creates a new version)
+pd versions "reports/2026-08-19-q3.pdf" --root ./docs
+pd get "reports/2026-08-19-q3.pdf" --mac <mac> --cat --root ./docs
+
 # Verify integrity (MAC chain + content hashes)
 pd verify --root ./docs
 
@@ -97,12 +101,12 @@ phantomdocs/
 
 ## Status
 
-- **2026-08-19** — v0.2.0: folders, refs, audit log, `derive-manifest`,
-  `ssh://`/`gdrive://` adapters and `pd update --check` on top of the v0.1.0
-  core (chained MAC identity, manifest, `local://` store, ACL from PhantomOrg).
+- **2026-08-19** — v0.3.0: per-URN versioning (`previous` chain, `pd versions`,
+  `pd get --mac`, refs → MACs) on top of v0.2.0 (folders, refs, audit log,
+  `derive-manifest`, `ssh://`/`gdrive://`, `pd update --check`).
   `ssh://`/`gdrive://` live I/O needs a reachable host / the persona's
-  `workspace.py`; per-URN version history and `pd update` install are the next
-  increments.
+  `workspace.py`; `pd update` install lands once the tool is published as a
+  release.
 
 ## License
 

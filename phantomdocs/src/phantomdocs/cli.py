@@ -31,12 +31,14 @@ from .manifest import (
     ManifestError,
     empty_manifest,
     load,
+    node_by_mac,
     node_by_path,
     node_by_slug,
     node_by_urn,
     resolve_node,
     save,
     urn_path,
+    versions_of,
 )
 from .storage import LocalBackend, StorageError, resolve_backend
 from .update import is_newer, latest_release
@@ -187,8 +189,11 @@ def add(path, slug, category, folder, owners, actor, backend, root):
     logical = f"{parent_path}{slug}"
     urn = f"urn:{meta['org']}:doc:{logical}"
 
-    if node_by_urn(manifest, urn) is not None:
-        raise click.ClickException(f"node already exists: {urn}")
+    existing = node_by_urn(manifest, urn)
+    if existing is not None and existing.get("contentHash") == ch:
+        click.echo(f"unchanged: {urn}")
+        return
+    previous = existing["mac"] if existing is not None else None
 
     location = _resolve_store(root, backend).put(ch, content)
     scheme = backend.split("://")[0] if backend and "://" in backend else "local"
@@ -207,12 +212,14 @@ def add(path, slug, category, folder, owners, actor, backend, root):
             "locations": [{"backend": scheme, "path": location}],
             "meta": {"title": slug},
             "relations": {},
+            "previous": previous,
         }
     )
     save(_manifest_path(root), manifest)
-    _audit(root, actor, "add", urn, mac, ch)
+    _audit(root, actor, "add" if previous is None else "version", urn, mac, ch)
 
-    click.echo(f"added {logical}")
+    verb = "added" if previous is None else "versioned"
+    click.echo(f"{verb} {logical}")
     click.echo(f"  urn       {urn}")
     click.echo(f"  mac       {full_id(mac)}")
     click.echo(f"  display   {display_id(mac)}")
@@ -220,21 +227,47 @@ def add(path, slug, category, folder, owners, actor, backend, root):
 
 @main.command()
 @click.argument("ref")
+@click.option("--mac", default=None, help="Retrieve a specific version by MAC.")
 @click.option("--cat", is_flag=True, help="Dump raw content to stdout.")
 @click.option(
     "--backend", default=None, help="Backend URI (local:// ssh:// gdrive://)."
 )
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def get(ref, cat, backend, root):
-    """Resolve a document by urn, path, slug or ref name."""
+def get(ref, mac, cat, backend, root):
+    """Resolve a document by urn, path, slug, ref name, or version MAC."""
     manifest = _load_or_die(root)
-    node = resolve_node(manifest, ref)
-    if node is None:
-        raise click.ClickException(f"not found: {ref}")
+    if mac:
+        node = node_by_mac(manifest, mac)
+        if node is None:
+            raise click.ClickException(f"no version with MAC: {mac}")
+    else:
+        node = resolve_node(manifest, ref)
+        if node is None:
+            raise click.ClickException(f"not found: {ref}")
     location = node.get("locations", [{}])[0].get("path", "")
     click.echo(f"{node['urn']} -> {location}")
     if cat and node.get("kind") == "doc":
         sys.stdout.buffer.write(_resolve_store(root, backend).get(node["contentHash"]))
+
+
+@main.command()
+@click.argument("ref")
+@click.option("--root", default=".", show_default=True, help="Local backend root.")
+def versions(ref, root):
+    """List the version history (MAC chain) of a document."""
+    manifest = _load_or_die(root)
+    node = resolve_node(manifest, ref)
+    if node is None:
+        raise click.ClickException(f"not found: {ref}")
+    history = versions_of(manifest, node["urn"])
+    if not history:
+        click.echo("no versions")
+        return
+    current = history[-1]["mac"]
+    for index, version in enumerate(history, 1):
+        marker = " (current)" if version["mac"] == current else ""
+        size = version.get("size", 0)
+        click.echo(f"v{index}  {display_id(version['mac'])}{marker}  {size} bytes")
 
 
 @main.command()
@@ -279,6 +312,8 @@ def verify(backend, root):
         issues: list[str] = []
         if node.get("parentMac") not in known_macs:
             issues.append("parent MAC unknown")
+        if node.get("previous") and node["previous"] not in known_macs:
+            issues.append("previous version MAC unknown")
         if node.get("kind") == "doc":
             ch = node.get("contentHash")
             if not ch:
@@ -324,15 +359,15 @@ def verify(backend, root):
 @click.option("--actor", default=None, help="Audit actor id.")
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
 def tag(name, ref, actor, root):
-    """Point a mutable ref (e.g. `latest`, `approved-<date>`) at a node."""
+    """Point a mutable ref (e.g. `latest`, `approved-<date>`) at a version MAC."""
     manifest = _load_or_die(root)
     node = resolve_node(manifest, ref)
     if node is None:
         raise click.ClickException(f"not found: {ref}")
-    manifest.setdefault("refs", {})[name] = node["urn"]
+    manifest.setdefault("refs", {})[name] = node["mac"]
     save(_manifest_path(root), manifest)
     _audit(root, actor, "tag", node["urn"], node["mac"], node.get("contentHash"))
-    click.echo(f"{name} -> {node['urn']}")
+    click.echo(f"{name} -> {display_id(node['mac'])}  ({node['urn']})")
 
 
 @main.command()
@@ -343,8 +378,10 @@ def refs(root):
     if not manifest.get("refs"):
         click.echo("no refs")
         return
-    for name, urn in manifest.get("refs", {}).items():
-        click.echo(f"{name:20} {urn}")
+    for name, mac in manifest.get("refs", {}).items():
+        node = node_by_mac(manifest, mac)
+        urn = node["urn"] if node else "(unknown)"
+        click.echo(f"{name:20} {display_id(mac)}  {urn}")
 
 
 @main.command()

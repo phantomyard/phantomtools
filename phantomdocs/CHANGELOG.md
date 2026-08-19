@@ -2,6 +2,14 @@
 
 All notable changes to PhantomDocs are documented in this file.
 
+## [0.3.0] - 2026-08-19
+
+- Per-URN versioning: re-`add` with new content creates a new version (MAC)
+  linked via `previous`; identical content is a no-op (`unchanged`).
+- `pd versions` — list a document's MAC history (current marked).
+- `pd get --mac` — retrieve a specific version.
+- `refs` now point at version MACs (not URNs); `pd verify` checks version links.
+
 ## [0.2.0] - 2026-08-19
 
 - Folders (`pd mkdir`) — the hierarchical chained-MAC tree.
