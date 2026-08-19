@@ -45,7 +45,7 @@ try:
 except ImportError:  # Python < 3.11
     import tomli as tomllib  # type: ignore[import-not-found,no-redef]
 
-DEFAULT_REPO = "salvaalba-dev/phantomtools"
+DEFAULT_REPO = "phantomyard/phantomtools"
 UPDATE_REPO_ENV = "PHANTOMORG_UPDATE_REPO"
 # Marker file left in the repo root between `git merge` and a successful
 # `pip install -e .` refresh. A crash (SIGKILL, power loss) in that window

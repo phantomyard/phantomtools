@@ -182,20 +182,20 @@ class RepoDiscoveryTest(unittest.TestCase):
     def test_remote_origin_normalization(self):
         cases = [
             (
-                "git@github.com:salvaalba-dev/phantomtools.git",
-                "salvaalba-dev/phantomtools",
+                "git@github.com:phantomyard/phantomtools.git",
+                "phantomyard/phantomtools",
             ),
             (
-                "https://github.com/salvaalba-dev/phantomtools.git",
-                "salvaalba-dev/phantomtools",
+                "https://github.com/phantomyard/phantomtools.git",
+                "phantomyard/phantomtools",
             ),
             (
-                "https://github.com/salvaalba-dev/phantomtools",
-                "salvaalba-dev/phantomtools",
+                "https://github.com/phantomyard/phantomtools",
+                "phantomyard/phantomtools",
             ),
             (
-                "https://x-access-token:abc123@github.com/salvaalba-dev/phantomtools.git",
-                "salvaalba-dev/phantomtools",
+                "https://x-access-token:abc123@github.com/phantomyard/phantomtools.git",
+                "phantomyard/phantomtools",
             ),
         ]
         for url, expected in cases:
