@@ -14,6 +14,20 @@ deps, and license.
 | [`email-triage/`](./email-triage) | Self-driving inbox triage for a phantombot persona — a cheap IMAP poller wakes a full agent turn on new mail and drives the inbox to zero unread. Dependency-free Python; scheduling is a single `phantombot task`. |
 | [`phantommeet/`](./phantommeet) | Meeting layer for PhantomForge deployments — text participation via bridge, recordings, transcription, calendar logistics, per-scope recording custody. `pm` CLI (validate / derive-manifest / apply / check-infra). |
 
+## Tool dependency chain
+
+Some tools are not fully self-contained; they form a chain. Deploy them in
+order and keep the dependencies in mind when diagnosing:
+
+- **PhantomOrg** (`phantomorg/`) — produces the `org.yaml` org model. This is
+  the single source of truth for roles/actors/escalation.
+- **PhantomBridge** (`phantombridge/`) — depends on PhantomOrg's `org.yaml`
+  for room/participant admission; carries meeting traffic.
+- **PhantomMeet** (`phantommeet/`) — depends on PhantomOrg's `org.yaml` (its
+  manifests are *derived* from it) and on PhantomBridge being deployed for
+  actual meeting participation. It degrades to an invitation/scheduling layer
+  when the bridge is absent.
+
 ## Keeping installed copies in sync
 
 Each tool's `install.sh` **symlinks** its `bin/` scripts into your `PATH`

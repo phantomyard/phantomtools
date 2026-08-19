@@ -5,26 +5,27 @@
 # Rendered from the PhantomMeet manifest by `pm apply`: every
 # installation-specific value below comes from the manifest (see the
 # "Installation configuration" block). This script only creates and sends
-# the *invitation*; recipients schedule their own auto-join (see
-# kb/procedures/Meetings.md).
+# the *invitation notification*. It never switches personas and never
+# schedules tasks in another runtime: each recipient's own runtime decides
+# (from its own scheduled state) whether to join. See
+# kb/procedures/Meetings.md.
 #
 # Usage:
 #   meeting-invite.sh --title "..." --type <type> --datetime <ISO-8601> \
-#       --recipients "@a,@b" [--topic <topic>] [--password <secret>] [--dry-run]
+#       --recipients "@a,@b" [--topic <topic>] \
+#       [--password-vault <name> | --password-file <path>] [--dry-run]
 #
 # Flags:
-#   --title TEXT       Meeting title (required)
-#   --type TEXT        Room type token (optional; only used if the naming
-#                      convention contains a {type} slot)
-#   --datetime ISO     Start time, ISO 8601 (required, e.g. 2026-08-10T17:00:00)
-#   --recipients LIST  Comma-separated @mentions of the recipients (required).
-#                      Recipients matching an org persona (manifest roles) get
-#                      their OWN auto-join task scheduled in their runtime;
-#                      humans just receive the invite link.
-#   --topic TEXT       Optional room topic token; when omitted, the {topic}
-#                      slot (and its leading hyphen) is dropped from the name
-#   --password SECRET  Optional room password (sent only to recipients)
-#   --dry-run          Print everything without creating tasks or sending
+#   --title TEXT          Meeting title (required)
+#   --type TEXT           Room type token (optional; only used if the naming
+#                         convention contains a {type} slot)
+#   --datetime ISO        Start time, ISO 8601 (required, e.g. 2026-08-10T17:00:00)
+#   --recipients LIST     Comma-separated @mentions of the recipients (required)
+#   --topic TEXT          Optional room topic token; when omitted, the {topic}
+#                         slot (and its leading hyphen) is dropped from the name
+#   --password-vault NAME Read the room password from the vault (never argv)
+#   --password-file PATH  Read the room password from a file (never argv)
+#   --dry-run             Print everything without sending anything
 #
 # Announcement card format: the manifest may define a custom card
 # (invite.card) using the tokens %TITLE%, %RECIPIENTS%, %DATETIME%,
@@ -46,20 +47,6 @@ COORD_GROUP="{{ invite.coordinator_chat | default('') }}"
 MEET_BASE_URL="{{ invite.meet_base_url | default('') }}"
 ROOM_NAMING="{{ rooms.naming | default('{YYYY-MM-DD}-{HH-MM}_{topic}') }}"
 LANGUAGE="{{ language }}"
-# Personas of this org (from the manifest roles). Auto-join tasks are only
-# scheduled for recipients that match one of these — humans just get the link.
-KNOWN_PERSONAS="{{ roles.keys() | join(' ') }}"
-# Telegram handles per persona (from invite.telegram_bots). Recipients are
-# often addressed by bot handle (e.g. @<bot_handle>); the handle is resolved
-# back to the persona name so auto-join is scheduled in the right runtime.
-{% if invite.telegram_bots is defined and invite.telegram_bots %}
-declare -A HANDLE_TO_PERSONA=(
-{% for persona, handle in invite.telegram_bots.items() %}
-  ["{{ handle | lower | replace('@', '') }}"]="{{ persona }}"
-{% endfor %})
-{% else %}
-declare -A HANDLE_TO_PERSONA=()
-{% endif %}
 # Personalized announcement card (optional). Empty string = built-in format.
 # A heredoc keeps multi-line manifests intact in the rendered script.
 CARD_TEMPLATE=$(cat <<'CARD_EOF'
@@ -79,7 +66,8 @@ TYPE=""
 DATETIME=""
 RECIPIENTS=""
 TOPIC=""
-PASSWORD=""
+PASSWORD_VAULT=""
+PASSWORD_FILE=""
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -89,7 +77,8 @@ while [[ $# -gt 0 ]]; do
     --datetime) DATETIME="$2"; shift 2 ;;
     --recipients) RECIPIENTS="$2"; shift 2 ;;
     --topic) TOPIC="$2"; shift 2 ;;
-    --password) PASSWORD="$2"; shift 2 ;;
+    --password-vault) PASSWORD_VAULT="$2"; shift 2 ;;
+    --password-file) PASSWORD_FILE="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     *) echo "unknown option: $1" >&2; usage ;;
   esac
@@ -100,9 +89,35 @@ done
   usage
 }
 
+# --- strict ISO-8601 validation (before any use of $DATETIME substrings) --
+# YYYY-MM-DDTHH:MM:SS with an optional Z / ±HH:MM offset. Rejecting anything
+# else means the substrings fed into the room name are digits and hyphens
+# only — no shell/sed metacharacters can ride in through --datetime.
+if [[ ! "$DATETIME" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})?$ ]]; then
+  echo "error: --datetime must be strict ISO 8601 (YYYY-MM-DDTHH:MM:SS, optional Z/±HH:MM)" >&2
+  exit 1
+fi
+
+# --- resolve the room password: vault or file, never argv -----------------
+PASSWORD=""
+if [[ -n "$PASSWORD_VAULT" && -n "$PASSWORD_FILE" ]]; then
+  echo "error: use either --password-vault or --password-file, not both" >&2
+  exit 1
+fi
+if [[ -n "$PASSWORD_VAULT" ]]; then
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    # Never print the real secret on a dry run: note the vault reference.
+    PASSWORD="***"
+    echo "[dry-run] password from vault: ${PASSWORD_VAULT}"
+  else
+    PASSWORD="$("${PHANTOMBOT_BIN}" vault get "${PASSWORD_VAULT}" 2>/dev/null || true)"
+    [[ -n "$PASSWORD" ]] || { echo "error: vault entry ${PASSWORD_VAULT} is empty/missing" >&2; exit 1; }
+  fi
+elif [[ -n "$PASSWORD_FILE" ]]; then
+  PASSWORD="$(<"$PASSWORD_FILE")"
+fi
+
 # --- resolve the phantombot binary (skipped in --dry-run) ------------------
-# Explicit path from the manifest, PATH lookup, then ~/.local/bin install
-# location (covers non-login shells).
 if [[ "$DRY_RUN" -eq 0 ]]; then
   if ! command -v "$PHANTOMBOT_BIN" >/dev/null 2>&1; then
     for cand in "$HOME/.local/bin/$PHANTOMBOT_BIN" "$HOME/.local/bin/phantombot"; do
@@ -120,7 +135,9 @@ fi
 
 # --- derive the room name from the naming convention ----------------------
 slug() {
-  # lowercase, no accents, spaces/symbols -> underscores, strip non [a-z0-9_]
+  # lowercase, no accents, spaces/symbols -> underscores, strip non [a-z0-9_].
+  # Fixed sed programs only: the input is piped through, never interpolated
+  # into the sed expression, so no injection surface here.
   echo "$1" \
     | tr '[:upper:]' '[:lower:]' \
     | sed 's/á/a/g; s/é/e/g; s/í/i/g; s/ó/o/g; s/ú/u/g; s/ñ/n/g; s/ü/u/g' \
@@ -134,26 +151,26 @@ DD="${DATETIME:8:2}"
 HH="${DATETIME:11:2}"
 MIN="${DATETIME:14:2}"
 
-# Build the room name from the naming convention. sed is used instead of
-# bash parameter expansion because {type} style tokens get mangled by
-# bash's brace handling in ${var//pat/rep} patterns.
+# Build the room name with bash parameter expansion (no generated sed
+# program). $DATETIME was already validated, and $TYPE/$TOPIC are slug()'d,
+# so every substituted value is [a-z0-9_-] only.
 room_name="$ROOM_NAMING"
-room_name="$(echo "$room_name" | sed \
-  -e "s/{type}/$(slug "$TYPE")/g" \
-  -e "s/{DD-MM-YYYY}/$DD-$MM-$YYYY/g" \
-  -e "s/{HH-MM}/$HH-$MIN/g" \
-  -e "s/{YYYY-MM-DD}/$YYYY-$MM-$DD/g" \
-  -e "s/{YYYY}/$YYYY/g" \
-  -e "s/{MM}/$MM/g" \
-  -e "s/{DD}/$DD/g")"
+room_name="${room_name//\{type\}/$(slug "$TYPE")}"
+room_name="${room_name//\{YYYY-MM-DD\}/$YYYY-$MM-$DD}"
+room_name="${room_name//\{DD-MM-YYYY\}/$DD-$MM-$YYYY}"
+room_name="${room_name//\{HH-MM\}/$HH-$MIN}"
+room_name="${room_name//\{YYYY\}/$YYYY}"
+room_name="${room_name//\{MM\}/$MM}"
+room_name="${room_name//\{DD\}/$DD}"
 if [[ -n "$TOPIC" ]]; then
-  room_name="$(echo "$room_name" | sed "s/{topic}/$(slug "$TOPIC")/g")"
+  room_name="${room_name//\{topic\}/$(slug "$TOPIC")}"
 else
   # Drop the {topic} slot together with its leading hyphen.
-  room_name="$(echo "$room_name" | sed 's/-{topic}//; s/{topic}//')"
+  room_name="${room_name//-\{topic\}/}"
+  room_name="${room_name//\{topic\}/}"
 fi
-# any remaining {token} collapses to 'x' (generic fallback)
-room_name="$(echo "$room_name" | sed 's/{[^}]*}/x/g')"
+# any remaining {token} collapses to 'x' (constant pattern, no user input)
+room_name="$(printf '%s' "$room_name" | sed 's/{[^}]*}/x/g')"
 
 # --- build the invitation text --------------------------------------------
 # Custom card from the manifest (invite.card) wins; the built-in format is
@@ -204,54 +221,10 @@ ${INVITE_LINK}"
 ${INVITE_PASSWORD}"
 fi
 
-# --- schedule auto-join tasks for every recipient that is an org persona ---
-# Each recipient that matches a known persona gets its OWN task, created in
-# that persona's runtime (phantombot persona <X> --yes … then restore).
-# Humans (non-persona recipients) get the invite link and join manually.
-join_task_ids=()
-for rec in ${RECIPIENTS//,/ }; do
-  rec="${rec#@}"
-  [[ -z "$rec" ]] && continue
-  # Resolve handle -> persona: accept the plain persona name (case-insensitive)
-  # or any configured Telegram handle (e.g. @<bot_handle> -> alma).
-  persona=""
-  rec_lc="${rec,,}"
-  if [[ " $KNOWN_PERSONAS " == *" $rec_lc "* ]]; then
-    persona="$rec_lc"
-  elif [[ -n "${HANDLE_TO_PERSONA[$rec_lc]:-}" ]]; then
-    persona="${HANDLE_TO_PERSONA[$rec_lc]}"
-  fi
-  if [[ -n "$persona" ]]; then
-    rec="$persona"
-    if [[ "$LANGUAGE" == "es" ]]; then
-      task_prompt="Reunión ${room_name}: envíame al puente: join [${room_name}] --nick ${rec}"
-      [[ -n "$PASSWORD" ]] && task_prompt="${task_prompt} --password ${PASSWORD}"
-      task_desc="Reunión ${TITLE} (auto-join ${rec})"
-    else
-      task_prompt="Meeting ${room_name}: tell the bridge: join [${room_name}] --nick ${rec}"
-      [[ -n "$PASSWORD" ]] && task_prompt="${task_prompt} --password ${PASSWORD}"
-      task_desc="Meeting ${TITLE} (auto-join ${rec})"
-    fi
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-      echo "[dry-run] would schedule (persona ${rec}): ${PHANTOMBOT_BIN} persona ${rec} --yes && ${PHANTOMBOT_BIN} task add \"${task_prompt}\" \"${task_desc}\" --at ${DATETIME}"
-    else
-      "${PHANTOMBOT_BIN}" persona "${rec}" --yes >/dev/null 2>&1 || {
-        echo "error: no se pudo cambiar a la persona ${rec}" >&2
-        continue
-      }
-      task_id="$("${PHANTOMBOT_BIN}" task add "${task_prompt}" "${task_desc}" --at "${DATETIME}" 2>&1)"
-      echo "scheduled auto-join task (persona ${rec}): ${task_id}"
-      join_task_ids+=("${rec}:${task_id}")
-      "${PHANTOMBOT_BIN}" persona "${PERSONA}" --yes >/dev/null 2>&1 || true
-    fi
-  fi
-done
-# Restore the original persona if the loop above changed it (safety net).
-if [[ "$DRY_RUN" -eq 0 ]]; then
-  "${PHANTOMBOT_BIN}" persona "${PERSONA}" --yes >/dev/null 2>&1 || true
-fi
-
-# --- send the invitation to the coordination group --------------------------
+# --- send the invitation as a notification only ---------------------------
+# No cross-persona scheduling and no persona switch happen here. Each
+# recipient's own runtime decides, from its own scheduled state, whether to
+# join — the invitation text is informational, never an authorization.
 if [[ -n "$COORD_GROUP" ]]; then
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "[dry-run] would notify: ${PHANTOMBOT_BIN} notify --message \"${invite_text}\" --persona ${PERSONA}"
@@ -268,8 +241,5 @@ echo "---"
 echo "room       : ${room_name}"
 echo "invite     :"
 echo "${invite_text}"
-if [[ "${#join_task_ids[@]}" -gt 0 ]]; then
-  echo "tasks      : ${join_task_ids[*]}"
-fi
 exit 0
 {% endraw %}

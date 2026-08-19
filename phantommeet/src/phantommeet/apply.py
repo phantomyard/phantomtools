@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -342,6 +343,78 @@ def _upsert_between_markers(text: str, section: str) -> str:
     return section + "\n" + text
 
 
+def _render_kb_frontmatter(ctx: dict[str, Any], lang: str) -> str:
+    """OKF frontmatter for Meetings.md (regenerated every apply).
+
+    ``type`` is OKF's only required field; ``title`` / ``tags`` / ``aliases``
+    are the high-weight BM25F fields, so a note without them only ever
+    competes at body weight.
+    """
+    org = ctx["org"]
+    org_slug = re.sub(r"[^a-z0-9]+", "-", org.lower()).strip("-")
+    today = date.today().isoformat()
+    if lang == "es":
+        return (
+            "---\n"
+            "type: procedure\n"
+            f"title: Protocolo de reuniones — {org}\n"
+            "description: Cómo esta persona se une, participa y registra "
+            "reuniones vía el puente de PhantomMeet.\n"
+            f"tags: [reuniones, phantommeet, {org_slug}]\n"
+            "aliases: [protocolo de reuniones, cómo entrar a una reunión, "
+            "grabaciones, formato DM del puente, invitación a reunión]\n"
+            f"created: {today}\n"
+            f"updated: {today}\n"
+            "---\n"
+        )
+    return (
+        "---\n"
+        "type: procedure\n"
+        f"title: Meeting protocol — {org}\n"
+        "description: How this persona joins, participates in, and records "
+        "meetings via the PhantomMeet bridge.\n"
+        f"tags: [meetings, phantommeet, {org_slug}]\n"
+        "aliases: [meeting protocol, how to join a meeting, grabaciones, "
+        "bridge DM format, meeting invite]\n"
+        f"created: {today}\n"
+        f"updated: {today}\n"
+        "---\n"
+    )
+
+
+def _contained_path(persona_dir: Path, rel: str | Path) -> Path | None:
+    """Resolve ``rel`` inside ``persona_dir``; None if it escapes the dir.
+
+    Manifest-controlled paths (``legacy_kb_files``) are untrusted: resolve
+    them and refuse anything that leaves the persona directory (path
+    traversal).
+    """
+    base = persona_dir.resolve()
+    target = (base / rel).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return None
+    return target
+
+
+def _upsert_kb(existing: str, frontmatter: str, body: str) -> str:
+    """Upsert the managed Meetings.md: frontmatter + marker-delimited body.
+
+    The OKF frontmatter sits at the very top (it must be first for the
+    indexer); the generated body lives between the phantommeet markers.
+    Anything the persona added after the closing marker is preserved.
+    """
+    managed_body = f"{MARKER_START}\n{body}{MARKER_END}\n"
+    if MARKER_START in existing and MARKER_END in existing:
+        tail = existing.split(MARKER_END, 1)[1]
+        return frontmatter + managed_body + tail
+    # No markers yet: preserve the whole pre-existing file below the block.
+    if existing.strip():
+        return frontmatter + managed_body + "\n" + existing
+    return frontmatter + managed_body
+
+
 def _patch_phantomchat(
     data: dict[str, Any], relay: str, bridge_npub: str | None, include_bridge: bool
 ) -> dict[str, Any]:
@@ -614,9 +687,9 @@ def apply_manifest(
 
         ctx = _persona_context(persona_id, manifest)
 
-        # 1) KB protocol file (role-aware) + org-specific appendix.
+        # 1) KB protocol file: OKF frontmatter + marker-delimited managed body.
         kb_name = "protocol.en.md" if lang == "en" else "protocol.es.md"
-        kb_content = _render_template(env, kb_name, ctx)
+        kb_body = _render_template(env, kb_name, ctx)
         appendix = manifest.get("kb_appendix", [])
         if appendix:
             # kb_appendix blocks are Jinja templates too: org-specific text in
@@ -625,30 +698,50 @@ def apply_manifest(
             rendered = [
                 env.from_string(a).render(**ctx).rstrip() for a in appendix
             ]
-            kb_content += "\n---\n\n" + "\n\n---\n\n".join(rendered) + "\n"
+            kb_body += "\n---\n\n" + "\n\n---\n\n".join(rendered) + "\n"
+        frontmatter = _render_kb_frontmatter(ctx, lang)
         kb_dest = persona_dir / KB_REL
-        if kb_dest.exists() and kb_dest.read_text(encoding="utf-8") == kb_content:
+        kb_existing = kb_dest.read_text(encoding="utf-8") if kb_dest.exists() else ""
+        kb_new = _upsert_kb(kb_existing, frontmatter, kb_body)
+        if kb_new == kb_existing:
             result.changes.append(Change(persona_id, KB_REL, "skip", "(up to date)"))
         else:
-            result.changes.append(Change(persona_id, KB_REL, "write"))
+            result.changes.append(Change(persona_id, KB_REL, "upsert"))
             if not dry_run:
                 kb_dest.parent.mkdir(parents=True, exist_ok=True)
-                kb_dest.write_text(kb_content, encoding="utf-8")
+                kb_dest.write_text(kb_new, encoding="utf-8")
 
-        # 2) Legacy kb files superseded by Meetings.md are removed.
+        # 2) Legacy kb files superseded by Meetings.md are deprecated in
+        # place (a banner is prepended) — never deleted. KB recall walks
+        # [[wikilinks]] outward, so deleting a note severs every path that
+        # ran through it and leaves dangling links elsewhere.
         for legacy in manifest.get("legacy_kb_files", []):
-            legacy_dest = persona_dir / legacy
-            if legacy_dest.exists():
-                result.changes.append(
-                    Change(
-                        persona_id,
-                        Path(legacy),
-                        "remove",
-                        "(superseded by Meetings.md)",
-                    )
+            legacy_dest = _contained_path(persona_dir, legacy)
+            if legacy_dest is None:
+                result.errors.append(
+                    f"{persona_id}/{legacy}: path escapes the persona directory"
                 )
-                if not dry_run:
-                    legacy_dest.unlink()
+                continue
+            if legacy_dest.exists():
+                text = legacy_dest.read_text(encoding="utf-8")
+                if text.startswith("> Superseded by [[procedures/Meetings]]"):
+                    result.changes.append(
+                        Change(persona_id, Path(legacy), "skip", "(already superseded)")
+                    )
+                else:
+                    result.changes.append(
+                        Change(
+                            persona_id,
+                            Path(legacy),
+                            "deprecate",
+                            "(superseded by Meetings.md)",
+                        )
+                    )
+                    if not dry_run:
+                        legacy_dest.write_text(
+                            "> Superseded by [[procedures/Meetings]]\n\n" + text,
+                            encoding="utf-8",
+                        )
 
         # 3) MEMORY.md section (idempotent upsert between markers).
         memory_dest = persona_dir / MEMORY_REL
@@ -666,25 +759,30 @@ def apply_manifest(
             if not dry_run:
                 memory_dest.write_text(new_memory, encoding="utf-8")
 
-        # 4) phantomchat.json patch.
+        # 4) phantomchat.json patch (reversible: pre-patch state recorded once).
         pc_dest = persona_dir / PHANTOMCHAT_REL
         include_bridge = access_for(persona_id, manifest)["kind"] != "none"
         if pc_dest.exists():
+            original_text = pc_dest.read_text(encoding="utf-8")
             try:
-                pc_data = json.loads(pc_dest.read_text(encoding="utf-8"))
+                pc_data = json.loads(original_text)
             except json.JSONDecodeError as exc:
                 result.errors.append(
                     f"{persona_id}/phantomchat.json: invalid JSON ({exc})"
                 )
                 continue
             patched = _patch_phantomchat(pc_data, relay, bridge_npub, include_bridge)
-            if patched == json.loads(pc_dest.read_text(encoding="utf-8")):
+            if patched == json.loads(original_text):
                 result.changes.append(
                     Change(persona_id, PHANTOMCHAT_REL, "skip", "(up to date)")
                 )
             else:
                 result.changes.append(Change(persona_id, PHANTOMCHAT_REL, "patch"))
                 if not dry_run:
+                    # Record the pre-patch state once so the patch is reversible.
+                    backup = persona_dir / ".phantommeet-phantomchat.orig.json"
+                    if not backup.exists():
+                        backup.write_text(original_text, encoding="utf-8")
                     pc_dest.write_text(
                         json.dumps(patched, indent=2, ensure_ascii=False) + "\n",
                         encoding="utf-8",

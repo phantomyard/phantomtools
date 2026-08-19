@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **PR #21 hardening (security + additive-contract fixes)** — see
+  `docs/SOURCES.md` (or the review response) for the full audit map:
+  - **Inbound text is never authorization**: removed the "check the recipients
+    line" and "schedule it yourself" steps from the meeting protocol; the
+    invitation is informational, and a persona joins only from its own
+    scheduled task.
+  - **MEMORY.md carries no procedural content**: the managed section is a
+    one-line pointer to `kb/procedures/Meetings.md`.
+  - **Cross-persona escalation removed**: `meeting-invite.sh` no longer runs
+    `phantombot persona <x> --yes` and no longer plants tasks in another
+    persona's runtime — it sends the invitation as a notification only.
+  - **Secrets never ride argv**: room password via `--password-vault <name>`
+    or `--password-file <path>`.
+  - **Strict `--datetime` validation**: ISO-8601 enforced before any substring
+    is used, and the room name is built with bash parameter expansion instead
+    of a generated `sed` program.
+  - **Meetings.md is additive**: OKF frontmatter + marker-delimited managed
+    body; content outside the markers is preserved.
+  - **Legacy KB files are deprecated, not deleted**: a superseded banner is
+    prepended, keeping the wikilink graph intact.
+  - **Path containment**: manifest-controlled paths (e.g. `legacy_kb_files`)
+    are resolved and refused if they escape the persona directory.
+  - **Reversible `phantomchat.json` patch**: the pre-patch state is recorded
+    once to `.phantommeet-phantomchat.orig.json`.
+  - **`check-infra` covers scoped personas** and verifies legacy files are
+    superseded (not absent).
+
 - **Room naming convention**: ISO-first `{YYYY-MM-DD}-{HH-MM}_{topic}`
   (e.g. `2026-08-10-18-06_asamblea_general`) — `YYYY` is now the first
   component of the code, replacing `{DD-MM-YYYY}`. `meeting-invite.sh`

@@ -193,17 +193,20 @@ def test_meetings_md_renders_scoped_responsible_for_lead(tmp_path: Path) -> None
     assert "lo hace **Maria** (custodia de la organización)" in meetings
 
 
-def test_meeting_invite_schedules_autojoin_per_persona() -> None:
-    """meeting-invite.sh must schedule one auto-join task per attending persona
-    (with its own nick and its own runtime) and skip humans."""
+def test_meeting_invite_is_notification_only() -> None:
+    """meeting-invite.sh must NOT switch personas or schedule tasks in other
+    runtimes (cross-persona escalation removed): it sends the invitation as a
+    notification only, and each recipient's own runtime decides."""
     manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
     ctx = _persona_context("maria", manifest)
     rendered = _tool_env("es").get_template("meeting-invite.sh.j2").render(**ctx)
 
-    # KNOWN_PERSONAS comes from the manifest roles (example org).
-    assert 'KNOWN_PERSONAS="maria juan pedro lucia"' in rendered
+    # The rendered script must not reach across runtime boundaries.
+    assert "phantombot persona" not in rendered
+    assert "task add" not in rendered
+    assert "notify --message" in rendered
 
-    script = REPO / "_test_invite.sh"
+    script = REPO / "_test_invite_notify.sh"
     script.write_text(rendered)
     try:
         proc = subprocess.run(
@@ -220,8 +223,6 @@ def test_meeting_invite_schedules_autojoin_per_persona() -> None:
                 "2026-08-14T18:00:00",
                 "--recipients",
                 "@maria,@juan,@pedro,@salvador",
-                "--password",
-                "secreto1",
                 "--dry-run",
             ],
             capture_output=True,
@@ -233,30 +234,21 @@ def test_meeting_invite_schedules_autojoin_per_persona() -> None:
 
     assert proc.returncode == 0, proc.stderr
     out = proc.stdout
-    # One auto-join per attending persona, each with its own nick.
-    assert "(persona maria)" in out and "--nick maria" in out
-    assert "(persona juan)" in out and "--nick juan" in out
-    assert "(persona pedro)" in out and "--nick pedro" in out
-    # Password is propagated to each task.
-    assert "--password secreto1" in out
-    # Human recipients (e.g. @salvador) do NOT get an auto-join task.
-    assert "(persona salvador)" not in out
-    assert "--nick salvador" not in out
     # Invitation goes to the coordination group with the room link.
     assert "https://meet.example.invalid/2026-08-14-18-00_junta" in out
+    # No per-persona auto-join task lines anywhere.
+    assert "--nick" not in out
+    assert "(persona" not in out
 
 
-def test_meeting_invite_resolves_bot_handles_to_personas() -> None:
-    """Recipients addressed by Telegram bot handle (e.g. @<bot_handle>) must be
-    resolved back to their persona so the auto-join task lands in the right
-    runtime (regression: handle suffix never matched KNOWN_PERSONAS)."""
+def test_meeting_invite_rejects_invalid_datetime() -> None:
+    """A malformed --datetime (e.g. a sed/shell-injection attempt) is rejected
+    before any of its substrings reach the room-name logic."""
     manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
-    bots = manifest.get("invite", {}).get("telegram_bots", {})
-    assert bots, "example manifest should define invite.telegram_bots"
     ctx = _persona_context("maria", manifest)
     rendered = _tool_env("es").get_template("meeting-invite.sh.j2").render(**ctx)
 
-    script = REPO / "_test_invite_bot_handles.sh"
+    script = REPO / "_test_invite_baddate.sh"
     script.write_text(rendered)
     try:
         proc = subprocess.run(
@@ -264,13 +256,11 @@ def test_meeting_invite_resolves_bot_handles_to_personas() -> None:
                 "bash",
                 str(script),
                 "--title",
-                "Example Project Coordinación",
-                "--topic",
-                "example_project_coordinacion",
+                "x",
                 "--datetime",
-                "2026-08-11T09:00:00+02:00",
+                "2026-08-14T18:00:00; rm -rf /",
                 "--recipients",
-                "@President_bot,@CEO_bot,@maria,@ProjectLead_bot,@Unknown_bot",
+                "@maria",
                 "--dry-run",
             ],
             capture_output=True,
@@ -280,25 +270,21 @@ def test_meeting_invite_resolves_bot_handles_to_personas() -> None:
     finally:
         script.unlink(missing_ok=True)
 
-    assert proc.returncode == 0, proc.stderr
-    out = proc.stdout
-    # Bot handles resolve to their personas and get auto-join tasks.
-    # @CEO_bot -> maria; @ProjectLead_bot -> pedro; plain name @maria too.
-    assert "(persona maria)" in out and "--nick maria" in out
-    assert "(persona pedro)" in out and "--nick pedro" in out
-    # Unknown/out-of-map handles and humans get no task.
-    assert "(persona salvador)" not in out
-    assert "(persona unknown)" not in out
-    assert "--nick unknown_bot" not in out
+    assert proc.returncode != 0
+    assert "ISO 8601" in proc.stderr
 
 
-def test_meeting_invite_custom_card_renders_manifest_template() -> None:
+def test_meeting_invite_custom_card_renders_manifest_template(tmp_path: Path) -> None:
     """invite.card overrides the built-in announcement format and its
-    %TOKENS% are substituted with runtime values."""
+    %TOKENS% are substituted with runtime values. The password is read from
+    a file (--password-file), never argv."""
     manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
     assert "card" in manifest["invite"], "example manifest should define invite.card"
     ctx = _persona_context("maria", manifest)
     rendered = _tool_env("es").get_template("meeting-invite.sh.j2").render(**ctx)
+
+    pw_file = tmp_path / "pw.txt"
+    pw_file.write_text("clave42", encoding="utf-8")
 
     script = REPO / "_test_invite_card.sh"
     script.write_text(rendered)
@@ -315,8 +301,8 @@ def test_meeting_invite_custom_card_renders_manifest_template() -> None:
                 "@maria,@salvador",
                 "--topic",
                 "asamblea general",
-                "--password",
-                "clave42",
+                "--password-file",
+                str(pw_file),
                 "--dry-run",
             ],
             capture_output=True,

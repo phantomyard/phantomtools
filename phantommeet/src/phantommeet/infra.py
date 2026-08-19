@@ -46,7 +46,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .apply import KB_REL, MARKER_END, MARKER_START, MEMORY_REL, PHANTOMCHAT_REL
+from .apply import (
+    KB_REL,
+    MARKER_END,
+    MARKER_START,
+    MEMORY_REL,
+    PHANTOMCHAT_REL,
+    _personas_in_manifest,
+)
 from .manifest import access_for
 
 
@@ -353,15 +360,27 @@ def check_persona_state(
             ProbeResult(f"{prefix} Meetings.md", "fail", f"missing {KB_REL}")
         )
 
-    # 2) Legacy kb files must be gone.
+    # 2) Legacy kb files must be deprecated in place (banner prepended),
+    # never deleted.
     for legacy in manifest.get("legacy_kb_files", []):
         legacy_dest = persona_dir / legacy
-        if legacy_dest.exists():
-            results.append(
-                ProbeResult(f"{prefix} legacy {legacy}", "fail", "still present")
-            )
+        if not legacy_dest.exists():
+            results.append(ProbeResult(f"{prefix} legacy {legacy}", "ok", "absent"))
         else:
-            results.append(ProbeResult(f"{prefix} legacy {legacy}", "ok", "removed"))
+            try:
+                text = legacy_dest.read_text(encoding="utf-8")
+            except OSError:
+                text = ""
+            if text.startswith("> Superseded by [[procedures/Meetings]]"):
+                results.append(
+                    ProbeResult(f"{prefix} legacy {legacy}", "ok", "superseded")
+                )
+            else:
+                results.append(
+                    ProbeResult(
+                        f"{prefix} legacy {legacy}", "fail", "not superseded"
+                    )
+                )
 
     # 3) MEMORY.md markers.
     memory = persona_dir / MEMORY_REL
@@ -481,15 +500,7 @@ def run_checks(
         results.append(ProbeResult(name, "ok" if ok else "fail", detail))
 
     if target is not None:
-        for persona_id in sorted(
-            set(manifest["roles"])
-            | set(manifest["permissions"].get("full", []))
-            | {
-                pid
-                for ids in manifest["permissions"].get("restricted", {}).values()
-                for pid in ids
-            }
-        ):
+        for persona_id in _personas_in_manifest(manifest):
             results.extend(
                 check_persona_state(persona_id, target / persona_id, manifest)
             )

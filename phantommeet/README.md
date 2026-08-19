@@ -59,12 +59,18 @@ See `examples/example-org.yaml` for a complete reference manifest.
 
 Per persona, PhantomMeet manages:
 
-- `kb/procedures/Meetings.md` — role-aware meeting protocol
-  (responsible vs support; full vs restricted access)
-- `MEMORY.md` — compact "Meetings" section between
-  `<!-- phantommeet:start -->` / `<!-- phantommeet:end -->` markers
+- `kb/procedures/Meetings.md` — role-aware meeting protocol with OKF
+  frontmatter; the generated body lives between `<!-- phantommeet:start/end -->`
+  markers, so anything the persona adds outside the markers is preserved
+- `MEMORY.md` — a one-line pointer to `kb/procedures/Meetings.md` between
+  `<!-- phantommeet:start -->` / `<!-- phantommeet:end -->` markers (procedural
+  content stays in the KB, never in the persona's curated memory)
 - `phantomchat.json` — private relay moved first; bridge npub added to
-  `allowed_npubs`
+  `allowed_npubs`, with the pre-patch state recorded to
+  `.phantommeet-phantomchat.orig.json` so the patch is reversible
+- `legacy_kb_files` — deprecated **in place** (a `> Superseded by
+  [[procedures/Meetings]]` banner is prepended); files are never deleted, so
+  the KB wikilink graph stays intact
 
 Re-running the apply is safe: unchanged files are skipped.
 
