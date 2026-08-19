@@ -37,39 +37,39 @@ from phantomorg.compiler.telegram import (
 )
 from phantomorg.spec.loader import load_org_yaml
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
 # Placeholder bot usernames matching the example org.yaml (sanitized).
 REAL_BOTS = {
-    "paco": "CEO_bot",
-    "pepa": "PA_bot",
-    "roberto": "CFO_bot",
-    "alma": "Alma_bot",
-    "elena": "Elena_bot",
+    "marco": "marco_bot",
+    "lucia": "lucia_bot",
+    "diego": "diego_bot",
+    "dana": "dana_bot",
+    "elias": "elias_bot",
 }
 
 # Minimal phantombot config.toml shape (mirrors the MacBookPro runtime).
 CONFIG_TOML = """\
-default_persona = "paco"
+default_persona = "marco"
 
 [channels.telegram]
 token = "111:main_token"
 allowed_user_ids = [1000000001]
 
-[channels.telegram.personas.alma]
+[channels.telegram.personas.dana]
 token = "222:alma_token"
 
-[channels.telegram.personas.elena]
+[channels.telegram.personas.elias]
 token = "333:elena_token"
 
-[channels.telegram.personas.roberto]
+[channels.telegram.personas.diego]
 token = "444:roberto_token"
 
-[channels.telegram.personas.pepa]
+[channels.telegram.personas.lucia]
 token = "555:pepa_token"
 """
 
-STATE_JSON = json.dumps({"harness_bins": {"pi": "/x"}, "default_persona": "paco"})
+STATE_JSON = json.dumps({"harness_bins": {"pi": "/x"}, "default_persona": "marco"})
 
 
 class FakeGetMe:
@@ -103,11 +103,11 @@ class TelegramVerifyTestCase(unittest.TestCase):
         self.state.write_text(STATE_JSON, encoding="utf-8")
         self.spec = load_org_yaml(AU_ORG)
         self.tokens = {
-            "111:main_token": "CEO_bot",
-            "222:alma_token": "Alma_bot",
-            "333:elena_token": "Elena_bot",
-            "444:roberto_token": "CFO_bot",
-            "555:pepa_token": "PA_bot",
+            "111:main_token": "marco_bot",
+            "222:alma_token": "dana_bot",
+            "333:elena_token": "elias_bot",
+            "444:roberto_token": "diego_bot",
+            "555:pepa_token": "lucia_bot",
         }
 
     def tearDown(self):
@@ -133,14 +133,16 @@ class TelegramVerifyTestCase(unittest.TestCase):
         self.assertTrue(manifest.ok)
         self.assertEqual([c.status for c in manifest.checks], [OK] * 5)
         for c in manifest.checks:
-            self.assertEqual(_normalize_handle(c.declared_bot), c.real_bot.lower().lstrip("@"))
+            self.assertEqual(
+                _normalize_handle(c.declared_bot), c.real_bot.lower().lstrip("@")
+            )
         # exactly one getMe call per actor
         self.assertEqual(len(fake.calls), 5)
 
     def test_mismatch_when_declared_differs(self):
-        # Revert pepa to the stale @COS_bot handle -> mismatch on pepa.
+        # Revert lucia to the stale @COS_bot handle -> mismatch on lucia.
         for a in self.spec.actors:
-            if a.id == "pepa":
+            if a.id == "lucia":
                 a.telegram_bot = "@COS_bot"
         fake = FakeGetMe(dict(self.tokens))
         with unittest.mock.patch(
@@ -148,36 +150,36 @@ class TelegramVerifyTestCase(unittest.TestCase):
         ):
             manifest = self._verify()
         by_id = {c.actor_id: c for c in manifest.checks}
-        self.assertEqual(by_id["pepa"].status, MISMATCH)
-        self.assertEqual(by_id["pepa"].declared_bot, "@COS_bot")
-        self.assertEqual(by_id["pepa"].real_bot, "@PA_bot")
-        self.assertEqual(by_id["paco"].status, OK)
+        self.assertEqual(by_id["lucia"].status, MISMATCH)
+        self.assertEqual(by_id["lucia"].declared_bot, "@COS_bot")
+        self.assertEqual(by_id["lucia"].real_bot, "@lucia_bot")
+        self.assertEqual(by_id["marco"].status, OK)
         self.assertFalse(manifest.ok)
 
     def test_case_insensitive_match(self):
         # Declared handle with different case still matches (Telegram
         # usernames are case-insensitive).
         for a in self.spec.actors:
-            if a.id == "paco":
-                a.telegram_bot = "@ceo_bot"
+            if a.id == "marco":
+                a.telegram_bot = "@MARCO_BOT"
         fake = FakeGetMe(dict(self.tokens))
         with unittest.mock.patch(
             "phantomorg.compiler.telegram._getme", side_effect=fake
         ):
             manifest = self._verify()
         by_id = {c.actor_id: c for c in manifest.checks}
-        self.assertEqual(by_id["paco"].status, OK)
+        self.assertEqual(by_id["marco"].status, OK)
 
     def test_no_token_when_actor_not_in_config(self):
         # An actor declared with telegram_bot but with no token anywhere
         # (no sub-persona token, and not the default persona).
         for a in self.spec.actors:
-            if a.id == "elena":
-                a.telegram_bot = "@Elena_bot"
-        # Remove elena's token from config.
+            if a.id == "elias":
+                a.telegram_bot = "@elias_bot"
+        # Remove elias's token from config.
         config = self.config.read_text(encoding="utf-8")
         config = config.replace(
-            '\n[channels.telegram.personas.elena]\ntoken = "333:elena_token"\n', "\n"
+            '\n[channels.telegram.personas.elias]\ntoken = "333:elena_token"\n', "\n"
         )
         self.config.write_text(config, encoding="utf-8")
         fake = FakeGetMe(dict(self.tokens))
@@ -186,9 +188,9 @@ class TelegramVerifyTestCase(unittest.TestCase):
         ):
             manifest = self._verify()
         by_id = {c.actor_id: c for c in manifest.checks}
-        self.assertEqual(by_id["elena"].status, NO_TOKEN)
+        self.assertEqual(by_id["elias"].status, NO_TOKEN)
         self.assertFalse(manifest.ok)
-        # elena's token must NOT have been queried
+        # elias's token must NOT have been queried
         self.assertNotIn("333:elena_token", fake.calls)
 
     def test_getme_failure_is_error(self):
@@ -198,9 +200,9 @@ class TelegramVerifyTestCase(unittest.TestCase):
         ):
             manifest = self._verify()
         by_id = {c.actor_id: c for c in manifest.checks}
-        self.assertEqual(by_id["paco"].status, ERROR)
-        self.assertEqual(by_id["paco"].real_bot, None)
-        self.assertIn("getMe failed", by_id["paco"].detail)
+        self.assertEqual(by_id["marco"].status, ERROR)
+        self.assertEqual(by_id["marco"].real_bot, None)
+        self.assertIn("getMe failed", by_id["marco"].detail)
         self.assertFalse(manifest.ok)
 
     def test_not_declared_counts_as_ok(self):
@@ -220,18 +222,18 @@ class TelegramVerifyTestCase(unittest.TestCase):
 
     def test_state_default_persona_overrides_config(self):
         # Runtime default persona comes from state.json. If state says
-        # roberto AND roberto has no sub-persona token, the main token
-        # (@CEO_bot) is checked against roberto's declared handle
-        # (@CFO_bot) -> mismatch; paco (no longer default, no own
+        # diego AND diego has no sub-persona token, the main token
+        # (@marco_bot) is checked against diego's declared handle
+        # (@diego_bot) -> mismatch; marco (no longer default, no own
         # token) has no token at all.
         config = self.config.read_text(encoding="utf-8")
         config = config.replace(
-            '\n[channels.telegram.personas.roberto]\ntoken = "444:roberto_token"\n',
+            '\n[channels.telegram.personas.diego]\ntoken = "444:roberto_token"\n',
             "\n",
         )
         self.config.write_text(config, encoding="utf-8")
         self.state.write_text(
-            json.dumps({"default_persona": "roberto"}), encoding="utf-8"
+            json.dumps({"default_persona": "diego"}), encoding="utf-8"
         )
         fake = FakeGetMe(dict(self.tokens))
         with unittest.mock.patch(
@@ -239,10 +241,10 @@ class TelegramVerifyTestCase(unittest.TestCase):
         ):
             manifest = self._verify()
         by_id = {c.actor_id: c for c in manifest.checks}
-        self.assertEqual(by_id["roberto"].status, MISMATCH)
-        self.assertEqual(by_id["roberto"].token_source, "main (default persona)")
-        self.assertEqual(by_id["roberto"].real_bot, "@CEO_bot")
-        self.assertEqual(by_id["paco"].status, NO_TOKEN)
+        self.assertEqual(by_id["diego"].status, MISMATCH)
+        self.assertEqual(by_id["diego"].token_source, "main (default persona)")
+        self.assertEqual(by_id["diego"].real_bot, "@marco_bot")
+        self.assertEqual(by_id["marco"].status, NO_TOKEN)
 
     def test_manifest_json_shape_and_summary(self):
         fake = FakeGetMe(dict(self.tokens))
@@ -250,19 +252,22 @@ class TelegramVerifyTestCase(unittest.TestCase):
             "phantomorg.compiler.telegram._getme", side_effect=fake
         ):
             manifest = self._verify()
-        self.assertEqual(manifest.summary(), {"ok": 5, "mismatch": 0, "no-token": 0, "not-declared": 0, "error": 0})
+        self.assertEqual(
+            manifest.summary(),
+            {"ok": 5, "mismatch": 0, "no-token": 0, "not-declared": 0, "error": 0},
+        )
         data = manifest.as_dict()
-        self.assertEqual(data["org"], "aquaponics-united")
+        self.assertEqual(data["org"], "verdant-aquaponics")
         self.assertEqual(data["summary"]["ok"], 5)
-        self.assertEqual(set(data["checks"]), {"paco", "pepa", "roberto", "alma", "elena"})
-        self.assertEqual(data["checks"]["paco"]["status"], OK)
+        self.assertEqual(
+            set(data["checks"]), {"marco", "lucia", "diego", "dana", "elias"}
+        )
+        self.assertEqual(data["checks"]["marco"]["status"], OK)
         # deterministic serialization (checked_at fixed via now=)
         self.assertEqual(json.loads(manifest.to_json()), data)
 
     def test_ok_property_requires_checks(self):
-        m = TelegramManifest(
-            org_id="x", config_path="/x", checked_at="t", checks=[]
-        )
+        m = TelegramManifest(org_id="x", config_path="/x", checked_at="t", checks=[])
         self.assertFalse(m.ok)
 
     def test_missing_config_raises(self):
@@ -278,9 +283,9 @@ class TelegramVerifyTestCase(unittest.TestCase):
     # ------------------------------------------------------------- helpers
 
     def test_normalize_handle(self):
-        self.assertEqual(_normalize_handle("@CEO_bot"), "ceo_bot")
-        self.assertEqual(_normalize_handle("CEO_bot"), "ceo_bot")
-        self.assertEqual(_normalize_handle("  @PA_bot  "), "pa_bot")
+        self.assertEqual(_normalize_handle("@marco_bot"), "marco_bot")
+        self.assertEqual(_normalize_handle("marco_bot"), "marco_bot")
+        self.assertEqual(_normalize_handle("  @lucia_bot  "), "lucia_bot")
         self.assertIsNone(_normalize_handle(None))
 
     def test_getme_network_error(self):
@@ -310,11 +315,11 @@ class TelegramCheckCliTestCase(unittest.TestCase):
         self.state = self.root / "state.json"
         self.state.write_text(STATE_JSON, encoding="utf-8")
         self.tokens = {
-            "111:main_token": "CEO_bot",
-            "222:alma_token": "Alma_bot",
-            "333:elena_token": "Elena_bot",
-            "444:roberto_token": "CFO_bot",
-            "555:pepa_token": "PA_bot",
+            "111:main_token": "marco_bot",
+            "222:alma_token": "dana_bot",
+            "333:elena_token": "elias_bot",
+            "444:roberto_token": "diego_bot",
+            "555:pepa_token": "lucia_bot",
         }
         from phantomorg.cli import main
 
@@ -350,16 +355,15 @@ class TelegramCheckCliTestCase(unittest.TestCase):
         self.assertIn("All declared telegram_bot handles match", result.output)
 
     def test_failure_exit_one(self):
-        # Drift: revert pepa's declared handle to the stale @COS_bot.
+        # Drift: revert lucia's declared handle to the stale @COS_bot.
         import yaml
 
         raw = yaml.safe_load(AU_ORG.read_text(encoding="utf-8"))
         for actor in raw["actors"]:
-            if actor["id"] == "pepa":
+            if actor["id"] == "lucia":
                 actor["telegram_bot"] = "@COS_bot"
         tmp_org = self.root / "org-drift.yaml"
         tmp_org.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
-
 
         fake = FakeGetMe(dict(self.tokens))
         with unittest.mock.patch(
@@ -380,21 +384,19 @@ class TelegramCheckCliTestCase(unittest.TestCase):
         self.assertEqual(result.exit_code, 1, result.output)
         self.assertIn("mismatch", result.output)
         self.assertIn("@COS_bot", result.output)
-        self.assertIn("@PA_bot", result.output)
+        self.assertIn("@lucia_bot", result.output)
 
     def test_json_output_exit_codes(self):
         result = self._invoke("--json")
         self.assertEqual(result.exit_code, 0)
         data = json.loads(result.output)
         self.assertEqual(data["summary"]["ok"], 5)
-        self.assertEqual(data["checks"]["pepa"]["status"], OK)
+        self.assertEqual(data["checks"]["lucia"]["status"], OK)
 
     def test_invalid_org_rejected(self):
         bad = self.root / "bad.yaml"
         bad.write_text("actors: [not-a-mapping]\n", encoding="utf-8")
-        result = self.runner.invoke(
-            self.main, ["telegram-check", "--org", str(bad)]
-        )
+        result = self.runner.invoke(self.main, ["telegram-check", "--org", str(bad)])
         self.assertEqual(result.exit_code, 1)
         self.assertIn("Cannot verify", result.output)
 

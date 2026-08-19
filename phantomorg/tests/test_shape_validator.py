@@ -8,7 +8,7 @@ import yaml
 
 from phantomorg.spec.shape_validator import ShapeError, validate_shape
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
 
 class TestShapeValidatorIdTypes(unittest.TestCase):
@@ -79,7 +79,7 @@ class TestIdentifierGrammar(unittest.TestCase):
         self._check_id("/etc/passwd", ["actors", 0, "id"])
 
     def test_actor_id_uppercase_rejected(self):
-        self._check_id("Paco", ["actors", 0, "id"])
+        self._check_id("Marco", ["actors", 0, "id"])
 
     def test_org_id_path_traversal_rejected(self):
         self._check_id("../org", ["organization", "id"])
@@ -370,11 +370,11 @@ class TestNpubValidation(unittest.TestCase):
     def test_valid_telegram_handle_passes(self):
         # Real AU bot handles (live getMe) — all valid shapes.
         for handle in (
-            "@CEO_bot",
-            "@PA_bot",
-            "@Alma_bot",
-            "@Elena_bot",
-            "@CFO_bot",
+            "@marco_bot",
+            "@lucia_bot",
+            "@dana_bot",
+            "@elias_bot",
+            "@diego_bot",
             "@a_123",
         ):
             self.doc["actors"][0]["telegram_bot"] = handle
@@ -388,7 +388,7 @@ class TestNpubValidation(unittest.TestCase):
         # Missing '@', too short (<5 chars after @), spaces, accents,
         # too long — all must fail.
         for bad in (
-            "CEO_bot",  # no @
+            "marco_bot",  # no @
             "@ab",  # too short
             "@a b",  # space
             "@Áé_bot",  # non-ASCII
@@ -411,9 +411,7 @@ class TestHumansRegistry(unittest.TestCase):
     """org.yaml ``humans:`` block: optional, validatable registry of
     human counterparts (Board president, treasurer...)."""
 
-    VALID_NPUB = (
-        "npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf"
-    )
+    VALID_NPUB = "npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf"
 
     def setUp(self):
         with open(AU_ORG, encoding="utf-8") as f:
@@ -439,7 +437,7 @@ class TestHumansRegistry(unittest.TestCase):
         import copy
 
         doc = copy.deepcopy(self.doc)
-        doc["humans"][0]["id"] = "Salvador Alba"
+        doc["humans"][0]["id"] = "Board President Alba"
         with self.assertRaises(ShapeError):
             validate_shape(doc)
 

@@ -125,6 +125,7 @@ install_symlink() {
     echo "installed: $target -> $src"
 }
 
+install_symlink "$src_pf" "$bindir/po"
 install_symlink "$src_pf" "$bindir/pf"
 install_symlink "$src_phantomorg" "$bindir/phantomorg"
 
@@ -136,6 +137,6 @@ esac
 
 echo
 echo "next steps:"
-echo "  - smoke test:  pf --version   (and: pf --help)"
+echo "  - smoke test:  po --version   (and: po --help)"
 echo "  - the symlinks point into $here — don't move or delete the repo"
 echo "    without re-running ./install.sh"

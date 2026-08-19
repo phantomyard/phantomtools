@@ -6,9 +6,9 @@ from phantomorg.compiler import build
 from phantomorg.spec.loader import OrgSpecError, load_org_yaml
 from phantomorg.validator import validate_org
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
-NORMA_REL = "kb/normas/comunicacion-agentes.md"
+NORMA_REL = "kb/procedures/comunicacion-agentes.md"
 
 
 def _minimal_org_with_channels(tmp: Path) -> Path:
@@ -56,7 +56,7 @@ class TestNormaCompiled(unittest.TestCase):
     def test_au_role_descriptions_parsed(self):
         spec = load_org_yaml(AU_ORG)
         self.assertIn("Presupuestos", spec.role_by_id("cfo").description)
-        self.assertIn("ALMAPONIA", spec.role_by_id("project_lead").description)
+        self.assertIn("Greenroot", spec.role_by_id("project_lead").description)
 
     def test_build_writes_norma_when_channels_present(self):
         spec, result = validate_org(AU_ORG)
@@ -64,24 +64,24 @@ class TestNormaCompiled(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
-            written = build(spec, out_dir, only="alma")
+            written = build(spec, out_dir, only="dana")
 
-            norma_path = out_dir / "alma" / NORMA_REL
+            norma_path = out_dir / "dana" / NORMA_REL
             self.assertTrue(norma_path.exists(), "norma must be compiled")
-            self.assertIn(norma_path, written["alma"])
+            self.assertIn(norma_path, written["dana"])
 
             text = norma_path.read_text(encoding="utf-8")
             # Channels, request format, relay, hierarchy, roles, escalation.
             self.assertIn("Coordinación", text)
             self.assertIn("-1000000000001", text)
             self.assertIn("ws://relay.example.invalid:7777", text)
-            self.assertIn("aquaponics-united-{yyyymmdd}-{seq4}", text)
+            self.assertIn("verdant-aquaponics-{yyyymmdd}-{seq4}", text)
             self.assertIn("Versión", text)
             self.assertIn("1.5", text)
             self.assertIn("phantomchat", text)
-            self.assertIn("@CEO_bot", text)
-            self.assertIn("ALMAPONIA", text)
-            self.assertIn("Salvador", text)
+            self.assertIn("@marco_bot", text)
+            self.assertIn("Greenroot", text)
+            self.assertIn("Board President", text)
             self.assertIn("REQUEST", text)
             self.assertIn("Matriz de escalado", text)
             # Envelope section (norma v1.5)
@@ -104,14 +104,14 @@ class TestNormaCompiled(unittest.TestCase):
         spec, _ = validate_org(AU_ORG)
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
-            build(spec, out_dir, only="alma")
-            norma_path = out_dir / "alma" / NORMA_REL
+            build(spec, out_dir, only="dana")
+            norma_path = out_dir / "dana" / NORMA_REL
             self.assertIn("1.5", norma_path.read_text(encoding="utf-8"))
 
             # Bump the norm version in the spec -> next build rewrites.
             spec.communication.norm_version = "1.6"
-            written = build(spec, out_dir, only="alma")
-            self.assertIn(norma_path, written["alma"])
+            written = build(spec, out_dir, only="dana")
+            self.assertIn(norma_path, written["dana"])
             self.assertIn("1.6", norma_path.read_text(encoding="utf-8"))
 
     def test_build_skips_norma_without_channels(self):

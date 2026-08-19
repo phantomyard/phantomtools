@@ -210,6 +210,19 @@ def verify_phantomchat(
             if "nsec" not in keys:
                 identity_exists = False  # present but unusable — treat as missing
 
+        if identity_exists and not phantomchat_exists:
+            checks.append(
+                ActorCheck(
+                    actor_id=actor.id,
+                    status=MISSING_PHANTOMCHAT,
+                    declared_npub=declared_npub,
+                    identity_exists=True,
+                    phantomchat_exists=False,
+                    detail="phantomchat.json is missing; deploy the generated runtime configuration",
+                )
+            )
+            continue
+
         if not identity_exists:
             checks.append(
                 ActorCheck(

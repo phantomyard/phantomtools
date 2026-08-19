@@ -59,11 +59,7 @@ class TestBlocks(unittest.TestCase):
             "level 2 (real, generated)\n"
             "<!-- ORG:END security -->\n"
         )
-        new = (
-            "<!-- ORG:BEGIN security -->\n"
-            "level 3 (new)\n"
-            "<!-- ORG:END security -->\n"
-        )
+        new = "<!-- ORG:BEGIN security -->\nlevel 3 (new)\n<!-- ORG:END security -->\n"
         with self.assertWarns(UserWarning):
             merged = merge_content(existing, new)
         self.assertEqual(merged, existing)
@@ -93,9 +89,7 @@ class TestBlocks(unittest.TestCase):
 
     def test_extract_blocks_handles_crlf(self):
         content = (
-            "<!-- ORG:BEGIN security -->\r\n"
-            "level 3\r\n"
-            "<!-- ORG:END security -->\r\n"
+            "<!-- ORG:BEGIN security -->\r\nlevel 3\r\n<!-- ORG:END security -->\r\n"
         )
         blocks = extract_blocks(content)
         self.assertEqual(set(blocks.keys()), {"security"})
@@ -104,9 +98,7 @@ class TestBlocks(unittest.TestCase):
     # F6: a literal END marker inside a generated body must not truncate
     # the block (extract by the last END, not the first).
     def test_merge_keeps_full_generated_body_with_literal_end(self):
-        existing = (
-            "# Title\n<!-- ORG:BEGIN tools -->\nold\n<!-- ORG:END tools -->\n"
-        )
+        existing = "# Title\n<!-- ORG:BEGIN tools -->\nold\n<!-- ORG:END tools -->\n"
         new = (
             "# Title\n"
             "<!-- ORG:BEGIN tools -->\n"
@@ -143,11 +135,7 @@ class TestBlocks(unittest.TestCase):
             "<!-- ORG:END security -->\n"
             "Note: <!-- ORG:BEGIN security -->fake<!-- ORG:END security -->\n"
         )
-        new = (
-            "<!-- ORG:BEGIN security -->\n"
-            "level 3 (new)\n"
-            "<!-- ORG:END security -->\n"
-        )
+        new = "<!-- ORG:BEGIN security -->\nlevel 3 (new)\n<!-- ORG:END security -->\n"
         with self.assertWarns(UserWarning):
             merged = merge_content(existing, new)
         self.assertEqual(merged, existing)

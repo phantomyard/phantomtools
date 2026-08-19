@@ -32,31 +32,31 @@ from phantomorg.compiler.scopes import (
 from phantomorg.deploy.target import DeployCollisionError, deploy
 from phantomorg.spec.loader import load_org_yaml
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
 # Expected chain scopes for the AU org model (see organizations/
-# aquaponics-united/org.yaml):
-#   paco  = ceo            (reports_to null, category-0)      -> full
-#   pepa  = chief_of_staff (reports to ceo; alma+elena report to her)
-#   roberto = cfo          (reports to ceo, no subordinates)  -> self only
-#   alma  = project_lead   (reports to chief_of_staff)        -> self only
-#   elena = training_lead  (reports to chief_of_staff)        -> self only
+# verdant-aquaponics/org.yaml):
+#   marco  = ceo            (reports_to null, category-0)      -> full
+#   lucia  = chief_of_staff (reports to ceo; dana+elias report to her)
+#   diego = cfo          (reports to ceo, no subordinates)  -> self only
+#   dana  = project_lead   (reports to chief_of_staff)        -> self only
+#   elias = training_lead  (reports to chief_of_staff)        -> self only
 EXPECTED_CHAIN = {
-    "paco": ["*"],
-    "pepa": ["alma", "elena", "pepa"],
-    "roberto": ["roberto"],
-    "alma": ["alma"],
-    "elena": ["elena"],
+    "marco": ["*"],
+    "lucia": ["dana", "elias", "lucia"],
+    "diego": ["diego"],
+    "dana": ["dana"],
+    "elias": ["elias"],
 }
 
-# Department rule: direccion (paco, pepa) is the root -> full; the other
+# Department rule: direccion (marco, lucia) is the root -> full; the other
 # departments have a single actor each -> self only.
 EXPECTED_DEPARTMENT = {
-    "paco": ["*"],
-    "pepa": ["*"],
-    "roberto": ["roberto"],
-    "alma": ["alma"],
-    "elena": ["elena"],
+    "marco": ["*"],
+    "lucia": ["*"],
+    "diego": ["diego"],
+    "dana": ["dana"],
+    "elias": ["elias"],
 }
 
 
@@ -85,7 +85,7 @@ class TestDeriveScopes(unittest.TestCase):
         b = serialize_scopes(spec, scopes, "chain")
         self.assertEqual(a, b)
         payload = json.loads(a)
-        self.assertEqual(payload["org"], "aquaponics-united")
+        self.assertEqual(payload["org"], "verdant-aquaponics")
         self.assertEqual(payload["rule"], "chain")
         self.assertEqual(payload["scopes"], scopes)
 
@@ -108,7 +108,7 @@ class TestBuildWritesScopes(unittest.TestCase):
         spec = load_org_yaml(AU_ORG)
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
-            build(spec, out_dir, only="alma")
+            build(spec, out_dir, only="dana")
             self.assertFalse((out_dir / SCOPES_FILENAME).exists())
 
     def test_build_idempotent_no_rewrite(self):

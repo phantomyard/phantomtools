@@ -1,6 +1,6 @@
 [project]
 name = "phantomorg"
-version = "0.5.10"
+version = "0.5.11"
 description = "Model agent organizations (departments, roles, actors, access policies, escalation matrix) and compile them to the persona files Phantombot can load."
 requires-python = ">=3.10"
 dependencies = [

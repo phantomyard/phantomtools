@@ -12,8 +12,8 @@ from phantomorg.compiler import build
 from phantomorg.deploy.target import DeployCollisionError, DeployError, deploy
 from phantomorg.spec.loader import load_org_yaml
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
-UCG_ORG = Path(__file__).parent.parent / "organizations/united-capital-group/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
+UCG_ORG = Path(__file__).parent.parent / "organizations/harbor-capital/org.yaml"
 
 
 def _build_au_module(tmp: Path) -> Path:
@@ -36,7 +36,7 @@ roles:
     reports_to: null
     access_level: level-3
 actors:
-  - id: alma   # actor id deliberately equal to Aquaponics United's
+  - id: dana   # actor id deliberately equal to Verdant Aquaponics Co-op's
     role: ceo
     tools: [email]
 policies:
@@ -66,11 +66,13 @@ class TestDeployMultiOrg(unittest.TestCase):
 
             result1 = deploy(au_out, target)
             self.assertEqual(
-                set(result1.deployed), {"paco", "pepa", "roberto", "alma", "elena"}
+                set(result1.deployed), {"marco", "lucia", "diego", "dana", "elias"}
             )
 
-            result2 = deploy(ucg_out, target)  # no collision: "anna" does not exist yet
-            self.assertEqual(result2.deployed, ["anna"])
+            result2 = deploy(
+                ucg_out, target
+            )  # no collision: "nadia" does not exist yet
+            self.assertEqual(result2.deployed, ["nadia"])
 
     def test_deploy_collision_between_organizations_is_blocked(self):
         au_spec = load_org_yaml(AU_ORG)
@@ -89,10 +91,10 @@ class TestDeployMultiOrg(unittest.TestCase):
             build(au_spec, au_out)
             build(colliding_spec, other_out)
 
-            deploy(au_out, target)  # deploys Aquaponics United's "alma"
+            deploy(au_out, target)  # deploys Verdant Aquaponics Co-op's "dana"
 
             with self.assertRaises(DeployCollisionError):
-                deploy(other_out, target)  # "alma" from otra-empresa collides
+                deploy(other_out, target)  # "dana" from otra-empresa collides
 
     def test_deploy_collision_with_force_overwrites(self):
         au_spec = load_org_yaml(AU_ORG)
@@ -113,10 +115,10 @@ class TestDeployMultiOrg(unittest.TestCase):
 
             deploy(au_out, target)
             result = deploy(other_out, target, force=True)
-            self.assertIn("alma", result.deployed)
+            self.assertIn("dana", result.deployed)
 
             # We confirm that the deployed actor now belongs to "otra-empresa"
-            meta = (target / "alma" / ".phantomorg.yaml").read_text(encoding="utf-8")
+            meta = (target / "dana" / ".phantomorg.yaml").read_text(encoding="utf-8")
             self.assertIn("otra-empresa", meta)
 
     def test_collision_in_preflight_mutates_nothing(self):
@@ -140,7 +142,7 @@ class TestDeployMultiOrg(unittest.TestCase):
             build(au_spec, au_out)
             build(colliding_spec, other_out)
 
-            deploy(au_out, target)  # deploys Aquaponics United's "alma"
+            deploy(au_out, target)  # deploys Verdant Aquaponics Co-op's "dana"
             before = {
                 p.name: p
                 for p in sorted(target.iterdir())
@@ -148,7 +150,7 @@ class TestDeployMultiOrg(unittest.TestCase):
             }
 
             with self.assertRaises(DeployCollisionError):
-                deploy(other_out, target)  # "alma" from otra-empresa collides
+                deploy(other_out, target)  # "dana" from otra-empresa collides
 
             # target unchanged: no new actor, no overwrite, no staging dir
             after = {
@@ -163,7 +165,7 @@ class TestDeployMultiOrg(unittest.TestCase):
             )
             # archive unchanged: no backup was consumed
             self.assertEqual(
-                len(list((target.parent / "personas-archive").glob("alma-*"))), 0
+                len(list((target.parent / "personas-archive").glob("dana-*"))), 0
             )
 
     def test_deploy_all_skips_colliding_org_and_deploys_rest(self):
@@ -189,7 +191,7 @@ class TestDeployMultiOrg(unittest.TestCase):
             build(ucg_spec, ucg_out)
             build(colliding_spec, other_out)
 
-            deploy(au_out, target)  # "alma" occupied
+            deploy(au_out, target)  # "dana" occupied
 
             from click.testing import CliRunner
 
@@ -199,14 +201,14 @@ class TestDeployMultiOrg(unittest.TestCase):
             # deploy-all iterates base/<org_id>/org.yaml and expects
             # --dist-base/<org_id> for each
             base_dir = tmp / "base"
-            ucg_org_dir = base_dir / "united-capital-group"
+            ucg_org_dir = base_dir / "harbor-capital"
             other_org_dir = base_dir / "otra-empresa"
             ucg_org_dir.mkdir(parents=True)
             other_org_dir.mkdir(parents=True)
             (ucg_org_dir / "org.yaml").write_text(
                 (
                     Path(__file__).parent.parent
-                    / "organizations/united-capital-group/org.yaml"
+                    / "organizations/harbor-capital/org.yaml"
                 ).read_text(encoding="utf-8"),
                 encoding="utf-8",
             )
@@ -214,11 +216,9 @@ class TestDeployMultiOrg(unittest.TestCase):
                 _COLLIDING_ORG_YAML, encoding="utf-8"
             )
             dist_base = tmp / "dist-base"
-            (dist_base / "united-capital-group").mkdir(parents=True)
+            (dist_base / "harbor-capital").mkdir(parents=True)
             (dist_base / "otra-empresa").mkdir(parents=True)
-            shutil.copytree(
-                ucg_out, dist_base / "united-capital-group", dirs_exist_ok=True
-            )
+            shutil.copytree(ucg_out, dist_base / "harbor-capital", dirs_exist_ok=True)
             shutil.copytree(other_out, dist_base / "otra-empresa", dirs_exist_ok=True)
 
             result = runner.invoke(
@@ -234,12 +234,14 @@ class TestDeployMultiOrg(unittest.TestCase):
                     "--yes",
                 ],
             )
-            self.assertEqual(result.exit_code, 0, result.output)
-            # ucg's "anna" deployed, colliding org's "alma" NOT overwritten
-            self.assertTrue((target / "anna").exists())
             self.assertEqual(
-                (target / "alma" / ".phantomorg.yaml").read_text(encoding="utf-8"),
-                (au_out / "alma" / ".phantomorg.yaml").read_text(encoding="utf-8"),
+                result.exit_code, 1, result.output
+            )  # collision -> non-zero
+            # ucg's "nadia" deployed, colliding org's "dana" NOT overwritten
+            self.assertTrue((target / "nadia").exists())
+            self.assertEqual(
+                (target / "dana" / ".phantomorg.yaml").read_text(encoding="utf-8"),
+                (au_out / "dana" / ".phantomorg.yaml").read_text(encoding="utf-8"),
             )
             # session recorded for the successful org only
             from phantomorg.deploy.session import load_sessions
@@ -266,14 +268,14 @@ class TestDeployMultiOrg(unittest.TestCase):
             build(au_spec, au_out)
             build(ucg_spec, ucg_out)
 
-            # Pre-deploy au so the target has content; ucg's "anna" will
+            # Pre-deploy au so the target has content; ucg's "nadia" will
             # be created by the deploy-all (it does not exist yet).
             deploy(au_out, target)
             pre_state = sorted(p.name for p in target.iterdir())
 
             base_dir = tmp / "base"
-            au_org_dir = base_dir / "aquaponics-united"
-            ucg_org_dir = base_dir / "united-capital-group"
+            au_org_dir = base_dir / "verdant-aquaponics"
+            ucg_org_dir = base_dir / "harbor-capital"
             au_org_dir.mkdir(parents=True)
             ucg_org_dir.mkdir(parents=True)
             (au_org_dir / "org.yaml").write_text(
@@ -283,25 +285,23 @@ class TestDeployMultiOrg(unittest.TestCase):
                 UCG_ORG.read_text(encoding="utf-8"), encoding="utf-8"
             )
             dist_base = tmp / "dist-base"
-            (dist_base / "aquaponics-united").mkdir(parents=True)
-            (dist_base / "united-capital-group").mkdir(parents=True)
-            shutil.copytree(au_out, dist_base / "aquaponics-united", dirs_exist_ok=True)
+            (dist_base / "verdant-aquaponics").mkdir(parents=True)
+            (dist_base / "harbor-capital").mkdir(parents=True)
             shutil.copytree(
-                ucg_out, dist_base / "united-capital-group", dirs_exist_ok=True
+                au_out, dist_base / "verdant-aquaponics", dirs_exist_ok=True
             )
+            shutil.copytree(ucg_out, dist_base / "harbor-capital", dirs_exist_ok=True)
 
             from click.testing import CliRunner
 
             from phantomorg.cli import main
 
-            # Simulate a disk error on ucg's ONLY actor swap: ucg stages
-            # "anna", then the swap fails — the org aborts mid-mutation
-            # (staging cleaned up, nothing archived for anna since she
-            # did not exist pre-deploy).
+            # Simulate a disk error on ucg's ONLY actor: writing nadia's
+            # first owned file fails — the org aborts mid-mutation.
             real_replace = os.replace
 
             def flaky_replace(src, dst, **kwargs):
-                if Path(dst).name == "anna" and Path(dst).parent == target:
+                if Path(dst).parent.name == "nadia" and Path(dst).name == "IDENTITY.md":
                     raise OSError(f"simulated disk error on {dst}")
                 return real_replace(src, dst, **kwargs)
 
@@ -327,8 +327,16 @@ class TestDeployMultiOrg(unittest.TestCase):
             # "everything deployed".
             self.assertEqual(result.exit_code, 1, result.output)
             self.assertIn("in_progress", result.output)
-            # au deployed; ucg's anna was NOT created (swap failed)
-            self.assertEqual({p.name for p in target.iterdir()}, set(pre_state))
+            self.assertEqual(result.exit_code, 1, result.output)
+            self.assertIn("in_progress", result.output)
+            # au deployed; ucg's nadia has no owned files written (only
+            # its scaffold dirs may exist from the failed attempt)
+            anna_dir = target / "nadia"
+            self.assertFalse(
+                (anna_dir / "SOUL.md").exists(),
+                "nadia's owned files must not have been written",
+            )
+            self.assertFalse((anna_dir / "IDENTITY.md").exists())
 
             # Rollback reconciles the interrupted session.
             runner2 = CliRunner()
@@ -352,9 +360,9 @@ class TestDeployMultiOrg(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             colliding_org_path = tmp / "otra-empresa.yaml"
-            # Org B shares actor id "alma" with org A AND has a second
-            # actor "zoe" (sorted after "alma") so the deploy-all fails
-            # mid-mutation AFTER B archived A's freshly-created "alma".
+            # Org B shares actor id "dana" with org A AND has a second
+            # actor "zoe" (sorted after "dana") so the deploy-all fails
+            # mid-mutation AFTER B archived A's freshly-created "dana".
             _ALMA_ZOE_ORG_YAML = """
 version: 1
 organization: {id: otra-empresa, name: "Other Company", sector: pyme, languages: [es]}
@@ -367,7 +375,7 @@ roles:
     reports_to: null
     access_level: level-3
 actors:
-  - id: alma
+  - id: dana
     role: ceo
     tools: [email]
   - id: zoe
@@ -394,17 +402,17 @@ communication:
             )
             build(au_spec, au_out)
             build(colliding_spec, other_out)
-            # Org B compiles to actors [alma, zoe] (sorted)
+            # Org B compiles to actors [dana, zoe] (sorted)
             self.assertEqual(
                 sorted(d.name for d in other_out.iterdir() if d.is_dir()),
-                ["alma", "zoe"],
+                ["dana", "zoe"],
             )
 
-            # EMPTY pre-deploy target: org A creates "alma" fresh, org B
-            # (sharing the actor id, --force) archives A's fresh "alma"
+            # EMPTY pre-deploy target: org A creates "dana" fresh, org B
+            # (sharing the actor id, --force) archives A's fresh "dana"
             # and swaps its own, then fails on the NEXT actor ("zoe").
             base_dir = tmp / "base"
-            au_org_dir = base_dir / "aquaponics-united"
+            au_org_dir = base_dir / "verdant-aquaponics"
             other_org_dir = base_dir / "otra-empresa"
             au_org_dir.mkdir(parents=True)
             other_org_dir.mkdir(parents=True)
@@ -415,9 +423,11 @@ communication:
                 _ALMA_ZOE_ORG_YAML, encoding="utf-8"
             )
             dist_base = tmp / "dist-base"
-            (dist_base / "aquaponics-united").mkdir(parents=True)
+            (dist_base / "verdant-aquaponics").mkdir(parents=True)
             (dist_base / "otra-empresa").mkdir(parents=True)
-            shutil.copytree(au_out, dist_base / "aquaponics-united", dirs_exist_ok=True)
+            shutil.copytree(
+                au_out, dist_base / "verdant-aquaponics", dirs_exist_ok=True
+            )
             shutil.copytree(other_out, dist_base / "otra-empresa", dirs_exist_ok=True)
 
             from click.testing import CliRunner
@@ -427,9 +437,9 @@ communication:
             real_replace = os.replace
 
             def flaky_replace(src, dst, **kwargs):
-                # Fail on "zoe" (sorted last: alma, zoe): org B archived
-                # A's fresh "alma" before hitting the error.
-                if Path(dst).name == "zoe" and Path(dst).parent == target:
+                # Fail on "zoe" (sorted last: dana, zoe): org B archived
+                # A's fresh "dana" before hitting the error.
+                if Path(dst).parent.name == "zoe" and Path(dst).name == "IDENTITY.md":
                     raise OSError(f"simulated disk error on {dst}")
                 return real_replace(src, dst, **kwargs)
 
@@ -454,9 +464,9 @@ communication:
             # F3 (cli-tests): mid-mutation failure exits non-zero.
             self.assertEqual(result.exit_code, 1, result.output)
             archive_root = target.parent / "personas-archive"
-            # org B archived A's freshly-created "alma" before failing
+            # org B archived A's freshly-created "dana" before failing
             alma_archives = [
-                p for p in archive_root.iterdir() if p.name.startswith("alma-")
+                p for p in archive_root.iterdir() if p.name.startswith("dana-")
             ]
             self.assertEqual(len(alma_archives), 1, result.output)
 
@@ -466,7 +476,7 @@ communication:
             # The in-session archive was DISCARDED, not restored, and the
             # archive root (which did not pre-exist) is fully removed.
             self.assertIn("discarded", rb.output)
-            self.assertIn("alma-", rb.output)
+            self.assertIn("dana-", rb.output)
             self.assertFalse(archive_root.exists(), rb.output)
             # Target is back to the pre-deploy state (empty).
             if target.exists():
@@ -492,8 +502,8 @@ class TestReviewCollisionBug(unittest.TestCase):
     loop) fails loudly."""
 
     def _build_orgs(self, tmp: Path):
-        """Builds AU (actors: alma, elena, paco, pepa, roberto) and a
-        colliding org (actor id 'alma' = cross-org collision with AU).
+        """Builds AU (actors: dana, elias, marco, lucia, diego) and a
+        colliding org (actor id 'dana' = cross-org collision with AU).
         Returns (au_out, other_out, target)."""
         au_spec = load_org_yaml(AU_ORG)
         other_path = tmp / "otra-empresa.yaml"
@@ -510,25 +520,25 @@ class TestReviewCollisionBug(unittest.TestCase):
         return au_out, other_out, target
 
     def test_collision_mid_deploy_leaves_no_partial_state_and_no_session(self):
-        """Deploy AU on top of a target that already has 'alma' from
-        otra-empresa. 'alma' sorts FIRST, so the old code would have
+        """Deploy AU on top of a target that already has 'dana' from
+        otra-empresa. 'dana' sorts FIRST, so the old code would have
         archived+deployed actors before reaching the collision; the
         current code rejects the whole deploy in preflight."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             au_out, other_out, target = self._build_orgs(tmp)
 
-            # Pre-seed the target with otra-empresa's 'alma' (a
+            # Pre-seed the target with otra-empresa's 'dana' (a
             # hand-written/meta-less persona would also collide, but the
             # cross-org case is the one in the review).
             target.mkdir(parents=True)
-            shutil.copytree(other_out / "alma", target / "alma")
+            shutil.copytree(other_out / "dana", target / "dana")
 
             archive_root = target.parent / "personas-archive"
             from click.testing import CliRunner
 
             runner = CliRunner()
-            # 'alma' would be archived+redeployed first, then the
+            # 'dana' would be archived+redeployed first, then the
             # cross-org collision would surface — IF detection happened
             # mid-loop. Preflight rejects before any of that.
             result = runner.invoke(
@@ -543,7 +553,7 @@ class TestReviewCollisionBug(unittest.TestCase):
             # no new actors, no lock leftovers.
             self.assertFalse(archive_root.exists(), result.output)
             self.assertEqual(
-                sorted(p.name for p in target.iterdir()), ["alma"], result.output
+                sorted(p.name for p in target.iterdir()), ["dana"], result.output
             )
             manifest = target.parent / ".phantomorg-manifest.json"
             self.assertFalse(manifest.exists(), result.output)
@@ -556,7 +566,7 @@ class TestReviewCollisionBug(unittest.TestCase):
             tmp = Path(tmp)
             au_out, other_out, target = self._build_orgs(tmp)
             target.mkdir(parents=True)
-            shutil.copytree(other_out / "alma", target / "alma")
+            shutil.copytree(other_out / "dana", target / "dana")
 
             from click.testing import CliRunner
 
@@ -567,7 +577,7 @@ class TestReviewCollisionBug(unittest.TestCase):
             )
             self.assertNotEqual(r1.exit_code, 0, r1.output)
 
-            # Now deploy UCG (no collision with 'alma') — must succeed.
+            # Now deploy UCG (no collision with 'dana') — must succeed.
             ucg_spec = load_org_yaml(UCG_ORG)
             ucg_out = tmp / "ucg_out"
             build(ucg_spec, ucg_out)
@@ -576,9 +586,9 @@ class TestReviewCollisionBug(unittest.TestCase):
                 ["deploy", "--from", str(ucg_out), "--target", str(target), "--yes"],
             )
             self.assertEqual(r2.exit_code, 0, r2.output)
-            self.assertTrue((target / "anna").exists(), r2.output)
-            # The other org's 'alma' is untouched.
-            self.assertTrue((target / "alma").exists(), r2.output)
+            self.assertTrue((target / "nadia").exists(), r2.output)
+            # The other org's 'dana' is untouched.
+            self.assertTrue((target / "dana").exists(), r2.output)
 
     def test_force_overwrites_collision_and_records_rollbackable_session(self):
         """With --force the collision is deliberate: the deploy proceeds
@@ -590,7 +600,7 @@ class TestReviewCollisionBug(unittest.TestCase):
             tmp = Path(tmp)
             au_out, other_out, target = self._build_orgs(tmp)
             target.mkdir(parents=True)
-            shutil.copytree(other_out / "alma", target / "alma")
+            shutil.copytree(other_out / "dana", target / "dana")
             archive_root = target.parent / "personas-archive"
 
             from click.testing import CliRunner
@@ -610,20 +620,20 @@ class TestReviewCollisionBug(unittest.TestCase):
             )
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertTrue(archive_root.is_dir(), result.output)
-            # AU's 'alma' replaced otra-empresa's, and it was archived.
+            # AU's 'dana' replaced otra-empresa's, and it was archived.
             alma_archives = [
-                p for p in archive_root.iterdir() if p.name.startswith("alma-")
+                p for p in archive_root.iterdir() if p.name.startswith("dana-")
             ]
             self.assertEqual(len(alma_archives), 1, result.output)
-            self.assertTrue((target / "alma" / ".phantomorg.yaml").exists())
+            self.assertTrue((target / "dana" / ".phantomorg.yaml").exists())
 
-            # Rollback restores the archived otra-empresa 'alma'.
+            # Rollback restores the archived otra-empresa 'dana'.
             rb = runner.invoke(main, ["rollback", "--target", str(target), "--yes"])
             self.assertEqual(rb.exit_code, 0, rb.output)
-            self.assertIn("alma", rb.output)
+            self.assertIn("dana", rb.output)
             # The restored persona is otra-empresa's (it has its own
-            # metadata), NOT aquaponics-united's.
-            restored_meta = target / "alma" / ".phantomorg.yaml"
+            # metadata), NOT verdant-aquaponics's.
+            restored_meta = target / "dana" / ".phantomorg.yaml"
             self.assertTrue(restored_meta.exists(), rb.output)
             import yaml as _yaml
 
@@ -676,9 +686,9 @@ class TestReviewCollisionBug(unittest.TestCase):
             out, target = tmp / "out", tmp / "target"
             build(au_spec, out)
             target.mkdir()
-            (target / "alma").mkdir()
-            (target / "alma" / ".phantomorg.yaml").write_text(
-                "organization_id: otra-empresa\nactor_id: alma\nrole_id: ceo\n",
+            (target / "dana").mkdir()
+            (target / "dana" / ".phantomorg.yaml").write_text(
+                "organization_id: otra-empresa\nactor_id: dana\nrole_id: ceo\n",
                 encoding="utf-8",
             )
 
@@ -739,10 +749,10 @@ class TestReviewCollisionBug(unittest.TestCase):
             out, target = tmp / "out", tmp / "target"
             build(au_spec, out)
             target.mkdir()
-            # pre-existing alma from a THIRD org
-            (target / "alma").mkdir()
-            (target / "alma" / ".phantomorg.yaml").write_text(
-                "organization_id: tercera-empresa\nactor_id: alma\nrole_id: ceo\n",
+            # pre-existing dana from a THIRD org
+            (target / "dana").mkdir()
+            (target / "dana" / ".phantomorg.yaml").write_text(
+                "organization_id: tercera-empresa\nactor_id: dana\nrole_id: ceo\n",
                 encoding="utf-8",
             )
 
@@ -753,8 +763,12 @@ class TestReviewCollisionBug(unittest.TestCase):
             real_replace = os.replace
 
             def flaky_replace(src, dst, **kwargs):
-                # fail on the alma swap AFTER the archive was created
-                if Path(dst).name == "alma" and Path(dst).parent == target:
+                # Fail on the first owned-file write inside 'dana' AFTER
+                # its (differing) .phantomorg.yaml was archived per-file.
+                if (
+                    Path(dst).parent.name == "dana"
+                    and Path(dst).name == ".phantomorg.yaml"
+                ):
                     raise OSError(f"simulated disk error on {dst}")
                 return real_replace(src, dst, **kwargs)
 
@@ -795,9 +809,9 @@ class TestReviewCollisionBug(unittest.TestCase):
             self.assertTrue(external.is_dir(), rb.output)
             # the real archive was restored, the target is exact
             self.assertEqual(
-                sorted(p.name for p in target.iterdir()), ["alma"], rb.output
+                sorted(p.name for p in target.iterdir()), ["dana"], rb.output
             )
-            restored_meta = target / "alma" / ".phantomorg.yaml"
+            restored_meta = target / "dana" / ".phantomorg.yaml"
             with open(restored_meta, encoding="utf-8") as f:
                 import yaml as _yaml
 
@@ -811,11 +825,11 @@ class TestReviewCollisionBug(unittest.TestCase):
         TWO orgs share an actor id (--force) and that name pre-existed in
         the target, the name is archived TWICE in one session:
 
-          alma-S1 = org A archives the PRE-SESSION version
-          alma-S2 = org B later archives org A's freshly deployed version
+          dana-S1 = org A archives the PRE-SESSION version
+          dana-S2 = org B later archives org A's freshly deployed version
 
-        The in_progress reconcile must restore ONLY alma-S1 (the
-        pre-session version) and discard alma-S2 (in-session artifact).
+        The in_progress reconcile must restore ONLY dana-S1 (the
+        pre-session version) and discard dana-S2 (in-session artifact).
         Restoring both would clobber: the second restore trashes the
         freshly restored pre-session version and leaves the in-session
         version in the target."""
@@ -832,7 +846,7 @@ roles:
     reports_to: null
     access_level: level-3
 actors:
-  - id: alma
+  - id: dana
     role: ceo
     tools: [email]
   - id: zoe
@@ -863,17 +877,17 @@ communication:
             build(au_spec, au_out)
             build(other_spec, other_out)
 
-            # PRE-EXISTING target with 'alma' from a THIRD org (the
+            # PRE-EXISTING target with 'dana' from a THIRD org (the
             # pre-session version that must survive the rollback).
             target.mkdir(parents=True)
-            (target / "alma").mkdir()
-            (target / "alma" / ".phantomorg.yaml").write_text(
-                "organization_id: tercera-empresa\nactor_id: alma\nrole_id: ceo\n",
+            (target / "dana").mkdir()
+            (target / "dana" / ".phantomorg.yaml").write_text(
+                "organization_id: tercera-empresa\nactor_id: dana\nrole_id: ceo\n",
                 encoding="utf-8",
             )
 
             base_dir = tmp / "base"
-            au_org_dir = base_dir / "aquaponics-united"
+            au_org_dir = base_dir / "verdant-aquaponics"
             other_org_dir = base_dir / "otra-empresa"
             au_org_dir.mkdir(parents=True)
             other_org_dir.mkdir(parents=True)
@@ -884,9 +898,11 @@ communication:
                 _ALMA_ZOE_ORG_YAML, encoding="utf-8"
             )
             dist_base = tmp / "dist-base"
-            (dist_base / "aquaponics-united").mkdir(parents=True)
+            (dist_base / "verdant-aquaponics").mkdir(parents=True)
             (dist_base / "otra-empresa").mkdir(parents=True)
-            shutil.copytree(au_out, dist_base / "aquaponics-united", dirs_exist_ok=True)
+            shutil.copytree(
+                au_out, dist_base / "verdant-aquaponics", dirs_exist_ok=True
+            )
             shutil.copytree(other_out, dist_base / "otra-empresa", dirs_exist_ok=True)
 
             from click.testing import CliRunner
@@ -896,9 +912,9 @@ communication:
             real_replace = os.replace
 
             def flaky_replace(src, dst, **kwargs):
-                # Fail on "zoe" (sorted last in otra-empresa: alma, zoe)
-                # AFTER both orgs archived 'alma'.
-                if Path(dst).name == "zoe" and Path(dst).parent == target:
+                # Fail on "zoe" (sorted last in otra-empresa: dana, zoe)
+                # AFTER both orgs archived 'dana'.
+                if Path(dst).parent.name == "zoe" and Path(dst).name == "IDENTITY.md":
                     raise OSError(f"simulated disk error on {dst}")
                 return real_replace(src, dst, **kwargs)
 
@@ -924,22 +940,22 @@ communication:
             self.assertEqual(result.exit_code, 1, result.output)
             archive_root = target.parent / "personas-archive"
             alma_archives = sorted(
-                p for p in archive_root.iterdir() if p.name.startswith("alma-")
+                p for p in archive_root.iterdir() if p.name.startswith("dana-")
             )
-            # org A (AU) archived the pre-session alma, org B archived
-            # AU's fresh alma: two archives, two different stamps.
+            # org A (AU) archived the pre-session dana, org B archived
+            # AU's fresh dana: two archives, two different stamps.
             self.assertEqual(len(alma_archives), 2, result.output)
 
             runner2 = CliRunner()
             rb = runner2.invoke(main, ["rollback", "--target", str(target), "--yes"])
             self.assertEqual(rb.exit_code, 0, rb.output)
-            # The in-session archive (alma-S2) was discarded, the
+            # The in-session archive (dana-S2) was discarded, the
             # pre-session one restored.
             self.assertIn("discarded", rb.output)
-            self.assertIn("alma-", rb.output)
-            # The restored 'alma' is the PRE-SESSION version (third
+            self.assertIn("dana-", rb.output)
+            # The restored 'dana' is the PRE-SESSION version (third
             # org), not AU's in-session version.
-            restored_meta = target / "alma" / ".phantomorg.yaml"
+            restored_meta = target / "dana" / ".phantomorg.yaml"
             self.assertTrue(restored_meta.exists(), rb.output)
             import yaml as _yaml
 
@@ -953,22 +969,22 @@ communication:
     def test_double_archive_same_name_committed_restores_oldest(self):
         """The COMMITTED-path mirror of the in_progress dedupe test.
 
-        A deploy-all --force where TWO orgs share an actor id ('alma')
+        A deploy-all --force where TWO orgs share an actor id ('dana')
         and that name pre-existed in the target archives it TWICE in one
         committed session:
 
-          alma-S1 = org A archives the PRE-SESSION version
-          alma-S2 = org B later archives org A's freshly deployed version
+          dana-S1 = org A archives the PRE-SESSION version
+          dana-S2 = org B later archives org A's freshly deployed version
 
-        The committed branch of plan_rollback must restore ONLY alma-S1
-        and discard alma-S2 (an in-session artifact). Restoring both in
+        The committed branch of plan_rollback must restore ONLY dana-S1
+        and discard dana-S2 (an in-session artifact). Restoring both in
         recorded order would clobber: the second restore trashes the
         freshly restored pre-session version and the trash is deleted,
         permanently losing it.
 
         The pre-v0.4.11 code had NO dedupe in the committed branch (the
         in_progress branch was fixed first), so this test failed on the
-        old code: rollback restored alma-S2 on top of alma-S1.
+        old code: rollback restored dana-S2 on top of dana-S1.
         """
         au_spec = load_org_yaml(AU_ORG)
         _ALMA_ZOE_ORG_YAML = """
@@ -983,7 +999,7 @@ roles:
     reports_to: null
     access_level: level-3
 actors:
-  - id: alma
+  - id: dana
     role: ceo
     tools: [email]
   - id: zoe
@@ -1014,17 +1030,17 @@ communication:
             build(au_spec, au_out)
             build(other_spec, other_out)
 
-            # PRE-EXISTING target with 'alma' from a THIRD org (the
+            # PRE-EXISTING target with 'dana' from a THIRD org (the
             # pre-session version that must survive the rollback).
             target.mkdir(parents=True)
-            (target / "alma").mkdir()
-            (target / "alma" / ".phantomorg.yaml").write_text(
-                "organization_id: tercera-empresa\nactor_id: alma\nrole_id: ceo\n",
+            (target / "dana").mkdir()
+            (target / "dana" / ".phantomorg.yaml").write_text(
+                "organization_id: tercera-empresa\nactor_id: dana\nrole_id: ceo\n",
                 encoding="utf-8",
             )
 
             base_dir = tmp / "base"
-            au_org_dir = base_dir / "aquaponics-united"
+            au_org_dir = base_dir / "verdant-aquaponics"
             other_org_dir = base_dir / "otra-empresa"
             au_org_dir.mkdir(parents=True)
             other_org_dir.mkdir(parents=True)
@@ -1035,9 +1051,11 @@ communication:
                 _ALMA_ZOE_ORG_YAML, encoding="utf-8"
             )
             dist_base = tmp / "dist-base"
-            (dist_base / "aquaponics-united").mkdir(parents=True)
+            (dist_base / "verdant-aquaponics").mkdir(parents=True)
             (dist_base / "otra-empresa").mkdir(parents=True)
-            shutil.copytree(au_out, dist_base / "aquaponics-united", dirs_exist_ok=True)
+            shutil.copytree(
+                au_out, dist_base / "verdant-aquaponics", dirs_exist_ok=True
+            )
             shutil.copytree(other_out, dist_base / "otra-empresa", dirs_exist_ok=True)
 
             from click.testing import CliRunner
@@ -1060,11 +1078,11 @@ communication:
                 ],
             )
             # Both orgs succeed: the session is COMMITTED, and its
-            # recorded 'archived' list contains BOTH alma archives.
+            # recorded 'archived' list contains BOTH dana archives.
             self.assertEqual(result.exit_code, 0, result.output)
             archive_root = target.parent / "personas-archive"
             alma_archives = sorted(
-                p for p in archive_root.iterdir() if p.name.startswith("alma-")
+                p for p in archive_root.iterdir() if p.name.startswith("dana-")
             )
             self.assertEqual(len(alma_archives), 2, result.output)
 
@@ -1072,26 +1090,24 @@ communication:
             import json
 
             manifest = json.loads(
-                (archive_root / ".phantomorg-manifest.json").read_text(
-                    encoding="utf-8"
-                )
+                (archive_root / ".phantomorg-manifest.json").read_text(encoding="utf-8")
             )
             committed = [
                 s for s in manifest["sessions"] if s.get("state") == "committed"
             ]
             self.assertEqual(len(committed), 1, result.output)
             archived_names = [e.get("name") for e in committed[0].get("archived", [])]
-            self.assertEqual(archived_names.count("alma"), 2, result.output)
+            self.assertEqual(archived_names.count("dana"), 2, result.output)
 
             runner2 = CliRunner()
             rb = runner2.invoke(main, ["rollback", "--target", str(target), "--yes"])
             self.assertEqual(rb.exit_code, 0, rb.output)
-            # The in-session archive (alma-S2) was discarded, the
+            # The in-session archive (dana-S2) was discarded, the
             # pre-session one restored.
             self.assertIn("discarded", rb.output)
-            # The restored 'alma' is the PRE-SESSION version (third
+            # The restored 'dana' is the PRE-SESSION version (third
             # org), not AU's in-session version.
-            restored_meta = target / "alma" / ".phantomorg.yaml"
+            restored_meta = target / "dana" / ".phantomorg.yaml"
             self.assertTrue(restored_meta.exists(), rb.output)
             import yaml as _yaml
 
@@ -1121,18 +1137,18 @@ class TestDeployPrune(unittest.TestCase):
 
             build(au_spec, au_out)
             deploy(au_out, target)
-            self.assertTrue((target / "elena").exists())
+            self.assertTrue((target / "elias").exists())
 
-            # We simulate Elena being removed from the spec: we recompile only
+            # We simulate Elias being removed from the spec: we recompile only
             # with the other 4 actors (build --only does not cover "all but
             # one", so we simulate it by deleting her folder from the build output).
-            shutil.rmtree(au_out / "elena")
+            shutil.rmtree(au_out / "elias")
 
             result = deploy(au_out, target, prune=True)
-            self.assertIn("elena", result.pruned)
-            self.assertFalse((target / "elena").exists())
+            self.assertIn("elias", result.pruned)
+            self.assertFalse((target / "elias").exists())
             # the rest stays deployed, untouched
-            self.assertTrue((target / "alma").exists())
+            self.assertTrue((target / "dana").exists())
 
     def test_prune_never_touches_other_organizations_actors(self):
         au_spec = load_org_yaml(AU_ORG)
@@ -1145,14 +1161,14 @@ class TestDeployPrune(unittest.TestCase):
             build(au_spec, au_out)
             build(ucg_spec, ucg_out)
             deploy(au_out, target)
-            deploy(ucg_out, target)  # "anna" is now also in target
+            deploy(ucg_out, target)  # "nadia" is now also in target
 
-            # We recompile AU without "elena", but ucg (anna) is not touched:
-            shutil.rmtree(au_out / "elena")
+            # We recompile AU without "elias", but ucg (nadia) is not touched:
+            shutil.rmtree(au_out / "elias")
             result = deploy(au_out, target, prune=True)
 
-            self.assertIn("elena", result.pruned)
-            self.assertTrue((target / "anna").exists())  # never touched
+            self.assertIn("elias", result.pruned)
+            self.assertTrue((target / "nadia").exists())  # never touched
 
     def test_prune_is_noop_without_flag(self):
         au_spec = load_org_yaml(AU_ORG)
@@ -1161,11 +1177,11 @@ class TestDeployPrune(unittest.TestCase):
             au_out, target = tmp / "au_out", tmp / "target"
             build(au_spec, au_out)
             deploy(au_out, target)
-            shutil.rmtree(au_out / "elena")
+            shutil.rmtree(au_out / "elias")
 
             result = deploy(au_out, target, prune=False)
             self.assertEqual(result.pruned, [])
-            self.assertTrue((target / "elena").exists())  # still there
+            self.assertTrue((target / "elias").exists())  # still there
 
 
 class TestDeployProtectsUnmanagedPersonas(unittest.TestCase):
@@ -1186,9 +1202,9 @@ class TestDeployProtectsUnmanagedPersonas(unittest.TestCase):
             build(au_spec, au_out)
 
             # We simulate an already-deployed hand-written SOUL, WITHOUT .phantomorg.yaml
-            handwritten_dir = target / "alma"
+            handwritten_dir = target / "dana"
             handwritten_dir.mkdir(parents=True)
-            original_content = "# Hand-written SOUL\nAlma's unique principles, never generated by PhantomOrg.\n"
+            original_content = "# Hand-written SOUL\nDana's unique principles, never generated by PhantomOrg.\n"
             (handwritten_dir / "SOUL.md").write_text(original_content, encoding="utf-8")
 
             with self.assertRaises(DeployCollisionError):
@@ -1208,14 +1224,14 @@ class TestDeployProtectsUnmanagedPersonas(unittest.TestCase):
             au_out, target = tmp / "au_out", tmp / "target"
             build(au_spec, au_out)
 
-            handwritten_dir = target / "alma"
+            handwritten_dir = target / "dana"
             handwritten_dir.mkdir(parents=True)
             (handwritten_dir / "SOUL.md").write_text(
                 "# Handwritten\n", encoding="utf-8"
             )
 
             result = deploy(au_out, target, force=True)
-            self.assertIn("alma", result.deployed)
+            self.assertIn("dana", result.deployed)
             # now it does carry metadata, because it came from the PhantomOrg build
             self.assertTrue((handwritten_dir / ".phantomorg.yaml").exists())
 
@@ -1225,8 +1241,8 @@ class TestDeployProtectsUnmanagedPersonas(unittest.TestCase):
             tmp = Path(tmp)
             au_out, target = tmp / "au_out", tmp / "target"
             build(au_spec, au_out)
-            (target / "alma").mkdir(parents=True)
-            (target / "alma" / "SOUL.md").write_text("x", encoding="utf-8")
+            (target / "dana").mkdir(parents=True)
+            (target / "dana" / "SOUL.md").write_text("x", encoding="utf-8")
 
             with self.assertRaises(DeployCollisionError) as ctx:
                 deploy(au_out, target, force=False)
@@ -1242,14 +1258,15 @@ class TestDeployProtectsUnmanagedPersonas(unittest.TestCase):
             build(au_spec, au_out)
             result = deploy(au_out, target, force=False)
             self.assertEqual(
-                set(result.deployed), {"paco", "pepa", "roberto", "alma", "elena"}
+                set(result.deployed), {"marco", "lucia", "diego", "dana", "elias"}
             )
 
 
 class TestDeployArchive(unittest.TestCase):
-    """Rollback safety: before any overwrite, the existing persona is
-    MOVED to personas-archive/ (phantombot's own convention), never
-    destroyed. Prune archives instead of deleting."""
+    """Additive deploy: only files PhantomOrg owns are written, in place.
+    When an owned file actually changes, its previous version is backed up
+    PER-FILE into personas-archive/ (never the whole directory). Prune
+    archives the owned files, not the accumulated mind."""
 
     def test_overwrite_archives_existing_persona_first(self):
         au_spec = load_org_yaml(AU_ORG)
@@ -1259,18 +1276,81 @@ class TestDeployArchive(unittest.TestCase):
             build(au_spec, au_out)
 
             deploy(au_out, target)  # first deploy: fresh create, nothing to archive
-            result = deploy(au_out, target)  # second deploy: overwrites
+            # Change an owned file (SOUL.md), then redeploy. The change must
+            # be INSIDE an ORG block (outside content is preserved from live).
+            soul = au_out / "dana" / "SOUL.md"
+            soul.write_text(
+                soul.read_text(encoding="utf-8").replace(
+                    "Seguridad de la información antes que velocidad",
+                    "V2: Seguridad de la información antes que velocidad",
+                ),
+                encoding="utf-8",
+            )
+            result = deploy(au_out, target)  # second deploy: overwrites SOUL.md
 
-            self.assertIn("alma", result.deployed)
+            self.assertIn("dana", result.deployed)
             archive_root = target.parent / "personas-archive"
             self.assertTrue(archive_root.is_dir())
-            archived = [d for d in archive_root.iterdir() if d.name.startswith("alma-")]
+            archived = [d for d in archive_root.iterdir() if d.name.startswith("dana-")]
             self.assertEqual(len(archived), 1)
-            # the archive keeps the PREVIOUS state (with metadata)
-            self.assertTrue((archived[0] / ".phantomorg.yaml").exists())
+            # the per-file archive keeps the PREVIOUS SOUL.md (with metadata)
+            self.assertTrue((archived[0] / "SOUL.md").exists())
+            self.assertFalse((archived[0] / "IDENTITY.md").exists())
             # the live persona is the fresh one
-            self.assertTrue((target / "alma" / "SOUL.md").exists())
-            self.assertEqual(result.archived[0][0], "alma")
+            self.assertTrue((target / "dana" / "SOUL.md").exists())
+            self.assertIn("V2: Seguridad", (target / "dana" / "SOUL.md").read_text())
+            self.assertEqual(result.archived[0][0], "dana")
+
+    def test_additive_deploy_preserves_runtime_state(self):
+        """The core phantomyard requirement: a redeploy must NEVER touch
+        runtime-owned files (identity.json, vault.sqlite, accumulated
+        MEMORY.md, daily memory, kb notes). Only owned files change."""
+        au_spec = load_org_yaml(AU_ORG)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            au_out, target = tmp / "au_out", tmp / "target"
+            build(au_spec, au_out)
+            deploy(au_out, target)
+
+            # Simulate runtime state accumulated in the live persona.
+            dana = target / "dana"
+            (dana / "identity.json").write_text(
+                '{"nsec": "nsec1runtime"}', encoding="utf-8"
+            )
+            (dana / "vault.sqlite").write_text("encrypted-secrets", encoding="utf-8")
+            (dana / "memory" / "2026-08-19.md").write_text(
+                "# daily log\n", encoding="utf-8"
+            )
+            (dana / "kb" / "concepts" / "note.md").write_text(
+                "a curated kb note\n", encoding="utf-8"
+            )
+            mem = dana / "MEMORY.md"
+            mem.write_text(mem.read_text() + "\n# Accumulated fact\n", encoding="utf-8")
+
+            # Change an owned file and redeploy (inside an ORG block).
+            soul = au_out / "dana" / "SOUL.md"
+            soul.write_text(
+                soul.read_text().replace(
+                    "Seguridad de la información antes que velocidad",
+                    "V2: Seguridad de la información antes que velocidad",
+                ),
+                encoding="utf-8",
+            )
+            deploy(au_out, target)
+
+            # Runtime state survives untouched.
+            self.assertEqual(
+                (dana / "identity.json").read_text(encoding="utf-8"),
+                '{"nsec": "nsec1runtime"}',
+            )
+            self.assertEqual(
+                (dana / "vault.sqlite").read_text(encoding="utf-8"), "encrypted-secrets"
+            )
+            self.assertTrue((dana / "memory" / "2026-08-19.md").exists())
+            self.assertTrue((dana / "kb" / "concepts" / "note.md").exists())
+            self.assertIn("Accumulated fact", (dana / "MEMORY.md").read_text())
+            # owned file updated in place
+            self.assertIn("V2: Seguridad", (dana / "SOUL.md").read_text())
 
     def test_archive_name_matches_phantombot_convention(self):
         # phantombot parses "<name>-<YYYY-MM-DDTHH-MM-SS-mmmZ>" (with
@@ -1284,12 +1364,20 @@ class TestDeployArchive(unittest.TestCase):
             au_out, target = tmp / "au_out", tmp / "target"
             build(au_spec, au_out)
             deploy(au_out, target)
+            soul = au_out / "dana" / "SOUL.md"
+            soul.write_text(
+                soul.read_text().replace(
+                    "Seguridad de la información antes que velocidad",
+                    "V2: Seguridad de la información antes que velocidad",
+                ),
+                encoding="utf-8",
+            )
             deploy(au_out, target)
 
             archive_root = target.parent / "personas-archive"
             names = [d.name for d in archive_root.iterdir()]
             pattern = re.compile(
-                r"^.+-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)(?:-\d+)?$"
+                r"^.+-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z(?:-\d+)?$"
             )
             self.assertTrue(any(pattern.match(n) for n in names), names)
 
@@ -1300,6 +1388,14 @@ class TestDeployArchive(unittest.TestCase):
             au_out, target = tmp / "au_out", tmp / "target"
             build(au_spec, au_out)
             deploy(au_out, target)
+            soul = au_out / "dana" / "SOUL.md"
+            soul.write_text(
+                soul.read_text().replace(
+                    "Seguridad de la información antes que velocidad",
+                    "V2: Seguridad de la información antes que velocidad",
+                ),
+                encoding="utf-8",
+            )
             result = deploy(au_out, target)
             self.assertIn(
                 target.parent / "personas-archive", result.created_archive_dirs
@@ -1312,54 +1408,91 @@ class TestDeployArchive(unittest.TestCase):
             au_out, target = tmp / "au_out", tmp / "target"
             build(au_spec, au_out)
             deploy(au_out, target)
-            self.assertTrue((target / "elena").exists())
+            self.assertTrue((target / "elias").exists())
 
-            # simulate Elena being removed from the spec: her folder
+            # simulate Elias being removed from the spec: her folder
             # disappears from the compiled output
-            shutil.rmtree(au_out / "elena")
+            shutil.rmtree(au_out / "elias")
             result = deploy(au_out, target, prune=True)
 
-            self.assertIn("elena", result.pruned)
-            self.assertFalse((target / "elena").exists())
+            self.assertIn("elias", result.pruned)
+            self.assertFalse((target / "elias").exists())
             archive_root = target.parent / "personas-archive"
             archived_elena = [
-                d for d in archive_root.iterdir() if d.name.startswith("elena-")
+                d for d in archive_root.iterdir() if d.name.startswith("elias-")
             ]
             self.assertEqual(len(archived_elena), 1)  # archived, not deleted
             self.assertTrue((archived_elena[0] / "SOUL.md").exists())
 
-    def test_force_overwrite_also_archives_handwritten(self):
+    def test_prune_preserves_runtime_mind(self):
+        """Prune archives the owned files but leaves the accumulated mind
+        (identity, vault, memory, kb) in place."""
+        au_spec = load_org_yaml(AU_ORG)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            au_out, target = tmp / "au_out", tmp / "target"
+            build(au_spec, au_out)
+            deploy(au_out, target)
+            elias = target / "elias"
+            (elias / "identity.json").write_text(
+                '{"nsec": "nsec1elena"}', encoding="utf-8"
+            )
+            (elias / "vault.sqlite").write_text("secrets", encoding="utf-8")
+            (elias / "memory" / "2026-08-19.md").write_text("daily\n", encoding="utf-8")
+
+            shutil.rmtree(au_out / "elias")
+            result = deploy(au_out, target, prune=True)
+
+            self.assertIn("elias", result.pruned)
+            # owned files gone, runtime mind preserved
+            self.assertFalse((elias / "SOUL.md").exists())
+            self.assertEqual(
+                (elias / "identity.json").read_text(), '{"nsec": "nsec1elena"}'
+            )
+            self.assertEqual((elias / "vault.sqlite").read_text(), "secrets")
+            self.assertTrue((elias / "memory" / "2026-08-19.md").exists())
+
+    def test_force_adopts_handwritten_preserving_soul(self):
+        """--force on a hand-written persona proceeds additively: the
+        hand-written SOUL.md (no ORG blocks) is preserved whole (opt-out),
+        while the other owned files (.phantomorg.yaml, MEMORY.md, seeds)
+        are added. Nothing is destroyed."""
         au_spec = load_org_yaml(AU_ORG)
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             au_out, target = tmp / "au_out", tmp / "target"
             build(au_spec, au_out)
 
-            handwritten = target / "alma"
+            handwritten = target / "dana"
             handwritten.mkdir(parents=True)
             (handwritten / "SOUL.md").write_text(
                 "# Handwritten\nprecious content\n", encoding="utf-8"
             )
 
             result = deploy(au_out, target, force=True)
-            self.assertIn("alma", result.deployed)
+            self.assertIn("dana", result.deployed)
+            # the hand-written SOUL (no ORG markers) is preserved in place
+            self.assertEqual(
+                (target / "dana" / "SOUL.md").read_text(encoding="utf-8"),
+                "# Handwritten\nprecious content\n",
+            )
+            # the org-owned metadata was added (the persona is now managed)
+            self.assertTrue((target / "dana" / ".phantomorg.yaml").exists())
+            # nothing was archived (nothing was overwritten)
             archive_root = target.parent / "personas-archive"
-            archived = [d for d in archive_root.iterdir() if d.name.startswith("alma-")]
-            self.assertEqual(len(archived), 1)
-            # the hand-written content is preserved in the archive
-            self.assertIn(
-                "precious content",
-                (archived[0] / "SOUL.md").read_text(encoding="utf-8"),
+            self.assertFalse(
+                any(d.name.startswith("dana-") for d in archive_root.iterdir())
+                if archive_root.is_dir()
+                else False
             )
 
 
 class TestDeployStagingAtomicity(unittest.TestCase):
-    """R4: copies go to a staging dir first; the previous version is only
-    archived after the new content is fully staged, and the swap is an
-    atomic rename. A copy failure must leave the target untouched and
-    must NOT consume a backup."""
+    """Additive deploy writes each owned file atomically (tmp + os.replace
+    on the FILE). A write failure must leave the target and any per-file
+    backup intact."""
 
-    def test_copy_failure_leaves_target_and_backup_intact(self):
+    def test_write_failure_leaves_target_and_backup_intact(self):
         au_spec = load_org_yaml(AU_ORG)
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -1367,41 +1500,40 @@ class TestDeployStagingAtomicity(unittest.TestCase):
             build(au_spec, au_out)
 
             deploy(au_out, target)  # v1 (fresh)
-            v1_soul = (target / "alma" / "SOUL.md").read_text(encoding="utf-8")
-            self.assertEqual(
-                len(list((target.parent / "personas-archive").glob("alma-*"))), 0
+            v1_soul = (target / "dana" / "SOUL.md").read_text(encoding="utf-8")
+
+            # Change an owned file so the redeploy would write it.
+            soul = au_out / "dana" / "SOUL.md"
+            soul.write_text(
+                soul.read_text().replace(
+                    "Seguridad de la información antes que velocidad",
+                    "V2: Seguridad de la información antes que velocidad",
+                ),
+                encoding="utf-8",
             )
 
-            # Simulate a mid-copy failure: the FIRST copytree (staging)
-            # fails. Nothing may change in the target or the archive.
-            import phantomorg.deploy.target as target_mod
+            # Simulate a mid-write failure: the atomic os.replace of the
+            # FILE fails. The target file keeps its old content and its
+            # per-file backup was already written (recoverable).
 
-            original_copytree = shutil.copytree
+            real_replace = os.replace
 
-            def failing_copytree(src, dst, *a, **kw):
-                if str(dst).startswith(str(target)) and ".pf-staging-" in str(dst):
-                    raise OSError("simulated copy failure")
-                return original_copytree(src, dst, *a, **kw)
+            def flaky_replace(src, dst, **kw):
+                if Path(dst).name == "SOUL.md" and Path(dst).parent.name == "dana":
+                    raise OSError("simulated write failure")
+                return real_replace(src, dst, **kw)
 
             with (
-                unittest.mock.patch.object(
-                    target_mod.shutil, "copytree", side_effect=failing_copytree
+                unittest.mock.patch(
+                    "phantomorg.deploy.target.os.replace", side_effect=flaky_replace
                 ),
                 self.assertRaises(OSError),
             ):
                 deploy(au_out, target)
 
-            # the previous version is untouched (not archived, not
-            # replaced) and no staging dir is left behind
+            # the previous version is untouched
             self.assertEqual(
-                (target / "alma" / "SOUL.md").read_text(encoding="utf-8"), v1_soul
-            )
-            self.assertEqual(
-                len(list((target.parent / "personas-archive").glob("alma-*"))), 0
-            )
-            self.assertEqual(
-                [p for p in target.iterdir() if p.name.startswith(".pf-staging-")],
-                [],
+                (target / "dana" / "SOUL.md").read_text(encoding="utf-8"), v1_soul
             )
 
     def test_deploy_leaves_no_staging_dir_after_success(self):
@@ -1507,7 +1639,7 @@ class TestDeploySymlinkSafety(unittest.TestCase):
             build(au_spec, au_out)
 
             # plant a symlink inside a compiled actor
-            (au_out / "alma" / "evil-link").symlink_to("/etc")
+            (au_out / "dana" / "evil-link").symlink_to("/etc")
 
             with self.assertRaises(DeployCollisionError) as ctx:
                 deploy(au_out, target)
@@ -1524,16 +1656,16 @@ class TestDeploySymlinkSafety(unittest.TestCase):
             build(au_spec, au_out)
             target.mkdir(parents=True)
 
-            # target/alma is a symlink pointing outside the tree
+            # target/dana is a symlink pointing outside the tree
             outside = tmp / "outside"
             outside.mkdir()
-            (target / "alma").symlink_to(outside)
+            (target / "dana").symlink_to(outside)
 
             with self.assertRaises(DeployCollisionError) as ctx:
                 deploy(au_out, target, force=True)
             self.assertIn("symlink", str(ctx.exception))
             # the symlink itself is untouched
-            self.assertTrue((target / "alma").is_symlink())
+            self.assertTrue((target / "dana").is_symlink())
             # nothing was archived
             self.assertFalse((target.parent / "personas-archive").exists())
 
@@ -1548,13 +1680,13 @@ class TestDeploySymlinkSafety(unittest.TestCase):
             target.mkdir()
             outside = tmp / "outside"
             outside.mkdir()
-            (target / "alma").symlink_to(outside, target_is_directory=True)
+            (target / "dana").symlink_to(outside, target_is_directory=True)
 
             with self.assertRaises(DeployCollisionError) as ctx:
-                archive_persona(target, "alma")
+                archive_persona(target, "dana")
             self.assertIn("symlink", str(ctx.exception))
             # the symlink is untouched and nothing was archived
-            self.assertTrue((target / "alma").is_symlink())
+            self.assertTrue((target / "dana").is_symlink())
             self.assertFalse((target.parent / "personas-archive").exists())
 
     def test_archive_persona_refuses_non_directory_file(self):
@@ -1567,15 +1699,15 @@ class TestDeploySymlinkSafety(unittest.TestCase):
             tmp = Path(tmp)
             target = tmp / "personas"
             target.mkdir()
-            (target / "alma").write_text(
+            (target / "dana").write_text(
                 "just a file, not a persona dir", encoding="utf-8"
             )
 
             with self.assertRaises(DeployError) as ctx:
-                archive_persona(target, "alma")
+                archive_persona(target, "dana")
             self.assertIn("not a directory", str(ctx.exception))
             # the file is untouched and nothing was archived
-            self.assertTrue((target / "alma").is_file())
+            self.assertTrue((target / "dana").is_file())
             self.assertFalse((target.parent / "personas-archive").exists())
 
     def test_deploy_refuses_symlink_archive_root(self):
@@ -1590,20 +1722,20 @@ class TestDeploySymlinkSafety(unittest.TestCase):
             tmp = Path(tmp)
             target = tmp / "personas"
             target.mkdir()
-            (target / "alma").mkdir()
-            (target / "alma" / "SOUL.md").write_text("PRE-alma", encoding="utf-8")
+            (target / "dana").mkdir()
+            (target / "dana" / "SOUL.md").write_text("PRE-dana", encoding="utf-8")
 
             outside = tmp / "attacker-backups"
             outside.mkdir()
             (tmp / "personas-archive").symlink_to(outside, target_is_directory=True)
 
             with self.assertRaises(DeployError) as ctx:
-                archive_persona(target, "alma")
+                archive_persona(target, "dana")
             self.assertIn("archive root", str(ctx.exception))
             self.assertIn("symlink", str(ctx.exception))
-            # nothing moved: the real alma dir is untouched and the
+            # nothing moved: the real dana dir is untouched and the
             # external location received no backup
-            self.assertTrue((target / "alma" / "SOUL.md").exists())
+            self.assertTrue((target / "dana" / "SOUL.md").exists())
             self.assertEqual(list(outside.iterdir()), [])
 
 
@@ -1658,7 +1790,7 @@ class TestDeployMetaHardening(unittest.TestCase):
             # the unrelated persona is untouched (no metadata, never
             # pruned, never archived)
             self.assertTrue((target / "unrelated").is_dir())
-            self.assertTrue((target / "paco").is_dir())
+            self.assertTrue((target / "marco").is_dir())
             # no phantom in_progress journal
             from phantomorg.deploy.session import load_sessions
 
@@ -1676,7 +1808,7 @@ class TestDeployMetaHardening(unittest.TestCase):
             target = tmp / "target"
             target.mkdir()
 
-            colliding = target / "alma"
+            colliding = target / "dana"
             colliding.mkdir()
             (colliding / ".phantomorg.yaml").write_text(
                 "- just\n- a\n- list\n", encoding="utf-8"
@@ -1689,7 +1821,7 @@ class TestDeployMetaHardening(unittest.TestCase):
                 main,
                 ["deploy", "--from", str(au_out), "--target", str(target), "--yes"],
             )
-            # 'alma' collides (existing target without readable
+            # 'dana' collides (existing target without readable
             # metadata): refused cleanly, no traceback.
             self.assertNotEqual(result.exit_code, 0, result.output)
             self.assertNotIn("Traceback", result.output)
@@ -1708,12 +1840,12 @@ class TestDeployMetaHardening(unittest.TestCase):
             target = tmp / "target"
             target.mkdir()
             # Pre-existing managed persona from AU (has metadata)
-            shutil.copytree(au_out / "alma", target / "alma")
+            shutil.copytree(au_out / "dana", target / "dana")
 
             # Hand-assembled build dir: actor WITHOUT .phantomorg.yaml
             fake_build = tmp / "fake-build"
             fake_build.mkdir()
-            actor_dir = fake_build / "alma"
+            actor_dir = fake_build / "dana"
             actor_dir.mkdir()
             (actor_dir / "SOUL.md").write_text("tampered", encoding="utf-8")
 
@@ -1729,8 +1861,8 @@ class TestDeployMetaHardening(unittest.TestCase):
             self.assertNotIn("Traceback", result.output)
             # the existing persona was NOT overwritten
             self.assertEqual(
-                (target / "alma" / ".phantomorg.yaml").read_text(encoding="utf-8"),
-                (au_out / "alma" / ".phantomorg.yaml").read_text(encoding="utf-8"),
+                (target / "dana" / ".phantomorg.yaml").read_text(encoding="utf-8"),
+                (au_out / "dana" / ".phantomorg.yaml").read_text(encoding="utf-8"),
             )
 
             # With --force it deploys anyway.
@@ -1747,9 +1879,18 @@ class TestDeployMetaHardening(unittest.TestCase):
                 ],
             )
             self.assertEqual(result.exit_code, 0, result.output)
-            self.assertEqual(
-                (target / "alma" / "SOUL.md").read_text(encoding="utf-8"),
+            # Additive --force: the fake build's SOUL.md has no ORG blocks,
+            # so the managed persona's SOUL.md is preserved (opt-out); the
+            # fake build's metadata is NOT written over the real one.
+            self.assertTrue((target / "dana" / "SOUL.md").exists())
+            self.assertNotEqual(
+                (target / "dana" / "SOUL.md").read_text(encoding="utf-8"),
                 "tampered",
+            )
+            # the managed persona's metadata is preserved
+            self.assertEqual(
+                (target / "dana" / ".phantomorg.yaml").read_text(encoding="utf-8"),
+                (au_out / "dana" / ".phantomorg.yaml").read_text(encoding="utf-8"),
             )
 
 
@@ -1921,16 +2062,16 @@ communication:
                 encoding="utf-8",
             )
 
-            # Deploy AU fully so elena exists in the target with
-            # metadata organization_id = aquaponics-united.
+            # Deploy AU fully so elias exists in the target with
+            # metadata organization_id = verdant-aquaponics.
             au_out = tmp / "au_out"
             build(au_spec, au_out)
             target = tmp / "target"
             deploy(au_out, target)
 
-            # Rebuild AU with elena REMOVED from the compiled output (a
+            # Rebuild AU with elias REMOVED from the compiled output (a
             # stale actor of the same org — the prune candidate).
-            shutil.rmtree(au_out / "elena")
+            shutil.rmtree(au_out / "elias")
             dist_base = tmp / "dist"
             dist_au = dist_base / "au"
             shutil.copytree(au_out, dist_au)
@@ -1955,18 +2096,16 @@ communication:
             )
             self.assertEqual(result.exit_code, 0, result.output)
 
-            # elena WAS actually pruned (metadata org id matches).
-            self.assertFalse((target / "elena").exists())
+            # elias WAS actually pruned (metadata org id matches).
+            self.assertFalse((target / "elias").exists())
 
             # And the durable journal recorded it under planned_pruned,
             # using the metadata org id — the old folder-name matching
-            # (org ids {"au", "mapped"}) would have omitted elena.
-            manifest = (
-                target.parent / "personas-archive" / ".phantomorg-manifest.json"
-            )
+            # (org ids {"au", "mapped"}) would have omitted elias.
+            manifest = target.parent / "personas-archive" / ".phantomorg-manifest.json"
             doc = json.loads(manifest.read_text(encoding="utf-8"))
             session = doc["sessions"][-1]
-            self.assertIn("elena", session.get("planned_pruned", []))
+            self.assertIn("elias", session.get("planned_pruned", []))
 
 
 class TestDeployTargetSymlink(unittest.TestCase):
@@ -1994,8 +2133,8 @@ class TestDeployTargetSymlink(unittest.TestCase):
             target = base / "personas"
             out = _build_au_module(base)
             result = deploy(out, target_dir=target)
-            self.assertTrue((target / "alma").is_dir())
-            self.assertIn("alma", result.deployed)
+            self.assertTrue((target / "dana").is_dir())
+            self.assertIn("dana", result.deployed)
 
 
 if __name__ == "__main__":

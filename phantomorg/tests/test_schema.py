@@ -4,13 +4,13 @@ from pathlib import Path
 
 from phantomorg.spec.loader import OrgSpecError, load_org_yaml
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
 
 class TestSchema(unittest.TestCase):
     def test_loads_au_org_yaml(self):
         spec = load_org_yaml(AU_ORG)
-        self.assertEqual(spec.organization.id, "aquaponics-united")
+        self.assertEqual(spec.organization.id, "verdant-aquaponics")
         self.assertEqual(len(spec.actors), 5)
         self.assertEqual(len(spec.roles), 5)
         self.assertEqual(len(spec.departments), 4)

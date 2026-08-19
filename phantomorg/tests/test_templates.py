@@ -26,7 +26,7 @@ class TestTemplates(unittest.TestCase):
     def test_new_org_with_ngo_template_has_four_departments(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = new_org(
-                "aquaponics-united-2",
+                "verdant-aquaponics-2",
                 "AU 2",
                 "ngo",
                 ["es"],
@@ -59,7 +59,7 @@ class TestTemplates(unittest.TestCase):
                     "access_level": "level-3",
                 }
             )
-            doc["actors"].append({"id": "carla", "role": "ceo", "tools": ["email"]})
+            doc["actors"].append({"id": "vera", "role": "ceo", "tools": ["email"]})
             path.write_text(
                 yaml.safe_dump(doc, allow_unicode=True, sort_keys=False),
                 encoding="utf-8",

@@ -1,6 +1,6 @@
 # PhantomOrg — Technical specification
 **From persona engine to platform for AI agent organizations**
-Author: Maki, for Salvador · 2026-08-02 · v4 (with external references, real audit, and bootstrap-ready spec)
+Author: Maki, for Board President · 2026-08-02 · v4 (with external references, real audit, and bootstrap-ready spec)
 
 > Project name: **PhantomOrg**. CLI: `po` (alias `phantomorg`). Replaces "Forja" in all prior work.
 
@@ -8,13 +8,13 @@ Author: Maki, for Salvador · 2026-08-02 · v4 (with external references, real a
 
 ## 0. How to read this document
 
-It is written for two readers at once: **Salvador**, who decides scope and priorities, and an **LLM (e.g. Claude Code)** that can take section 6 onward and start generating the repository without needing any more context than this file. That is why there is JSON Schema, pseudocode, and a backlog in ticket format, not just prose.
+It is written for two readers at once: **Board President**, who decides scope and priorities, and an **LLM (e.g. Claude Code)** that can take section 6 onward and start generating the repository without needing any more context than this file. That is why there is JSON Schema, pseudocode, and a backlog in ticket format, not just prose.
 
 ---
 
 ## 1. Executive summary
 
-PhantomOrg is an engine that models **any organization** as departments, roles, actors, access policies, and communication rules — and compiles that into the files that an agent runtime (today, Phantombot) loads. Aquaponics United (AU) is the first real case, with concrete data already audited in this document (section 3).
+PhantomOrg is an engine that models **any organization** as departments, roles, actors, access policies, and communication rules — and compiles that into the files that an agent runtime (today, Phantombot) loads. Verdant Aquaponics Co-op (AU) is the first real case, with concrete data already audited in this document (section 3).
 
 Two things change compared to v3:
 
@@ -30,23 +30,23 @@ Two things change compared to v3:
 | **Google A2A Protocol** (Apache-2.0, governed by the Linux Foundation since Jun. 2025) | Open protocol for agents from different vendors to discover, negotiate, and coordinate tasks over HTTP/JSON-RPC, with *Agent Cards* (capability metadata) and *Tasks* with versioned state | The **Agent Card** concept inspires the `capabilities` block of each actor in the spec; the **Task with lifecycle** concept (submitted → working → completed/failed) inspires how an escalation between roles is modeled — not as a loose message but as a unit of work with state | Not reinventing a message format from scratch; reusing a vocabulary already validated in production by multiple vendors |
 | **FIPA-ACL / KQML** (90s-2000s standard, IEEE since 2005) | Agent communication language based on "performatives" (inform, request, agree, refuse...) with formal semantics | Confirms that **a small, closed vocabulary of message types** (not an endless list) is what makes an agent protocol usable | FIPA-ACL never achieved real adoption outside academia/defense precisely because of overly rich ontologies and verbose XML encoding — **PhantomOrg limits the internal protocol to 5 message types**, not 12+ performatives |
 | **CrewAI — hierarchical vs sequential process** | Agent framework with a "manager delegates to workers" mode | Confirms the **escalation matrix with explicit hierarchy** pattern (manager validates and redirects) | Production reports document that hierarchical delegation without an iteration limit (`max_iter`) can enter an infinite loop, and that only "manager" roles should have `allow_delegation=True` — **PhantomOrg adopts this as `max_hops` and as a rule: only roles with reports_to null or with subordinates may re-escalate** |
-| **RBAC vs ABAC vs PBAC** (NIST, IAM practices at AWS/enterprise) | Access control models: by fixed role, by dynamic attributes, or hybrid | Confirms that **a role for every exception** leads to "role explosion" (NIST documents organizations with thousands of roles). The validated solution is a **hybrid model**: RBAC for the base level (department/role) + per-actor exception attributes (ABAC) for cases like "Category 0 only for Salvador" | This is exactly the problem AU already has today: Category 0 lives "by hand" in Paco's SOUL. PhantomOrg models it as an **actor exception attribute**, not as a new role |
+| **RBAC vs ABAC vs PBAC** (NIST, IAM practices at AWS/enterprise) | Access control models: by fixed role, by dynamic attributes, or hybrid | Confirms that **a role for every exception** leads to "role explosion" (NIST documents organizations with thousands of roles). The validated solution is a **hybrid model**: RBAC for the base level (department/role) + per-actor exception attributes (ABAC) for cases like "Category 0 only for Board President" | This is exactly the problem AU already has today: Category 0 lives "by hand" in Marco's SOUL. PhantomOrg models it as an **actor exception attribute**, not as a new role |
 
 **Conclusion of the external audit:** PhantomOrg's design is not original in its parts — it is a deliberate combination of already-validated patterns, avoiding the two documented historical failures (FIPA-ACL: too much semantics, too little adoption; role explosion: too many roles, too little governance).
 
 ---
 
-## 3. Audit with real Aquaponics United data
+## 3. Audit with real Verdant Aquaponics Co-op data
 
-This is what currently exists in AU's 5 personas (alma, elena, paco, pepa, roberto), audited against the references in section 2:
+This is what currently exists in AU's 5 personas (dana, elias, marco, lucia, diego), audited against the references in section 2:
 
 | # | Real finding in AU | Why it is a problem (with reference) | Solution in the PhantomOrg spec |
 |---|---|---|---|
 | G1 | The "Priority Rule #0" (the main coordination group), Category 1, Zero Infrastructure Disclosure, and the Request-ID format are copied almost identically across the 5 SOUL.md files | Without an *Agent Card* / central spec, each copy diverges over time (this is exactly what A2A solves by centralizing capabilities and message format) | `communication.request_id_format` and `policies.*` are defined **once** in `org.yaml`; the compiler injects them identically into the 5 agents |
-| G2 | Elena has Category 3, Alma doesn't — with no clarity on whether it is a decision or an oversight | This is exactly "silent role explosion": an access exception lives implicitly in an individual SOUL, not in an auditable policy | `security_exceptions` as an explicit **role** field, visible and versioned in the spec (see `training_lead` in the section 5.3 `org.yaml`) |
-| G3 | Pepa: "send not available" — a tool restriction not documented in any comparable way in the other agents | Without a per-actor capability model (Agent Card), tool restrictions become ad-hoc | Per-actor `tools` block in the spec, with support for explicit restrictions (`tools_excluded`) |
-| G4 | Roberto escalates to "Paco, Salvador or Fran" — an escalation route different from the other agents', with no common matrix existing | This is exactly the anti-pattern CrewAI documents as a cause of loops and unpredictable behavior: delegation rules written in free prose, agent by agent | `escalation_matrix` as a single declarative table, validated by the compiler (no cycles, no references to nonexistent roles) — see section 5.4 |
-| G5 | Category 0 (Salvador's absolute exception) lives as free text in Paco's SOUL | It is an **actor** exception, not a role one — folding it into the role would duplicate it if a second CEO appears tomorrow in another organization | Modeled as an exception attribute at the **actor** level, following the ABAC pattern (subject attribute, not role attribute) |
+| G2 | Elias has Category 3, Dana doesn't — with no clarity on whether it is a decision or an oversight | This is exactly "silent role explosion": an access exception lives implicitly in an individual SOUL, not in an auditable policy | `security_exceptions` as an explicit **role** field, visible and versioned in the spec (see `training_lead` in the section 5.3 `org.yaml`) |
+| G3 | Lucia: "send not available" — a tool restriction not documented in any comparable way in the other agents | Without a per-actor capability model (Agent Card), tool restrictions become ad-hoc | Per-actor `tools` block in the spec, with support for explicit restrictions (`tools_excluded`) |
+| G4 | Diego escalates to "Marco, Board President or Tomás" — an escalation route different from the other agents', with no common matrix existing | This is exactly the anti-pattern CrewAI documents as a cause of loops and unpredictable behavior: delegation rules written in free prose, agent by agent | `escalation_matrix` as a single declarative table, validated by the compiler (no cycles, no references to nonexistent roles) — see section 5.4 |
+| G5 | Category 0 (Board President's absolute exception) lives as free text in Marco's SOUL | It is an **actor** exception, not a role one — folding it into the role would duplicate it if a second CEO appears tomorrow in another organization | Modeled as an exception attribute at the **actor** level, following the ABAC pattern (subject attribute, not role attribute) |
 | G6 | Shell commands embedded in the SOUL (`bash notebooklm.sh`) | Couples the agent's identity to the implementation — already flagged in the ChatGPT/OrgOS audit, and contrary to A2A's Agent Card principle (declared capabilities, not commands) | `tools.md` declares logical capabilities; the mapping to real commands lives in a separate layer that the compiler resolves, not in the SOUL |
 | G7 | No mechanism exists to detect whether an escalation forms a cycle (A escalates to B, B escalates to A) | It has never happened in AU with 5 agents, but it is mathematically inevitable as things grow — CrewAI documents it as a real production failure | The validator runs a **directed acyclic graph (DAG)** check over `escalation_matrix` before any `build` (section 5.5) |
 
@@ -71,8 +71,8 @@ This is what currently exists in AU's 5 personas (alma, elena, paco, pepa, rober
 ```yaml
 request_id: "au-20260802-0042"     # format defined in org.yaml
 type: ESCALATE
-from: { actor: alma, role: project_lead, department: operations }
-to:   { actor: pepa, role: chief_of_staff, department: management }
+from: { actor: dana, role: project_lead, department: operations }
+to:   { actor: lucia, role: chief_of_staff, department: management }
 hops: 1                             # incremented on each re-escalation; cut off at max_hops
 trust: internal                     # internal | external | untrusted (aligned with Phantombot's security perimeter)
 payload: "..."
@@ -202,14 +202,14 @@ the requested build directory — ids are used as filesystem path
 components (the compiler writes `out_dir/<actor.id>/`), so a traversal
 id like `../outside` can never write outside the build boundary.
 
-### 5.3 Real Aquaponics United `org.yaml` (instance, not design)
+### 5.3 Real Verdant Aquaponics Co-op `org.yaml` (instance, not design)
 
 ```yaml
 version: 1
 
 organization:
-  id: aquaponics-united
-  name: "Aquaponics United"
+  id: verdant-aquaponics
+  name: "Verdant Aquaponics Co-op"
   sector: ngo
   languages: [es, en]
   default_language: es
@@ -225,7 +225,7 @@ roles:
     name: "CEO"
     department: management
     reports_to: null
-    reports_to_human: "Salvador"
+    reports_to_human: "Board President"
     functions: [vision, leadership, wikipedia_au, tools]
     access_level: level-3
 
@@ -256,33 +256,33 @@ roles:
     reports_to: chief_of_staff
     functions: [training, documentation]
     access_level: level-2
-    security_exceptions: [category-3]     # previously maintained by hand in Elena's SOUL; now explicit and auditable (resolves G2)
+    security_exceptions: [category-3]     # previously maintained by hand in Elias's SOUL; now explicit and auditable (resolves G2)
 
 actors:
-  - id: paco
+  - id: marco
     role: ceo
-    telegram_bot: "@CEO_bot"
+    telegram_bot: "@marco_bot"
     tools: [email, drive, calendar, notebooklm, printing]
-    actor_exceptions: [category-0]        # Salvador's absolute exception, modeled as an actor attribute, not a role one (resolves G5)
+    actor_exceptions: [category-0]        # Board President's absolute exception, modeled as an actor attribute, not a role one (resolves G5)
     tone: formal-close
 
-  - id: pepa
+  - id: lucia
     role: chief_of_staff
     telegram_bot: "@COS_bot"
     tools: [email, drive, calendar]
     tools_excluded: [send]                # previously a loose note ("send not available"); now a declared field (resolves G3)
 
-  - id: roberto
+  - id: diego
     role: cfo
-    telegram_bot: "@CFO_bot"
+    telegram_bot: "@diego_bot"
     tools: [email, drive, calendar, sheets]
 
-  - id: alma
+  - id: dana
     role: project_lead
     telegram_bot: "@PL_bot"
     tools: [email, drive, calendar, notebooklm]
 
-  - id: elena
+  - id: elias
     role: training_lead
     telegram_bot: "@Training_bot"
     tools: [email, drive, notebooklm]
@@ -293,7 +293,7 @@ policies:
     level-2: { label: "Operative", categories: [1, 2] }
     level-1: { label: "Restricted", categories: [1] }
   security_categories:
-    category-0: { label: "Absolute exception", scope: actor, owner: "Salvador" }
+    category-0: { label: "Absolute exception", scope: actor, owner: "Board President" }
     category-1: { label: "Public / low-internal" }
     category-2: { label: "Confidential" }
     category-3: { label: "Credentials / sensitive financial" }
@@ -304,8 +304,8 @@ escalation_matrix:
   - { from: cfo,            to: ceo,            condition: "expense above the financial policy threshold" }
   - { from: chief_of_staff, to: ceo,            condition: "blocker unresolved at their level" }
   - { from: "*",            to: ceo,            condition: "Category 0 exception requested", cross_department: true }
-  # note: today's real route ("Roberto escalates to Paco, Salvador or Fran") resolves
-  # explicitly here as "cfo → ceo"; "Salvador" and "Fran" stay out of the matrix
+  # note: today's real route ("Diego escalates to Marco, Board President or Tomás") resolves
+  # explicitly here as "cfo → ceo"; "Board President" and "Tomás" stay out of the matrix
   # because they are people, not roles — they must be defined as `reports_to_human` or as
   # a human escalation exception, never as free text (resolves G4)
 
@@ -326,7 +326,7 @@ communication:
 
 - **Base level (RBAC)**: `access_level` on the role, inherited from the department's `access_policy`.
 - **Role exception**: `security_exceptions` — valid for *any actor* holding that role (e.g. Category 3 for whoever is Training Lead).
-- **Actor exception (ABAC)**: `actor_exceptions` — valid only for that specific persona, not for the role (e.g. Category 0 only for Paco/Salvador, not for a future second CEO).
+- **Actor exception (ABAC)**: `actor_exceptions` — valid only for that specific persona, not for the role (e.g. Category 0 only for Marco/Board President, not for a future second CEO).
 
 This is exactly the documented recommendation against "role explosion": do not create a new role for every exception; instead, separate role-exception from actor-exception.
 
@@ -361,7 +361,7 @@ phantomorg/
 │   └── deploy/
 │       └── phantombot_target.py  # copies to ~/.local/share/phantombot/personas/
 ├── organizations/
-│   └── aquaponics-united/
+│   └── verdant-aquaponics/
 │       └── org.yaml            # real instance, section 5.3
 └── tests/
     ├── test_schema.py
@@ -649,7 +649,7 @@ holding its private key) whose derived npub matches the one declared in
 ### 7.4 Telegram bot verification (`po telegram-check`)
 
 Each actor declares the Telegram handle citizens use to reach it in the
-"cadena de personas" (`actors[].telegram_bot`, e.g. `@CEO_bot`). The
+"cadena de personas" (`actors[].telegram_bot`, e.g. `@marco_bot`). The
 handle is *declared* state (org.yaml), but the authoritative value is
 what the bot token actually resolves to — Telegram's `getMe` is the
 source of truth. A handle can silently drift (bot renamed, token
@@ -767,6 +767,6 @@ The scaffold mirrors Phantombot's `personaScaffold.ts` exactly: `memory/` gets t
 1. **Where to build**: local repo in the workspace, or VPS?
 2. **Stack**: Python 3 (`questionary`/`rich` + `pydantic` for the schema) vs Bun/TypeScript (same stack as Phantombot). This document's pseudocode is in Python for readability, but it is portable 1:1.
 3. **Name confirmation**: PhantomOrg, CLI `po`.
-4. **Kickoff**: should I start with Epic 0 (T0.1–T0.5) this week, using alma as a smoke pilot before touching AU's 5 real personas?
+4. **Kickoff**: should I start with Epic 0 (T0.1–T0.5) this week, using dana as a smoke pilot before touching AU's 5 real personas?
 
 With a green light, this document (sections 5–10) is enough for an LLM in Claude Code to bootstrap the repo without any more context than this file.

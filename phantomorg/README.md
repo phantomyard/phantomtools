@@ -104,8 +104,8 @@ po remove-role   --org organizations/my-org/org.yaml --id team_lead --cascade   
 po remove-department --org organizations/my-org/org.yaml --id ops              # blocks while it still has roles
 
 # Validate and compile
-po validate --org organizations/aquaponics-united/org.yaml
-po build --org organizations/aquaponics-united/org.yaml --out ./dist
+po validate --org organizations/verdant-aquaponics/org.yaml
+po build --org organizations/verdant-aquaponics/org.yaml --out ./dist
 po deploy --from ./dist --target ~/.local/share/phantombot/personas/ --force   # --force only if you accept overwriting another organization
 
 # Multi-organization
@@ -187,19 +187,19 @@ roles:
     description: "Runs the pilot project end to end."
 
 actors:
-  - id: paco
+  - id: marco
     role: ceo
     npub: npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf
-    telegram_bot: "@CEO_bot"
+    telegram_bot: "@marco_bot"
     tools: [email, drive, calendar]
     tools_excluded: []
     actor_exceptions: []
     tone: formal
 
-  - id: alma
+  - id: dana
     role: project_lead
     npub: npub1ggyxfrue07z39dl0ag3lge3z8l7vtunlyrg9quwcdh4r84rnwq4s25aqa9
-    telegram_bot: "@Alma_bot"
+    telegram_bot: "@dana_bot"
     tools: [email, drive, notebooklm]
     tools_excluded: []
     actor_exceptions: []
@@ -256,7 +256,7 @@ under `./dist/<actor_id>/`:
 
 ```
 dist/
-├── paco/
+├── marco/
 │   ├── IDENTITY.md        # name, role, department, reports-to, channel, tone
 │   ├── SOUL.md            # personality + functions, derived from role/access level
 │   ├── tools.md           # the actor's tool list (email, drive, calendar)
@@ -265,7 +265,7 @@ dist/
 │   ├── .phantomorg.yaml # provenance — which org/role generated this persona
 │   ├── memory/            # commitments, decisions, people, lessons scaffolds
 │   └── kb/                # Home.md + norms + templates (decision, runbook, …)
-└── alma/
+└── dana/
     └── …                  # same tree, built from project_lead instead
 ```
 
@@ -307,9 +307,9 @@ language.
 The repo ships two real example organizations that demonstrate the
 two directions:
 
-- `organizations/aquaponics-united/org.yaml` — Spanish-speaking org,
+- `organizations/verdant-aquaponics/org.yaml` — Spanish-speaking org,
   `default_language: es`. Its generated personas come out in Spanish.
-- `organizations/united-capital-group/org.yaml` — English-speaking org,
+- `organizations/harbor-capital/org.yaml` — English-speaking org,
   `default_language: en`. Its generated personas come out in English.
 
 Add a new language by adding a translated block to
@@ -470,7 +470,7 @@ phantomorg/
 └── wizard/                 # interactive commands (new-org, add-role, add-actor...)
 
 organizations/
-└── aquaponics-united/
+└── verdant-aquaponics/
     └── org.yaml            # real instance used as a test fixture
 
 tests/                      # pytest: schema, escalation cycles, end-to-end compilation

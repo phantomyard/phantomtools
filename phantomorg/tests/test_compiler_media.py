@@ -25,7 +25,7 @@ from phantomorg.compiler.build import (
 )
 from phantomorg.validator import validate_org
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
 
 def _au_spec():
@@ -61,13 +61,11 @@ class TestAtomicWrites(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "SOUL.md"
             original = (
-                "<!-- ORG:BEGIN tools -->\nold\n<!-- ORG:END tools -->\n"
-                "manual note\n"
+                "<!-- ORG:BEGIN tools -->\nold\n<!-- ORG:END tools -->\nmanual note\n"
             )
             p.write_text(original, encoding="utf-8")
             new_content = (
-                "<!-- ORG:BEGIN tools -->\nnew\n<!-- ORG:END tools -->\n"
-                "manual note\n"
+                "<!-- ORG:BEGIN tools -->\nnew\n<!-- ORG:END tools -->\nmanual note\n"
             )
             surviving = self._simulate_crash(write_if_changed, p, new_content)
             self.assertEqual(surviving, original)
@@ -180,7 +178,7 @@ class TestBuildAllDirIdMismatch(unittest.TestCase):
     """F9: build-all warns when directory name != organization.id."""
 
     def _copy_au_org(self, base: Path, dir_name: str) -> Path:
-        """Copy the AU org (id aquaponics-united) under ``dir_name``."""
+        """Copy the AU org (id verdant-aquaponics) under ``dir_name``."""
         org_yaml = base / dir_name / "org.yaml"
         org_yaml.parent.mkdir(parents=True)
         org_yaml.write_bytes(AU_ORG.read_bytes())
@@ -200,13 +198,13 @@ class TestBuildAllDirIdMismatch(unittest.TestCase):
                 "directory name 'renamed-dir' != organization.id", result.output
             )
             # still builds into the dir-name key (layout behavior unchanged)
-            self.assertTrue((out / "renamed-dir" / "paco" / "SOUL.md").exists())
+            self.assertTrue((out / "renamed-dir" / "marco" / "SOUL.md").exists())
 
     def test_match_no_warning(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "orgs"
             out = Path(tmp) / "out"
-            self._copy_au_org(base, "aquaponics-united")
+            self._copy_au_org(base, "verdant-aquaponics")
             runner = CliRunner()
             result = runner.invoke(
                 main, ["build-all", "--base", str(base), "--out", str(out)]

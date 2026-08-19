@@ -13,7 +13,7 @@ from phantomorg.importer import (
 )
 from phantomorg.spec.loader import load_org_yaml
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
 _FAKE_IDENTITY = """# Identity
 Name: marcos
@@ -97,8 +97,8 @@ class TestResolveAgainstOrg(unittest.TestCase):
     """
     Reproduces the real gap reported: 'reports_to_guess' was free text
     that was never translated into a real role_id. These tests use
-    exactly the pattern found in the original Aquaponics United audit
-    (Roberto escalating to "Paco, Salvador o Fran": several names, some
+    exactly the pattern found in the original Verdant Aquaponics Co-op audit
+    (Diego escalating to "Marco, Board President o Tomás": several names, some
     are real roles/actors of the spec, others are external humans who are
     not).
     """
@@ -108,28 +108,28 @@ class TestResolveAgainstOrg(unittest.TestCase):
 
     def test_resolves_unambiguous_match_by_actor_id(self):
         findings = ImportFindings(
-            actor_id="x", reports_to_guess="Paco, Salvador o Fran"
+            actor_id="x", reports_to_guess="Marco, Board President o Tomás"
         )
         resolved = resolve_against_org(findings, self.au_spec)
 
         self.assertEqual(
             resolved.resolved_reports_to_role_id, "ceo"
-        )  # paco -> role ceo
+        )  # marco -> role ceo
         self.assertEqual(resolved.ambiguous_candidates, [])
-        # Salvador and Fran are not roles/actors in the spec (they are external humans)
-        self.assertIn("Salvador", resolved.unmatched_candidates)
-        self.assertIn("Fran", resolved.unmatched_candidates)
+        # Board President and Tomás are not roles/actors in the spec (they are external humans)
+        self.assertIn("Board President", resolved.unmatched_candidates)
+        self.assertIn("Tomás", resolved.unmatched_candidates)
         self.assertTrue(any("ceo" in note for note in resolved.resolution_notes))
 
     def test_suggests_department_from_resolved_role(self):
-        findings = ImportFindings(actor_id="x", reports_to_guess="Pepa")
+        findings = ImportFindings(actor_id="x", reports_to_guess="Lucia")
         resolved = resolve_against_org(findings, self.au_spec)
 
         self.assertEqual(resolved.resolved_reports_to_role_id, "chief_of_staff")
         self.assertEqual(resolved.suggested_department_id, "direccion")
 
     def test_ambiguous_when_candidates_map_to_different_roles(self):
-        findings = ImportFindings(actor_id="x", reports_to_guess="Pepa o Roberto")
+        findings = ImportFindings(actor_id="x", reports_to_guess="Lucia o Diego")
         resolved = resolve_against_org(findings, self.au_spec)
 
         self.assertIsNone(resolved.resolved_reports_to_role_id)
@@ -149,7 +149,7 @@ class TestResolveAgainstOrg(unittest.TestCase):
         self.assertIsNone(resolved.resolved_reports_to_role_id)
 
     def test_fragment_uses_resolved_role_id(self):
-        findings = ImportFindings(actor_id="marcos", reports_to_guess="Pepa")
+        findings = ImportFindings(actor_id="marcos", reports_to_guess="Lucia")
         resolved = resolve_against_org(findings, self.au_spec)
         fragment = render_org_yaml_fragment(
             findings,
@@ -160,7 +160,7 @@ class TestResolveAgainstOrg(unittest.TestCase):
         self.assertIn("reports_to: chief_of_staff", fragment)
 
     def test_fragment_flags_ambiguity_explicitly(self):
-        findings = ImportFindings(actor_id="marcos", reports_to_guess="Pepa o Roberto")
+        findings = ImportFindings(actor_id="marcos", reports_to_guess="Lucia o Diego")
         resolved = resolve_against_org(findings, self.au_spec)
         fragment = render_org_yaml_fragment(
             findings,
@@ -187,14 +187,14 @@ class TestFuzzyMatching(unittest.TestCase):
         self.au_spec = load_org_yaml(AU_ORG)
 
     def test_typo_in_actor_id_resolves_via_fuzzy_match(self):
-        # "Robrto" (missing the 'e'): neither exact nor substring of "roberto", but fuzzy does match.
-        findings = ImportFindings(actor_id="x", reports_to_guess="Robrto")
+        # "Digo" (missing the 'e'): neither exact nor substring of "diego", but fuzzy does match.
+        findings = ImportFindings(actor_id="x", reports_to_guess="Digo")
         resolved = resolve_against_org(findings, self.au_spec)
 
         self.assertEqual(resolved.resolved_reports_to_role_id, "cfo")
         self.assertEqual(len(resolved.fuzzy_matches), 1)
         cand, _, role_id = resolved.fuzzy_matches[0]
-        self.assertEqual(cand, "Robrto")
+        self.assertEqual(cand, "Digo")
         self.assertEqual(role_id, "cfo")
         self.assertTrue(any("fuzzy match" in n for n in resolved.resolution_notes))
 
@@ -208,7 +208,7 @@ class TestFuzzyMatching(unittest.TestCase):
         self.assertIn("Xylophone", resolved.unmatched_candidates)
 
     def test_exact_match_is_not_reported_as_fuzzy(self):
-        findings = ImportFindings(actor_id="x", reports_to_guess="Pepa")
+        findings = ImportFindings(actor_id="x", reports_to_guess="Lucia")
         resolved = resolve_against_org(findings, self.au_spec)
         self.assertEqual(resolved.fuzzy_matches, [])  # exact match, not fuzzy
 
@@ -261,7 +261,7 @@ class TestDepartmentSuggestion(unittest.TestCase):
         # department_guess (more reliable: it is the role's real department).
         findings = ImportFindings(
             actor_id="x",
-            reports_to_guess="Pepa",
+            reports_to_guess="Lucia",
             department_guess="Formación",
         )
         resolved = resolve_against_org(findings, self.au_spec)
@@ -317,14 +317,14 @@ class TestImportAuditHardening(unittest.TestCase):
     # --- F5: actor id normalization -----------------------------------
     def test_actor_id_normalized_from_directory_name(self):
         with tempfile.TemporaryDirectory() as tmp:
-            persona_dir = Path(tmp) / "Carla Gómez"
+            persona_dir = Path(tmp) / "Vera Gómez"
             persona_dir.mkdir()
             (persona_dir / "IDENTITY.md").write_text(
                 "**Role**: Coordinadora\n", encoding="utf-8"
             )
 
             findings = audit_persona_dir(persona_dir)
-            self.assertEqual(findings.actor_id, "carla_gomez")
+            self.assertEqual(findings.actor_id, "vera_gomez")
             self.assertTrue(any("normalized" in w for w in findings.warnings))
 
     def test_actor_id_left_alone_when_already_valid(self):
@@ -344,13 +344,15 @@ class TestImportAuditHardening(unittest.TestCase):
         self.assertNotIn("Connor", resolved.unmatched_candidates)
 
     def test_split_drops_non_alphabetic_fragments(self):
-        findings = ImportFindings(actor_id="x", reports_to_guess="Pepa, 123")
+        findings = ImportFindings(actor_id="x", reports_to_guess="Lucia, 123")
         resolved = resolve_against_org(findings, self.au_spec)
         self.assertNotIn("123", resolved.unmatched_candidates)
 
     # --- F11: reports_to_human in fragment + apply --------------------
     def test_fragment_emits_reports_to_human_for_unmatched(self):
-        findings = ImportFindings(actor_id="marcos", reports_to_guess="Pepa, Salvador")
+        findings = ImportFindings(
+            actor_id="marcos", reports_to_guess="Lucia, Board President"
+        )
         resolved = resolve_against_org(findings, self.au_spec)
         fragment = render_org_yaml_fragment(
             findings,
@@ -359,11 +361,11 @@ class TestImportAuditHardening(unittest.TestCase):
             resolved=resolved,
         )
         self.assertIn("reports_to: chief_of_staff", fragment)
-        self.assertIn('reports_to_human: "Salvador"', fragment)
+        self.assertIn('reports_to_human: "Board President"', fragment)
         self.assertIn("REVIEW", fragment)
 
     def test_fragment_omits_reports_to_human_when_everything_resolves(self):
-        findings = ImportFindings(actor_id="marcos", reports_to_guess="Pepa")
+        findings = ImportFindings(actor_id="marcos", reports_to_guess="Lucia")
         resolved = resolve_against_org(findings, self.au_spec)
         fragment = render_org_yaml_fragment(
             findings,
@@ -385,7 +387,7 @@ class TestImportAuditHardening(unittest.TestCase):
             persona_dir = Path(tmp) / "marcos"
             persona_dir.mkdir()
             (persona_dir / "IDENTITY.md").write_text(
-                "**Role**: Director de Algo\n**Reports to**: Pepa, Salvador\n",
+                "**Role**: Director de Algo\n**Reports to**: Lucia, Board President\n",
                 encoding="utf-8",
             )
 
@@ -408,7 +410,7 @@ class TestImportAuditHardening(unittest.TestCase):
             doc = yaml.safe_load(target_org.read_text(encoding="utf-8"))
             role = next(r for r in doc["roles"] if r["id"] == "new_role")
             self.assertEqual(role["reports_to"], "chief_of_staff")
-            self.assertEqual(role["reports_to_human"], "Salvador")
+            self.assertEqual(role["reports_to_human"], "Board President")
 
 
 if __name__ == "__main__":

@@ -128,7 +128,7 @@ def slugify_id(text: str) -> str:
     ``is_valid_identifier`` and handle failure explicitly.
 
     Mirrors the normalization the setup wizard applies to organization
-    ids; import-audit uses it so a directory name like "Carla Gómez"
+    ids; import-audit uses it so a directory name like "Vera Gómez"
     becomes the valid id "carla_gomez" instead of being written verbatim
     (which `po validate` would immediately reject).
     """
@@ -381,11 +381,13 @@ def validate_shape(raw: dict) -> None:
             a.get("actor_exceptions", []), f"actors[{i}].actor_exceptions"
         )
         _require_optional_type(a.get("telegram_bot"), str, f"actors[{i}].telegram_bot")
-        if a.get("telegram_bot") is not None and not _is_valid_telegram_handle(a["telegram_bot"]):
+        if a.get("telegram_bot") is not None and not _is_valid_telegram_handle(
+            a["telegram_bot"]
+        ):
             raise ShapeError(
                 f"actors[{i}].telegram_bot: invalid handle {a['telegram_bot']!r} — "
                 "expected '@' + 5..32 chars of [A-Za-z0-9_] "
-                "(the bot's REAL username, e.g. '@CEO_bot'; "
+                "(the bot's REAL username, e.g. '@marco_bot'; "
                 "verify with `po telegram-check`)"
             )
         _require_optional_type(a.get("tone"), str, f"actors[{i}].tone")

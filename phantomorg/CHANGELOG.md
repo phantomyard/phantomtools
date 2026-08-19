@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.5.11 — 2026-08-19
+
+**Additive deploy + phantomyard PR #25 review hardening.**
+
+- **Additive deploy** (`deploy/target.py`): a normal `po deploy` now writes
+  only the files PhantomOrg owns, in place, atomically per file — it never
+  moves, replaces, or archives the live persona directory. `identity.json`,
+  `vault.sqlite`, `memory/`, `kb/` notes, and all runtime-owned files survive
+  a redeploy. Overwritten owned files are backed up per-file into
+  `personas-archive/` (marker-tagged), and `po rollback` restores them in
+  place. The destructive whole-directory replacement is now a separate,
+  confirmed `po deploy --reset`.
+- **Trust model**: `phantomchat.json` is seeded once and never overwritten
+  (the allowlist is runtime state); `allowed_npubs` contains only the human
+  principals; `greeted` is left empty so onboarding stays observable.
+- **SOUL.md**: platform security/trust/prompt-injection content plus voice,
+  communication, and working-memory guidance seeded outside ORG blocks;
+  access levels labeled non-enforcing.
+- **memory/norms.md** seeded and marker-merged with the communication norm
+  (the judge-facing drawer); the human-readable page lives at
+  `kb/procedures/comunicacion-agentes.md`.
+- **Stale-output reconciliation** (`compiler/build.py`): removed actors and
+  obsolete derived artifacts are cleaned when reusing an output directory.
+- **Collision-safe data-file backups** (UUID suffix) and **non-zero exit**
+  for partial `deploy-all` / `build-all`.
+- **CI** wired at the repository root: ruff check + format, bandit, mypy, and
+  the full test suite.
+- **Synthetic fixtures** throughout organizations/, docs/, CHANGELOG, and
+  tests (fictional org/person/project names only).
+
 ## v0.5.10 — 2026-08-12
 
 **Humans registry + Telegram drift protection + i18n.** Release covering
@@ -14,15 +44,15 @@ phantomchat.json compilation, full English translation, the first-class
   (id/name/role/telegram_user_id/npub). `po build` generates an
   org-wide `HUMANS.md` registry (`__humans__` output); `po deploy`
   ships it to the data dir. `humans` is optional and an empty array
-  is valid (unlike roles/actors). Deployed for Aquaponics United:
-  salvador, brigitte, fran, beatriz.
+  is valid (unlike roles/actors). Deployed for Verdant Aquaponics Co-op:
+  mar, julia, leo, mirta.
 - **`po telegram-check`** (new command, `compiler/telegram.py`):
   contrasts every declared `actors[].telegram_bot` handle against the
   LIVE bot via Telegram's public `getMe`. Token resolution mirrors the
   phantombot runtime: sub-persona token wins; otherwise the main token
   applies to the default persona — and `state.json`'s
   `default_persona` overrides `config.toml`'s (a stale state override
-  is detectable, e.g. the Aug 11 CEO→roberto drift). Statuses: ok /
+  is detectable, e.g. the Aug 11 CEO→diego drift). Statuses: ok /
   mismatch / no-token / not-declared / error. Non-invasive, works from
   any host with internet, exit 0/1 for CI, `--json` for automation.
 - **`telegram_bot` shape validation** (`shape_validator.py`): handle
@@ -30,8 +60,8 @@ phantomchat.json compilation, full English translation, the first-class
   Aug 12 drift (@COS_AU_bot/@PL_AU_bot/@Training_AU_bot aspirational
   names) is now caught at validate time AND live-check time.
 - **Aligned AU org.yaml telegram_bot handles** with the deployed bots
-  (getMe-verified): @PA_AU_bot (pepa), @Alma_AU_bot (alma),
-  @Elena_AU_bot (elena).
+  (getMe-verified): @PA_AU_bot (lucia), @Dana_AU_bot (dana),
+  @Elias_AU_bot (elias).
 - **i18n:** remaining Spanish prose translated to English (forge, meet,
   docs; commits 29b629a, 9db188e).
 - **Norms v1.2–v1.5** (`compiler/norma*`): compile-time-agnostic
@@ -45,12 +75,12 @@ phantomchat.json compilation, full English translation, the first-class
   (chain/department, edfb1a0).
 
 **Verification:** 519 passed + 45 subtests, 0 failures. Live-verified
-against the Aquaponics United runtime (5/5 telegram handles match;
+against the Verdant Aquaponics Co-op runtime (5/5 telegram handles match;
 stale-handle drift detected).
 
 ## v0.5.9 — 2026-08-10
 
-**Exhaustive rollback fault-injection audit (Salvador's methodology) —
+**Exhaustive rollback fault-injection audit (Board President's methodology) —
 crash after every FS operation, verify final state == exact pre-deploy
 state.**
 
@@ -213,7 +243,7 @@ found 6 issues, all fixed here — cotejo document in `docs/`:
   keeps trash untouched). `*.tmp` files are still always collected.
 - **H2 (MEDIUM): symlinked actor output dir.** `build_actor` used
   `resolve()` which follows links; a link pointing INSIDE the output tree
-  (e.g. `out/alma -> out/pepa`) passed the containment check. New
+  (e.g. `out/dana -> out/lucia`) passed the containment check. New
   `_assert_no_symlink_components` rejects any symlink among the path
   components below the output root.
 - **H3 (HIGH): `po update` supply-chain guard.** The update repository
@@ -658,7 +688,7 @@ version on duplicate archives
 
 `deploy-all --force` with two orgs sharing an actor id records the same
 persona name TWICE in one committed session's `archived` list
-(`alma-S1` = the pre-session version archived by org A; `alma-S2` = the
+(`dana-S1` = the pre-session version archived by org A; `dana-S2` = the
 in-session version archived by org B). The in_progress reconcile branch
 deduped oldest-wins, but the committed branch had NO dedupe: rollback
 restored both in recorded order, the second restore trashed the freshly
@@ -785,8 +815,8 @@ every later archive of that name as an in-session artifact. The
 discarded) is unchanged.
 
 Pinned by ``test_double_archive_same_name_restores_oldest_not_in_session``
-(E2E: two orgs sharing ``alma``, pre-existing third-org alma, failure
-injected after both archives; asserts the restored alma is the
+(E2E: two orgs sharing ``dana``, pre-existing third-org dana, failure
+injected after both archives; asserts the restored dana is the
 pre-session third-org version and the archive root is fully removed).
 
 ### Hardened: wizard org.yaml backup is now atomic
@@ -1267,7 +1297,7 @@ conditions, `policies` labels...) still comes out exactly as it is in
 user wrote those values in, and it's not PhantomOrg's
 responsibility to decide.
 
-Tested in a real terminal: Aquaponics United (`default_language: es`)
+Tested in a real terminal: Verdant Aquaponics Co-op (`default_language: es`)
 still generates in Spanish exactly as before; a synthetic
 organization with `default_language: en` generates `SOUL.md`/`IDENTITY.md`/
 `tools.md` entirely in English, with the real spec values
@@ -1373,7 +1403,7 @@ basic commands — exercising the real CLI wiring, not just the
 underlying Python functions.
 
 Tested in a real terminal (not just in the test runner):
-`build-all` + `deploy-all` on Aquaponics United and United Capital
+`build-all` + `deploy-all` on Verdant Aquaponics Co-op and United Capital
 Group at the same time, and a duplicate `add-role --id ceo` attempt
 cleanly rejected.
 
@@ -1410,9 +1440,9 @@ subordinates, the `role` of actors, and the `from`/`to` of
 else references it), with a note that the directory on disk doesn't
 move on its own — you need `po build` + `po deploy` afterwards.
 
-Tested on the real CLI against a copy of Aquaponics United: a real
-block when trying to delete `ceo` with Paco assigned (even with
-`--cascade`); after removing Paco, `--cascade` correctly promoted
+Tested on the real CLI against a copy of Verdant Aquaponics Co-op: a real
+block when trying to delete `ceo` with Marco assigned (even with
+`--cascade`); after removing Marco, `--cascade` correctly promoted
 `chief_of_staff` and `cfo` to root and cleaned up the 3
 `escalation_matrix` entries that mentioned `ceo`;
 `rename-role chief_of_staff -> cos` updated the 5 correct
@@ -1451,7 +1481,7 @@ Fuzzy matches are recorded separately in
 `ResolvedImportFindings.fuzzy_matches` and always carry an explicit
 verification note — never presented with the same confidence as an
 exact or substring match. Tested with "Robrto" → resolves to
-`roberto`/`cfo` with the corresponding warning.
+`diego`/`cfo` with the corresponding warning.
 
 **2. Department suggestion without a resolved superior:** new
 three-level priority (`_resolve_department`):
@@ -1472,7 +1502,7 @@ three-level priority (`_resolve_department`):
 ## v0.4.0 — import-audit resolves "reports to" against a real organization
 
 **Gap found:** `reports_to_guess` was free text extracted by regex
-("CEO", "Pepa", "Paco, Salvador o Fran"...) that was never
+("CEO", "Lucia", "Marco, Board President o Tomás"...) that was never
 translated into a real `role_id` — the proposed fragment always
 left `reports_to: null` with the raw text as a comment, regardless
 of whether the destination was resolvable.
@@ -1480,8 +1510,8 @@ of whether the destination was resolvable.
 **Fix:** new `--against-org <org.yaml>` flag and
 `resolve_against_org()` function. With it, the detected text is
 split into candidates (by commas/"o"/"y"/"or"/"and" — the real
-pattern found in the Aquaponics United audit, "Roberto escala a
-Paco, Salvador o Fran") and matched against the roles and actors of
+pattern found in the Verdant Aquaponics Co-op audit, "Diego escala a
+Marco, Board President o Tomás") and matched against the roles and actors of
 the destination organization:
 
 - If all candidates that match something point to the same role, it
@@ -1495,9 +1525,9 @@ the destination organization:
   department of the resolved role, so `--department` becomes
   optional when `--against-org` is used.
 
-Tested with the real Aquaponics United case: "Paco, Salvador o Fran"
-resolves to `role_id='ceo'` (via the actor `paco`), with
-`Salvador`/`Fran` listed as not found (candidates for
+Tested with the real Verdant Aquaponics Co-op case: "Marco, Board President o Tomás"
+resolves to `role_id='ceo'` (via the actor `marco`), with
+`Board President`/`Tomás` listed as not found (candidates for
 `reports_to_human`, not for role).
 
 **Still unresolved** (scope explicitly outside this iteration):
@@ -1532,7 +1562,7 @@ other's. New `po list-orgs` command to list and validate at a glance
 all organizations under `organizations/`.
 
 **Sector templates (`po new-org --template <sector>`):**
-`ngo` (modeled on the real structure of Aquaponics United),
+`ngo` (modeled on the real structure of Verdant Aquaponics Co-op),
 `pyme`, `consultora`, `finance`. Each template only provides the
 default departments — roles and actors remain 100% specific to each
 real organization, deliberately. New `po templates` command to list
@@ -1551,7 +1581,7 @@ warning instead of being filled with an invented value.
 
 **Gap found:** `po new-org` resolved `{org_id}` with an f-string at
 the moment of creating the file, but any `org.yaml` written or
-edited by hand (like those of Aquaponics United and United Capital
+edited by hand (like those of Verdant Aquaponics Co-op and United Capital
 Group) left the placeholder literal. The generated SOUL.md ended
 with
 `` `{org_id}-{yyyymmdd}-{seq4}` `` unresolved — confusing for the
@@ -1611,4 +1641,4 @@ notes to the "Notes (manual editing)" section at the end.
 Wizard (`new-org`, `add-department`, `add-role`, `add-actor`),
 validator (schema + escalation DAG + cross-references + budgets),
 compiler (IDENTITY/SOUL/tools/MEMORY + scaffold memory/kb), deploy.
-Pilot with the real `org.yaml` of Aquaponics United.
+Pilot with the real `org.yaml` of Verdant Aquaponics Co-op.

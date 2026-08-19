@@ -57,6 +57,7 @@ except ImportError:  # pragma: no cover
     fcntl = None
 
 from .target import (
+    PER_FILE_MARKER,
     DeployError,
     DeployResult,
     _archive_stamp,
@@ -603,6 +604,9 @@ def record_session(
                 {"name": name, "dir": str(Path(path).resolve())}
                 for name, path in result.archived
             ],
+            "file_archives": sorted(
+                str(Path(p).resolve()) for p in result.file_archives
+            ),
             "scopes_written": result.scopes_written,
             "humans_written": result.humans_written,
             "scopes_backup": result.scopes_backup,
@@ -747,6 +751,7 @@ def commit_session(target: Path, session_id: str, result: DeployResult) -> dict:
             {"name": name, "dir": str(Path(path).resolve())}
             for name, path in result.archived
         ],
+        "file_archives": sorted(str(Path(p).resolve()) for p in result.file_archives),
         "scopes_written": result.scopes_written,
         "humans_written": result.humans_written,
         "scopes_backup": result.scopes_backup,
@@ -1480,11 +1485,41 @@ def _execute_rollback_locked(plan: RollbackPlan, target: Path) -> RollbackResult
         target.mkdir(parents=True, exist_ok=True)
         for name, archive in plan.restore:
             dest = target / name
-            if dest.exists():
-                _discard(dest)
-                result.discarded.append(name)
-            shutil.move(str(archive), str(dest))
-            result.restored.append(name)
+            if (archive / PER_FILE_MARKER).is_file():
+                # Per-file (additive) archive: restore each owned file back
+                # into the LIVE persona directory, never moving the
+                # directory itself. Runtime-owned files stay untouched; the
+                # current version of each restored file is trashed first,
+                # preserving the <persona>/<rel> structure so a discarded
+                # file is always attributable.
+                discarded_any = False
+                for p in sorted(archive.rglob("*")):
+                    if not p.is_file() or p.name == PER_FILE_MARKER:
+                        continue
+                    rel = p.relative_to(archive)
+                    live = dest / rel
+                    if live.exists():
+                        trash_dest = _trash() / name / rel
+                        trash_dest.parent.mkdir(parents=True, exist_ok=True)
+                        for n in range(1, 1000):
+                            if not trash_dest.exists():
+                                break
+                            trash_dest = _trash() / name / f"{rel.as_posix()}-{n}"
+                        shutil.move(str(live), str(trash_dest))
+                        discarded_any = True
+                    live.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(p, live)
+                # The archive dir is consumed: remove it once restored.
+                shutil.rmtree(archive, ignore_errors=True)
+                result.restored.append(name)
+                if discarded_any:
+                    result.discarded.append(name)
+            else:
+                if dest.exists():
+                    _discard(dest)
+                    result.discarded.append(name)
+                shutil.move(str(archive), str(dest))
+                result.restored.append(name)
 
         for name in plan.remove_created:
             dest = target / name

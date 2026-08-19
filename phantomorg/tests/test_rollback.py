@@ -18,6 +18,7 @@ import unittest.mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import yaml
 from click.testing import CliRunner
 
 from phantomorg.cli import main
@@ -37,7 +38,7 @@ from phantomorg.deploy.session import (
 from phantomorg.deploy.target import DeployResult, archives_dir, deploy
 from phantomorg.spec.loader import load_org_yaml
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
 
 def _build_au(tmp: Path) -> Path:
@@ -48,6 +49,29 @@ def _build_au(tmp: Path) -> Path:
     return out
 
 
+def _change_soul(out: Path, actor: str | None = None) -> None:
+    """Modify an owned file INSIDE an ORG block so a redeploy actually
+    overwrites it (additive deploy only writes files that changed).
+
+    By default changes EVERY actor's SOUL.md (the org-level principle
+    string is identical across actors), so a redeploy archives a
+    per-file backup for each persona — what the rollback tests need to
+    exercise multi-archive scenarios. Pass ``actor`` to change just one.
+    """
+    actors = [actor] if actor else [d.name for d in sorted(out.iterdir()) if d.is_dir()]
+    for a in actors:
+        soul = out / a / "SOUL.md"
+        if not soul.exists():
+            continue
+        soul.write_text(
+            soul.read_text(encoding="utf-8").replace(
+                "Seguridad de la información antes que velocidad",
+                "V2: Seguridad de la información antes que velocidad",
+            ),
+            encoding="utf-8",
+        )
+
+
 class TestSessionManifest(unittest.TestCase):
     def test_record_and_load_roundtrip(self):
         with tempfile.TemporaryDirectory() as t:
@@ -55,13 +79,13 @@ class TestSessionManifest(unittest.TestCase):
             target = tmp / "personas"
             result = DeployResult(
                 target=target,
-                deployed=["alma", "maria"],
+                deployed=["dana", "maria"],
                 created=["maria"],
                 pruned=[],
                 archived=[
                     (
-                        "alma",
-                        str(tmp / "personas-archive/alma-2026-08-09T00-00-00-000Z"),
+                        "dana",
+                        str(tmp / "personas-archive/dana-2026-08-09T00-00-00-000Z"),
                     )
                 ],
                 scopes_written=True,
@@ -75,7 +99,7 @@ class TestSessionManifest(unittest.TestCase):
                 target,
                 result,
                 command="deploy",
-                orgs=["aquaponics-united"],
+                orgs=["verdant-aquaponics"],
                 archive_root_pre_existed=False,
                 target_pre_existed=False,
             )
@@ -84,11 +108,11 @@ class TestSessionManifest(unittest.TestCase):
             self.assertEqual(len(sessions), 1)
             s = sessions[0]
             self.assertEqual(s["command"], "deploy")
-            self.assertEqual(s["orgs"], ["aquaponics-united"])
+            self.assertEqual(s["orgs"], ["verdant-aquaponics"])
             self.assertEqual(s["created"], ["maria"])
             self.assertEqual(s["archive_root_pre_existed"], False)
             self.assertEqual(s["target_pre_existed"], False)
-            self.assertEqual(s["archived"][0]["name"], "alma")
+            self.assertEqual(s["archived"][0]["name"], "dana")
             # Data-file backup info round-trips into the manifest.
             self.assertEqual(s["scopes_written"], True)
             self.assertEqual(
@@ -136,11 +160,12 @@ class TestRollbackExecute(unittest.TestCase):
             target = tmp / "personas"
 
             deploy(out, target)  # v1: fresh creates
-            self.assertTrue((target / "alma" / "SOUL.md").exists())
+            self.assertTrue((target / "dana" / "SOUL.md").exists())
 
-            # v2: overwrite — archives v1
+            # v2: overwrite — archives v1 (only the changed owned file)
+            _change_soul(out)
             result = deploy(out, target)
-            self.assertIn("alma", result.archived[0][0] if result.archived else "")
+            self.assertIn("dana", result.archived[0][0] if result.archived else "")
             archive_root = archives_dir(target)
             self.assertTrue(archive_root.is_dir())
 
@@ -149,19 +174,19 @@ class TestRollbackExecute(unittest.TestCase):
                 target,
                 result,
                 command="deploy",
-                orgs=["aquaponics-united"],
+                orgs=["verdant-aquaponics"],
                 archive_root_pre_existed=False,  # created by v2
                 target_pre_existed=True,
             )
 
-            # mark v1 content so we can prove the restore
-            (target / "alma" / "SOUL.md").write_text("# v2 marker\n", encoding="utf-8")
-            v1_archive = next(archive_root.glob("alma-*"))
+            # mark the current SOUL so we can prove the restore
+            (target / "dana" / "SOUL.md").write_text("# v2 marker\n", encoding="utf-8")
+            v1_archive = next(archive_root.glob("dana-*"))
 
             plan = plan_rollback(archive_root, target)
             rb = execute_rollback(plan)
 
-            self.assertIn("alma", rb.restored)
+            self.assertIn("dana", rb.restored)
             # backup consumed: the archive dir is gone
             self.assertFalse(v1_archive.exists())
             # archive root deleted (did not pre-exist)
@@ -170,7 +195,7 @@ class TestRollbackExecute(unittest.TestCase):
             # manifest gone with it
             self.assertEqual(load_sessions(archive_root), [])
             # target still exists (pre-existed), with the restored persona
-            self.assertTrue((target / "alma" / "SOUL.md").exists())
+            self.assertTrue((target / "dana" / "SOUL.md").exists())
 
     def test_rollback_removes_created_personas(self):
         """Fresh deploy (all personas created) -> rollback removes them."""
@@ -186,7 +211,7 @@ class TestRollbackExecute(unittest.TestCase):
                 target,
                 result,
                 command="deploy",
-                orgs=["aquaponics-united"],
+                orgs=["verdant-aquaponics"],
                 archive_root_pre_existed=False,
                 target_pre_existed=False,
             )
@@ -231,7 +256,7 @@ class TestRollbackExecute(unittest.TestCase):
                 target,
                 r2,
                 command="deploy",
-                orgs=["aquaponics-united"],
+                orgs=["verdant-aquaponics"],
                 archive_root_pre_existed=False,
                 target_pre_existed=True,
             )
@@ -277,7 +302,7 @@ class TestRollbackExecute(unittest.TestCase):
                 target,
                 r1,
                 command="deploy",
-                orgs=["aquaponics-united"],
+                orgs=["verdant-aquaponics"],
                 archive_root_pre_existed=False,
                 target_pre_existed=False,
             )
@@ -308,12 +333,13 @@ class TestRollbackExecute(unittest.TestCase):
             scopes = target.parent / "scopes.json"
 
             deploy(out, target)  # v1: creates the data files
+            _change_soul(out)
             result = deploy(out, target)  # v2: archives v1 personas
             record_session(
                 target,
                 result,
                 command="deploy",
-                orgs=["aquaponics-united"],
+                orgs=["verdant-aquaponics"],
                 archive_root_pre_existed=False,
                 target_pre_existed=True,
             )
@@ -358,19 +384,19 @@ class TestRollbackExecute(unittest.TestCase):
             target = tmp / "personas"
 
             deploy(out, target)
-            self.assertTrue((target / "elena").exists())
+            self.assertTrue((target / "elias").exists())
 
-            # simulate Elena removed from spec: drop from compiled output
-            shutil.rmtree(out / "elena")
+            # simulate Elias removed from spec: drop from compiled output
+            shutil.rmtree(out / "elias")
             result = deploy(out, target, prune=True)
-            self.assertIn("elena", result.pruned)
-            self.assertFalse((target / "elena").exists())
+            self.assertIn("elias", result.pruned)
+            self.assertFalse((target / "elias").exists())
 
             record_session(
                 target,
                 result,
                 command="deploy",
-                orgs=["aquaponics-united"],
+                orgs=["verdant-aquaponics"],
                 archive_root_pre_existed=False,
                 target_pre_existed=True,
             )
@@ -378,8 +404,8 @@ class TestRollbackExecute(unittest.TestCase):
             plan = plan_rollback(archive_root, target)
             rb = execute_rollback(plan)
 
-            self.assertIn("elena", rb.restored)
-            self.assertTrue((target / "elena" / "SOUL.md").exists())
+            self.assertIn("elias", rb.restored)
+            self.assertTrue((target / "elias" / "SOUL.md").exists())
 
     def test_rollback_keeps_preexisting_archive_dir(self):
         """If personas-archive/ existed before (e.g. phantombot archives),
@@ -394,12 +420,13 @@ class TestRollbackExecute(unittest.TestCase):
             (foreign / "SOUL.md").write_text("# foreign\n", encoding="utf-8")
 
             deploy(out, target)  # v1
+            _change_soul(out)
             result = deploy(out, target)  # v2 archives v1
             record_session(
                 target,
                 result,
                 command="deploy",
-                orgs=["aquaponics-united"],
+                orgs=["verdant-aquaponics"],
                 archive_root_pre_existed=True,  # phantombot was here first
                 target_pre_existed=True,
             )
@@ -422,6 +449,7 @@ class TestRollbackExecute(unittest.TestCase):
             target = tmp / "personas"
 
             deploy(out, target)  # v1
+            _change_soul(out)
             result = deploy(out, target)  # v2 archives
             record_session(
                 target,
@@ -433,7 +461,7 @@ class TestRollbackExecute(unittest.TestCase):
             )
             # user manually deleted one backup
             archive_root = archives_dir(target)
-            first_archive = next(archive_root.glob("alma-*"))
+            first_archive = next(archive_root.glob("dana-*"))
             shutil.rmtree(first_archive)
 
             from phantomorg.deploy.session import RollbackError
@@ -449,10 +477,11 @@ class TestRollbackExecute(unittest.TestCase):
             target = tmp / "personas"
 
             deploy(out, target)  # v1
-            v1_soul = (target / "alma" / "SOUL.md").read_text(encoding="utf-8")
+            v1_soul = (target / "dana" / "SOUL.md").read_text(encoding="utf-8")
+            _change_soul(out)
             result = deploy(out, target)  # v2
             # user edits the deployed persona after the v2 deploy
-            (target / "alma" / "SOUL.md").write_text(
+            (target / "dana" / "SOUL.md").write_text(
                 "# edited after deploy\n", encoding="utf-8"
             )
 
@@ -467,9 +496,9 @@ class TestRollbackExecute(unittest.TestCase):
             archive_root = archives_dir(target)
             rb = execute_rollback(plan_rollback(archive_root, target))
 
-            self.assertIn("alma", rb.discarded)
+            self.assertIn("dana", rb.discarded)
             self.assertEqual(
-                (target / "alma" / "SOUL.md").read_text(encoding="utf-8"), v1_soul
+                (target / "dana" / "SOUL.md").read_text(encoding="utf-8"), v1_soul
             )
             # the discarded post-deploy edit was NOT deleted outright: it went
             # to the trash dir, which is removed only after full success.
@@ -485,9 +514,10 @@ class TestRollbackExecute(unittest.TestCase):
             target = tmp / "personas"
 
             deploy(out, target)  # v1
+            _change_soul(out)
             result = deploy(out, target)  # v2 archives v1
             # post-deploy edit that must survive a failed rollback
-            edited = target / "alma" / "SOUL.md"
+            edited = target / "dana" / "SOUL.md"
             edited.write_text("# precious post-deploy edit\n", encoding="utf-8")
 
             record_session(
@@ -502,24 +532,24 @@ class TestRollbackExecute(unittest.TestCase):
             plan = plan_rollback(archive_root, target)
 
             # Simulate a mid-rollback filesystem failure: the FIRST restore
-            # move fails (after the post-deploy version was already moved to
+            # copy fails (after the post-deploy version was already moved to
             # the trash). The discarded edit must survive in the trash and
             # the manifest entry must be kept.
             import phantomorg.deploy.session as session_mod
 
-            original_move = shutil.move
+            original_copy2 = shutil.copy2
 
-            def flaky_move(src, dst):
+            def flaky_copy2(src, dst, **kw):
                 if "personas-archive" in str(src) and not getattr(
-                    flaky_move, "failed", False
+                    flaky_copy2, "failed", False
                 ):
-                    flaky_move.failed = True
+                    flaky_copy2.failed = True
                     raise OSError("simulated IO error")
-                return original_move(src, dst)
+                return original_copy2(src, dst, **kw)
 
             with (
                 unittest.mock.patch.object(
-                    session_mod.shutil, "move", side_effect=flaky_move
+                    session_mod.shutil, "copy2", side_effect=flaky_copy2
                 ),
                 self.assertRaises(RollbackError),
             ):
@@ -527,17 +557,17 @@ class TestRollbackExecute(unittest.TestCase):
 
             # Nothing was lost: the discarded post-deploy edit is preserved
             # in the trash dir, the manifest still lists the session (retry
-            # possible), and the archived alma is still in the archive root.
+            # possible), and the archived dana is still in the archive root.
             trash_dirs = list(archive_root.glob("._pf_trash_*"))
             self.assertEqual(len(trash_dirs), 1)
-            trash_soul = trash_dirs[0] / "alma" / "SOUL.md"
+            trash_soul = trash_dirs[0] / "dana" / "SOUL.md"
             self.assertEqual(
                 trash_soul.read_text(encoding="utf-8"),
                 "# precious post-deploy edit\n",
             )
             self.assertEqual(len(load_sessions(archive_root)), 1)
             self.assertTrue(
-                any(d.name.startswith("alma-") for d in archive_root.iterdir())
+                any(d.name.startswith("dana-") for d in archive_root.iterdir())
             )
 
     def test_rollback_twice_undoes_two_sessions(self):
@@ -577,12 +607,12 @@ class TestRollbackExecute(unittest.TestCase):
             self.assertFalse(rb1.archive_root_deleted)
             self.assertEqual(len(load_sessions(archive_root)), 1)
             # but the personas from session 1 (fresh creates) are still there
-            self.assertTrue((target / "alma").exists())
+            self.assertTrue((target / "dana").exists())
 
             # second rollback undoes session 1: created personas removed,
             # manifest empty -> archive root deleted, target deleted
             rb2 = execute_rollback(plan_rollback(archive_root, target))
-            self.assertIn("alma", rb2.removed_created)
+            self.assertIn("dana", rb2.removed_created)
             self.assertTrue(rb2.archive_root_deleted)
             self.assertFalse(target.exists())
             self.assertEqual(load_sessions(archive_root), [])
@@ -597,6 +627,7 @@ class TestRollbackExecute(unittest.TestCase):
             target = tmp / "personas"
 
             deploy(out, target)  # v1
+            _change_soul(out)
             result = deploy(out, target)  # v2 archives v1
             record_session(
                 target,
@@ -633,7 +664,7 @@ class TestRollbackExecute(unittest.TestCase):
             # The session is STILL recorded (retry possible) and the
             # restored personas are in place.
             self.assertEqual(len(load_sessions(archive_root)), 1)
-            self.assertTrue((target / "alma" / "SOUL.md").exists())
+            self.assertTrue((target / "dana" / "SOUL.md").exists())
 
             # Retry: archives were all consumed -> cleanup-only plan.
             plan2 = plan_rollback(archive_root, target)
@@ -696,6 +727,7 @@ class TestRollbackExecute(unittest.TestCase):
             target = tmp / "personas"
 
             deploy(out, target)
+            _change_soul(out)
             result = deploy(out, target)
             record_session(
                 target,
@@ -707,8 +739,8 @@ class TestRollbackExecute(unittest.TestCase):
             )
             archive_root = archives_dir(target)
 
-            # replace the archived alma with a symlink
-            archived = next(archive_root.glob("alma-*"))
+            # replace the archived dana with a symlink
+            archived = next(archive_root.glob("dana-*"))
             shutil.rmtree(archived)
             archived.symlink_to(tmp / "outside")
             (tmp / "outside").mkdir(exist_ok=True)
@@ -726,6 +758,7 @@ class TestRollbackExecute(unittest.TestCase):
             target = tmp / "personas"
 
             deploy(out, target)
+            _change_soul(out)
             result = deploy(out, target)
             record_session(
                 target,
@@ -754,6 +787,7 @@ class TestRollbackExecute(unittest.TestCase):
             target = tmp / "personas"
 
             deploy(out, target)
+            _change_soul(out)
             result = deploy(out, target)
             record_session(
                 target,
@@ -765,7 +799,7 @@ class TestRollbackExecute(unittest.TestCase):
             )
             archive_root = archives_dir(target)
             # remove ONE of the archived personas
-            first = next(d for d in archive_root.glob("alma-*"))
+            first = next(d for d in archive_root.glob("dana-*"))
             shutil.rmtree(first)
 
             with self.assertRaises(RollbackError) as ctx:
@@ -827,6 +861,7 @@ class TestRollbackExecute(unittest.TestCase):
             target = tmp / "personas"
 
             deploy(out, target)  # v1
+            _change_soul(out)
             result = deploy(out, target)  # v2 archives v1
             record_session(
                 target,
@@ -837,19 +872,19 @@ class TestRollbackExecute(unittest.TestCase):
                 target_pre_existed=True,
             )
             archive_root = archives_dir(target)
-            # Simulate a rollback that restored 'alma' (archive consumed,
+            # Simulate a rollback that restored 'dana' (archive consumed,
             # pre-deploy version back in the target) and then died before
             # cleanup: a trash dir was left behind by the discard that
             # precedes every restore of an existing persona.
-            alma_archive = next(d for d in archive_root.glob("alma-*"))
-            shutil.rmtree(target / "alma")
-            shutil.move(str(alma_archive), str(target / "alma"))
+            alma_archive = next(d for d in archive_root.glob("dana-*"))
+            shutil.rmtree(target / "dana")
+            shutil.move(str(alma_archive), str(target / "dana"))
             trash = archive_root / "._pf_trash_leftover"
             trash.mkdir()
 
             plan = plan_rollback(archive_root, target)
-            # The remaining archives are restored; alma is already back.
-            self.assertNotIn("alma", [n for n, _ in plan.restore])
+            # The remaining archives are restored; dana is already back.
+            self.assertNotIn("dana", [n for n, _ in plan.restore])
             self.assertTrue(plan.restore)
 
     def test_plan_rollback_refuses_missing_persona_not_in_target(self):
@@ -862,6 +897,7 @@ class TestRollbackExecute(unittest.TestCase):
             target = tmp / "personas"
 
             deploy(out, target)  # v1
+            _change_soul(out)
             result = deploy(out, target)  # v2 archives v1
             record_session(
                 target,
@@ -876,8 +912,8 @@ class TestRollbackExecute(unittest.TestCase):
             # is not in the target: the pre-deploy version is lost.
             trash = archive_root / "._pf_trash_leftover"
             trash.mkdir()
-            shutil.rmtree(target / "alma")
-            shutil.rmtree(next(d for d in archive_root.glob("alma-*")))
+            shutil.rmtree(target / "dana")
+            shutil.rmtree(next(d for d in archive_root.glob("dana-*")))
 
             with self.assertRaises(RollbackError) as ctx:
                 plan_rollback(archive_root, target)
@@ -893,6 +929,7 @@ class TestRollbackExecute(unittest.TestCase):
             target = tmp / "personas"
 
             deploy(out, target)  # v1
+            _change_soul(out)
             result = deploy(out, target)  # v2 archives v1
             record_session(
                 target,
@@ -904,7 +941,7 @@ class TestRollbackExecute(unittest.TestCase):
             )
             archive_root = archives_dir(target)
             # Remove one archive, leave the rest, NO trash dir.
-            shutil.rmtree(next(d for d in archive_root.glob("alma-*")))
+            shutil.rmtree(next(d for d in archive_root.glob("dana-*")))
 
             with self.assertRaises(RollbackError) as ctx:
                 plan_rollback(archive_root, target)
@@ -928,6 +965,7 @@ class TestRollbackExecute(unittest.TestCase):
             target = tmp / "personas"
 
             deploy(out, target)  # v1
+            _change_soul(out)
             result = deploy(out, target)  # v2 archives v1
             record_session(
                 target,
@@ -950,13 +988,13 @@ class TestRollbackExecute(unittest.TestCase):
                 shutil.rmtree(d)
             trash = archive_root / f"{TRASH_PREFIX}{_archive_stamp()}"
             trash.mkdir(parents=True)
-            (trash / "alma").mkdir()
-            (trash / "alma" / "SOUL.md").write_text("v2", encoding="utf-8")
+            (trash / "dana").mkdir()
+            (trash / "dana" / "SOUL.md").write_text("v2", encoding="utf-8")
             # Age it past the GC cutoff so a stale-cleanup WOULD remove it.
             old = datetime.now(timezone.utc) - timedelta(days=2)
             os.utime(trash, (old.timestamp(), old.timestamp()))
             # The restored persona is back in the target (restore moved it).
-            self.assertTrue((target / "alma").is_dir())
+            self.assertTrue((target / "dana").is_dir())
 
             plan = plan_rollback(archive_root, target)
             # The interrupted rollback already restored everything: the
@@ -979,6 +1017,7 @@ class TestRollbackExecute(unittest.TestCase):
             target = tmp / "personas"
 
             deploy(out, target)  # v1
+            _change_soul(out)
             result = deploy(out, target)  # v2 archives v1
             record_session(
                 target,
@@ -1040,7 +1079,7 @@ class TestRollbackExecute(unittest.TestCase):
                 target,
                 command="deploy",
                 orgs=["org1"],
-                planned_archived=["alma"],
+                planned_archived=["dana"],
                 planned_created=[],
                 planned_pruned=[],
                 archive_root_pre_existed=False,
@@ -1055,21 +1094,21 @@ class TestRollbackExecute(unittest.TestCase):
             archive_root = archives_dir(target)
             _save_sessions(archive_root, [session])
             # Archive stamped at the session's base millisecond (no suffix).
-            archive_dir = archive_root / f"alma-{base_id}"
+            archive_dir = archive_root / f"dana-{base_id}"
             archive_dir.mkdir(parents=True)
             (archive_dir / "SOUL.md").write_text("OLD", encoding="utf-8")
-            (target / "alma").mkdir()
-            (target / "alma" / "SOUL.md").write_text("NEW", encoding="utf-8")
+            (target / "dana").mkdir()
+            (target / "dana" / "SOUL.md").write_text("NEW", encoding="utf-8")
 
             plan = plan_rollback(archive_root, target)
             restored_names = [n for n, _ in plan.restore]
             # Without the F6 fix this archive was skipped (stamp <
             # "...-1") and the plan had nothing to restore.
-            self.assertEqual(restored_names, ["alma"])
+            self.assertEqual(restored_names, ["dana"])
 
             result = execute_rollback(plan)
-            self.assertEqual(result.restored, ["alma"])
-            self.assertEqual((target / "alma" / "SOUL.md").read_text(), "OLD")
+            self.assertEqual(result.restored, ["dana"])
+            self.assertEqual((target / "dana" / "SOUL.md").read_text(), "OLD")
 
     def test_discard_session_removes_manifest_under_lock(self):
         """F10: the manifest unlink in discard_session happens while the
@@ -1171,12 +1210,12 @@ class TestRollbackExecute(unittest.TestCase):
             }
             archive_root = archives_dir(target)
             session_mod._save_sessions(archive_root, [session])
-            archive_dir = archive_root / "alma-2026-08-09T00-00-00-000Z"
+            archive_dir = archive_root / "dana-2026-08-09T00-00-00-000Z"
             archive_dir.mkdir(parents=True)
             (archive_dir / "SOUL.md").write_text("OLD", encoding="utf-8")
-            (target / "alma").mkdir()
-            (target / "alma" / "SOUL.md").write_text("NEW", encoding="utf-8")
-            session["archived"] = [{"name": "alma", "dir": str(archive_dir)}]
+            (target / "dana").mkdir()
+            (target / "dana" / "SOUL.md").write_text("NEW", encoding="utf-8")
+            session["archived"] = [{"name": "dana", "dir": str(archive_dir)}]
             session_mod._save_sessions(archive_root, [session])
 
             plan = session_mod.plan_rollback(archive_root, target)
@@ -1194,7 +1233,7 @@ class TestRollbackExecute(unittest.TestCase):
                 session_mod, "_transaction_lock", side_effect=spy_lock
             ):
                 result = execute_rollback(plan)
-            self.assertEqual(result.restored, ["alma"])
+            self.assertEqual(result.restored, ["dana"])
             self.assertEqual(calls, ["lock-enter", "lock-exit"])
 
 
@@ -1209,6 +1248,7 @@ class TestManifestCorruption(unittest.TestCase):
         out = _build_au(tmp)
         target = tmp / "personas"
         deploy(out, target)  # v1
+        _change_soul(out)
         result = deploy(out, target)  # v2 archives v1
         record_session(
             target,
@@ -1333,9 +1373,13 @@ class TestRollbackCLI(_TmpOrgsTestCase):
         )
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("deploy-all", result.output)
-        self.assertIn("aquaponics-united", result.output)
+        self.assertIn("verdant-aquaponics", result.output)
 
-        # second deploy -> archives the first (session recorded)
+        # second deploy (after changing the org) -> archives the first
+        au_org = self.orgs_dir / "verdant-aquaponics/org.yaml"
+        doc = yaml.safe_load(au_org.read_text(encoding="utf-8"))
+        doc["organization"]["name"] = "Verdant Aquaponics Co-op v2"
+        au_org.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
         self._build_and_deploy(target, out)
 
         # rollback with --yes
@@ -1345,14 +1389,14 @@ class TestRollbackCLI(_TmpOrgsTestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("Rolled back", result.output)
         # target still has the first-deploy personas (created in session 1)
-        self.assertTrue((target / "alma").exists())
+        self.assertTrue((target / "dana").exists())
 
         # one more rollback undoes session 1 entirely
         result = self.runner.invoke(
             main, ["rollback", "--target", str(target), "--yes"]
         )
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertFalse((target / "alma").exists())
+        self.assertFalse((target / "dana").exists())
 
     def test_cli_rollback_nothing_to_do(self):
         target = self.tmp / "personas"
@@ -1366,7 +1410,14 @@ class TestRollbackCLI(_TmpOrgsTestCase):
         out = self.tmp / "dist"
         self._build_and_deploy(target, out)
         # v1 content marker
-        v1 = (target / "alma" / "SOUL.md").read_text(encoding="utf-8")
+        v1 = (target / "dana" / "SOUL.md").read_text(encoding="utf-8")
+
+        # Change the org so the second deploy actually overwrites (additive
+        # deploy is a no-op when nothing changed).
+        au_org = self.orgs_dir / "verdant-aquaponics/org.yaml"
+        doc = yaml.safe_load(au_org.read_text(encoding="utf-8"))
+        doc["organization"]["name"] = "Verdant Aquaponics Co-op v2"
+        au_org.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
 
         self._build_and_deploy(target, out)  # v2 archives v1
         archive_root = archives_dir(target)
@@ -1378,7 +1429,7 @@ class TestRollbackCLI(_TmpOrgsTestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("restored :", result.output)
         # v1 content is back
-        self.assertEqual((target / "alma" / "SOUL.md").read_text(encoding="utf-8"), v1)
+        self.assertEqual((target / "dana" / "SOUL.md").read_text(encoding="utf-8"), v1)
         # session 1's manifest entry still lives in the archive root (it must
         # remain rollback-able), so the root survives this rollback.
         self.assertTrue(archive_root.is_dir())
@@ -1410,7 +1461,7 @@ class TestDurableJournal(unittest.TestCase):
                 target,
                 command="deploy",
                 orgs=["org1"],
-                planned_archived=["alma"],
+                planned_archived=["dana"],
                 planned_created=["maria"],
                 planned_pruned=[],
                 archive_root_pre_existed=False,
@@ -1422,7 +1473,7 @@ class TestDurableJournal(unittest.TestCase):
             self.assertEqual(len(sessions), 1)
             self.assertEqual(sessions[0]["id"], session["id"])
             self.assertEqual(sessions[0]["state"], "in_progress")
-            self.assertEqual(sessions[0]["planned_archived"], ["alma"])
+            self.assertEqual(sessions[0]["planned_archived"], ["dana"])
 
     def test_commit_transitions_to_committed(self):
         from phantomorg.deploy.session import begin_session, commit_session
@@ -1433,7 +1484,7 @@ class TestDurableJournal(unittest.TestCase):
                 target,
                 command="deploy",
                 orgs=["org1"],
-                planned_archived=["alma"],
+                planned_archived=["dana"],
                 planned_created=["maria"],
                 planned_pruned=[],
                 archive_root_pre_existed=False,
@@ -1441,17 +1492,17 @@ class TestDurableJournal(unittest.TestCase):
             )
             result = DeployResult(
                 target=target,
-                deployed=["alma", "maria"],
+                deployed=["dana", "maria"],
                 created=["maria"],
                 pruned=[],
-                archived=[("alma", str(archives_dir(target) / "alma-stamp"))],
+                archived=[("dana", str(archives_dir(target) / "dana-stamp"))],
             )
             commit_session(target, session["id"], result)
             sessions = load_sessions(archives_dir(target))
             self.assertEqual(len(sessions), 1)
             self.assertEqual(sessions[0]["state"], "committed")
             self.assertEqual(sessions[0]["created"], ["maria"])
-            self.assertEqual(sessions[0]["archived"][0]["name"], "alma")
+            self.assertEqual(sessions[0]["archived"][0]["name"], "dana")
 
     def test_rollback_reconciles_interrupted_deploy_with_archive(self):
         """An in_progress session whose attempt already archived a persona:
@@ -1468,19 +1519,19 @@ class TestDurableJournal(unittest.TestCase):
                 target,
                 command="deploy",
                 orgs=["org1"],
-                planned_archived=["alma"],
+                planned_archived=["dana"],
                 planned_created=["maria"],
                 planned_pruned=[],
                 archive_root_pre_existed=False,
                 target_pre_existed=False,
             )
             archive_root = archives_dir(target)
-            archive_dir = archive_root / f"alma-{session['id']}"
+            archive_dir = archive_root / f"dana-{session['id']}"
             archive_dir.mkdir(parents=True)
             (archive_dir / "SOUL.md").write_text("OLD", encoding="utf-8")
             # The attempt also replaced the target version (post-deploy).
-            (target / "alma").mkdir()
-            (target / "alma" / "SOUL.md").write_text("NEW", encoding="utf-8")
+            (target / "dana").mkdir()
+            (target / "dana" / "SOUL.md").write_text("NEW", encoding="utf-8")
             # And created maria before dying.
             (target / "maria").mkdir()
             (target / "maria" / "SOUL.md").write_text("NEW", encoding="utf-8")
@@ -1489,16 +1540,16 @@ class TestDurableJournal(unittest.TestCase):
             self.assertEqual(plan.session_id, session["id"])
             self.assertFalse(plan.cleanup_only)
             restored_names = [n for n, _ in plan.restore]
-            self.assertEqual(restored_names, ["alma"])
+            self.assertEqual(restored_names, ["dana"])
             self.assertIn("maria", plan.remove_created)
 
             result = execute_rollback(plan)
-            self.assertEqual(result.restored, ["alma"])
+            self.assertEqual(result.restored, ["dana"])
             self.assertIn("maria", result.removed_created)
             # The old version is back in the target, the post-deploy version
             # went to the trash (inside the archive root) and was then
             # deleted after success.
-            self.assertEqual((target / "alma" / "SOUL.md").read_text(), "OLD")
+            self.assertEqual((target / "dana" / "SOUL.md").read_text(), "OLD")
             self.assertFalse((target / "maria").exists())
             # Nothing else survives: fresh archive root and fresh target
             # (except the manifest that still holds session 1 committed-able
@@ -1711,7 +1762,7 @@ class TestManifestConfinement(unittest.TestCase):
             outside = Path(tempfile.mkdtemp()) / "other"
             session = self._session(
                 tmp,
-                archived=[{"name": "alma", "dir": str(outside)}],
+                archived=[{"name": "dana", "dir": str(outside)}],
             )
             target, archive_root = self._seed_manifest(tmp, session)
             with self.assertRaises(RollbackError) as ctx:
@@ -1723,7 +1774,7 @@ class TestManifestConfinement(unittest.TestCase):
             tmp = Path(t)
             session = self._session(
                 tmp,
-                archived=[{"name": "alma", "dir": "personas-archive/alma-1"}],
+                archived=[{"name": "dana", "dir": "personas-archive/dana-1"}],
             )
             target, archive_root = self._seed_manifest(tmp, session)
             with self.assertRaises(RollbackError) as ctx:
@@ -1774,14 +1825,14 @@ class TestSuffixExhaustion(unittest.TestCase):
             target = tmp / "personas"
             personas_dir = target / "personas"
             personas_dir.mkdir(parents=True)
-            src = personas_dir / "alma"
+            src = personas_dir / "dana"
             src.mkdir()
             (src / "SOUL.md").write_text("v1", encoding="utf-8")
 
             archive_root = archives_dir(personas_dir)
             archive_root.mkdir(parents=True)
             stamp = _archive_stamp()
-            base = f"alma-{stamp}"
+            base = f"dana-{stamp}"
             for n in range(1000):
                 name = base if n == 0 else f"{base}-{n}"
                 (archive_root / name).mkdir()
@@ -1794,7 +1845,7 @@ class TestSuffixExhaustion(unittest.TestCase):
                 ),
                 self.assertRaises(DeployError) as ctx,
             ):
-                archive_persona(personas_dir, "alma")
+                archive_persona(personas_dir, "dana")
             self.assertIn(
                 "unable to allocate a unique archive destination", str(ctx.exception)
             )
@@ -1824,13 +1875,13 @@ class TestSuffixExhaustion(unittest.TestCase):
             archive_root.mkdir(parents=True)
 
             # an archived persona to restore
-            archived = archive_root / "alma-old"
+            archived = archive_root / "dana-old"
             archived.mkdir()
             (archived / "SOUL.md").write_text("old", encoding="utf-8")
 
             # a post-deploy version in the target that must be discarded
-            (target / "alma").mkdir()
-            (target / "alma" / "SOUL.md").write_text("new", encoding="utf-8")
+            (target / "dana").mkdir()
+            (target / "dana" / "SOUL.md").write_text("new", encoding="utf-8")
 
             session = {
                 "id": "sess-1",
@@ -1838,20 +1889,20 @@ class TestSuffixExhaustion(unittest.TestCase):
                 "target": str(target),
                 "state": "committed",
                 "created": [],
-                "archived": [{"name": "alma", "dir": str(archived)}],
+                "archived": [{"name": "dana", "dir": str(archived)}],
             }
             from phantomorg.deploy.session import _save_sessions
 
             _save_sessions(archive_root, [session])
 
-            # fill the trash dir with 1000 same-name entries: "alma" plus
-            # 999 suffixes. "alma" itself must also exist so the loop has
+            # fill the trash dir with 1000 same-name entries: "dana" plus
+            # 999 suffixes. "dana" itself must also exist so the loop has
             # to try all 999 suffixes before giving up.
             stamp = _archive_stamp()
             trash_dir = archive_root / f"{TRASH_PREFIX}{stamp}"
             trash_dir.mkdir(parents=True)
             for n in range(1000):
-                name = "alma" if n == 0 else f"alma-{n}"
+                name = "dana" if n == 0 else f"dana-{n}"
                 (trash_dir / name).mkdir()
 
             import phantomorg.deploy.session as session_mod
@@ -1866,7 +1917,7 @@ class TestSuffixExhaustion(unittest.TestCase):
                 "unable to allocate a unique trash destination", str(ctx.exception)
             )
             # the discard failed atomically: nothing was moved or deleted
-            self.assertTrue((target / "alma").exists())
+            self.assertTrue((target / "dana").exists())
             self.assertTrue(archived.exists())
             self.assertEqual(len(list(trash_dir.iterdir())), 1000)
 
@@ -1881,8 +1932,8 @@ class TestSuffixExhaustion(unittest.TestCase):
             target.mkdir(parents=True)
             archive_root = archives_dir(target)
 
-            result1 = DeployResult(target=target, deployed=["alma"], created=["alma"])
-            result2 = DeployResult(target=target, deployed=["pepa"], created=["pepa"])
+            result1 = DeployResult(target=target, deployed=["dana"], created=["dana"])
+            result2 = DeployResult(target=target, deployed=["lucia"], created=["lucia"])
 
             s1 = record_session(
                 target,
@@ -1917,8 +1968,8 @@ class TestStaleInternalsCleanup(unittest.TestCase):
         cutoff, so the age check alone would remove it."""
         trash = archive_root / f"{TRASH_PREFIX}{_archive_stamp()}"
         trash.mkdir(parents=True)
-        (trash / "alma").mkdir()
-        (trash / "alma" / "SOUL.md").write_text("old", encoding="utf-8")
+        (trash / "dana").mkdir()
+        (trash / "dana" / "SOUL.md").write_text("old", encoding="utf-8")
         old = datetime.now(timezone.utc) - timedelta(days=2)
         os.utime(trash, (old.timestamp(), old.timestamp()))
         return trash
@@ -1939,7 +1990,7 @@ class TestStaleInternalsCleanup(unittest.TestCase):
                 command="deploy",
                 orgs=["org"],
                 planned_archived=[],
-                planned_created=["alma"],
+                planned_created=["dana"],
                 planned_pruned=[],
                 archive_root_pre_existed=False,
                 target_pre_existed=False,
@@ -1976,7 +2027,7 @@ class TestStaleInternalsCleanup(unittest.TestCase):
                 command="deploy",
                 orgs=["org"],
                 planned_archived=[],
-                planned_created=["alma"],
+                planned_created=["dana"],
                 planned_pruned=[],
                 archive_root_pre_existed=False,
                 target_pre_existed=False,
@@ -2003,7 +2054,7 @@ class TestStaleInternalsCleanup(unittest.TestCase):
                 command="deploy",
                 orgs=["org"],
                 planned_archived=[],
-                planned_created=["alma"],
+                planned_created=["dana"],
                 planned_pruned=[],
                 archive_root_pre_existed=False,
                 target_pre_existed=False,
@@ -2042,7 +2093,7 @@ class TestStaleInternalsCleanup(unittest.TestCase):
                 command="deploy",
                 orgs=["org"],
                 planned_archived=[],
-                planned_created=["alma"],
+                planned_created=["dana"],
                 planned_pruned=[],
                 archive_root_pre_existed=False,
                 target_pre_existed=False,

@@ -41,11 +41,11 @@ class TestFindPersonasDirs(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _persona(root, "pepe")
-            _persona(root, "alicia")
+            _persona(root, "nora")
             (root / ".hidden").mkdir()
             (root / "not-a-persona").mkdir()
             found = find_personas_dirs(root)
-            self.assertEqual({p.name for p in found}, {"pepe", "alicia"})
+            self.assertEqual({p.name for p in found}, {"pepe", "nora"})
 
     def test_missing_root(self):
         self.assertEqual(find_personas_dirs(Path("/nonexistent-xyz")), [])
@@ -87,7 +87,7 @@ class TestBuildOrgYaml(unittest.TestCase):
                     suggested_role="Project Lead",
                 ),
                 PersonaPlan(
-                    actor_id="alicia",
+                    actor_id="nora",
                     role_id="project_lead",
                     department_id="operaciones",
                     suggested_role="Project Lead",
@@ -151,7 +151,7 @@ class TestSetupCommand(_TmpOrgsTestCase):
         super().setUp()
         self.pb = Path(tempfile.mkdtemp())
         _persona(self.pb, "pepe", "Role: Project Lead")
-        _persona(self.pb, "alicia", "Role: Project Lead")
+        _persona(self.pb, "nora", "Role: Project Lead")
 
     def tearDown(self):
         shutil.rmtree(self.pb, ignore_errors=True)
@@ -161,7 +161,7 @@ class TestSetupCommand(_TmpOrgsTestCase):
         # answers: no org.yaml | id | name | sector | lang |
         #          dept1 | dept2 | (end) |
         #          pepe->operaciones->role(enter=project_lead) |
-        #          alicia->operaciones->role(enter=project_lead) |
+        #          nora->operaciones->role(enter=project_lead) |
         #          no new persona
         answers = (
             "n\n"
@@ -203,7 +203,7 @@ class TestSetupCommand(_TmpOrgsTestCase):
             self.assertEqual(build.exit_code, 0, build.output)
             self.assertEqual(
                 {p.name for p in Path(out).iterdir() if p.is_dir()},
-                {"pepe", "alicia"},
+                {"pepe", "nora"},
             )
 
     def test_setup_create_new_over_existing_org_backs_up_first(self):
@@ -311,13 +311,13 @@ class TestSetupCommand(_TmpOrgsTestCase):
 
         # maria: new persona not in the org; assign existing role 'vendedor'
         _persona(self.pb, "maria", "Role: Vendedor")
-        # all 3 personas in the sandbox are reassigned (sorted: alicia,
+        # all 3 personas in the sandbox are reassigned (sorted: nora,
         # maria, pepe) — each to department 'ventas' + role 'vendedor'
         answers = "\n".join(
             [
                 "y",
                 str(org),
-                # alicia
+                # nora
                 "ventas",
                 "vendedor",
                 # maria
@@ -339,7 +339,7 @@ class TestSetupCommand(_TmpOrgsTestCase):
         updated = yaml.safe_load(org.read_text(encoding="utf-8"))
         self.assertEqual(len(updated["actors"]), 3)
         self.assertEqual(
-            {a["id"] for a in updated["actors"]}, {"alicia", "maria", "pepe"}
+            {a["id"] for a in updated["actors"]}, {"nora", "maria", "pepe"}
         )
         self.assertTrue(all(a["role"] == "vendedor" for a in updated["actors"]))
         self.assertEqual(len(updated["roles"]), 1)  # not duplicated

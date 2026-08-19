@@ -9,12 +9,12 @@ from click.testing import CliRunner
 
 from phantomorg.cli import main
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
-UCG_ORG = Path(__file__).parent.parent / "organizations/united-capital-group/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
+UCG_ORG = Path(__file__).parent.parent / "organizations/harbor-capital/org.yaml"
 
 _FAKE_PERSONA_IDENTITY = """# Identity
 **Role**: Analista de Datos
-**Reports to**: Pepa
+**Reports to**: Lucia
 **Channel**: @Analista_bot
 """
 _FAKE_PERSONA_TOOLS = """# Tools
@@ -41,7 +41,7 @@ class TestBasicCommands(_TmpOrgsTestCase):
     def test_validate_au(self):
         result = self.runner.invoke(
             main,
-            ["validate", "--org", str(self.orgs_dir / "aquaponics-united/org.yaml")],
+            ["validate", "--org", str(self.orgs_dir / "verdant-aquaponics/org.yaml")],
         )
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("valid", result.output)
@@ -54,8 +54,8 @@ class TestBasicCommands(_TmpOrgsTestCase):
     def test_list_orgs(self):
         result = self.runner.invoke(main, ["list-orgs", "--base", str(self.orgs_dir)])
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIn("aquaponics-united", result.output)
-        self.assertIn("united-capital-group", result.output)
+        self.assertIn("verdant-aquaponics", result.output)
+        self.assertIn("harbor-capital", result.output)
 
     def test_build_then_deploy(self):
         out_dir = self.tmp / "dist"
@@ -64,13 +64,13 @@ class TestBasicCommands(_TmpOrgsTestCase):
             [
                 "build",
                 "--org",
-                str(self.orgs_dir / "aquaponics-united/org.yaml"),
+                str(self.orgs_dir / "verdant-aquaponics/org.yaml"),
                 "--out",
                 str(out_dir),
             ],
         )
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertTrue((out_dir / "alma" / "SOUL.md").exists())
+        self.assertTrue((out_dir / "dana" / "SOUL.md").exists())
 
         target_dir = self.tmp / "target"
         result = self.runner.invoke(
@@ -78,7 +78,7 @@ class TestBasicCommands(_TmpOrgsTestCase):
             ["deploy", "--from", str(out_dir), "--target", str(target_dir), "--yes"],
         )
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertTrue((target_dir / "alma").exists())
+        self.assertTrue((target_dir / "dana").exists())
 
 
 class TestBuildAllDeployAll(_TmpOrgsTestCase):
@@ -88,15 +88,13 @@ class TestBuildAllDeployAll(_TmpOrgsTestCase):
             main, ["build-all", "--base", str(self.orgs_dir), "--out", str(out_base)]
         )
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertTrue((out_base / "aquaponics-united" / "alma" / "SOUL.md").exists())
-        self.assertTrue(
-            (out_base / "united-capital-group" / "anna" / "SOUL.md").exists()
-        )
+        self.assertTrue((out_base / "verdant-aquaponics" / "dana" / "SOUL.md").exists())
+        self.assertTrue((out_base / "harbor-capital" / "nadia" / "SOUL.md").exists())
         self.assertIn("2 organization(s) compiled", result.output)
 
     def test_build_all_skips_invalid_org_without_aborting(self):
-        # We break united-capital-group on purpose (invalid reference).
-        ucg_path = self.orgs_dir / "united-capital-group/org.yaml"
+        # We break harbor-capital on purpose (invalid reference).
+        ucg_path = self.orgs_dir / "harbor-capital/org.yaml"
         doc = yaml.safe_load(ucg_path.read_text(encoding="utf-8"))
         doc["actors"][0]["role"] = "role-that-does-not-exist"
         ucg_path.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
@@ -105,11 +103,11 @@ class TestBuildAllDeployAll(_TmpOrgsTestCase):
         result = self.runner.invoke(
             main, ["build-all", "--base", str(self.orgs_dir), "--out", str(out_base)]
         )
-        self.assertEqual(
-            result.exit_code, 0, result.output
-        )  # does not abort: 1 ok, 1 skipped
-        self.assertTrue((out_base / "aquaponics-united" / "alma" / "SOUL.md").exists())
-        self.assertFalse((out_base / "united-capital-group").exists())
+        # Partial success now exits non-zero (a partial org rollout must not
+        # report as complete); the valid org still compiles.
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertTrue((out_base / "verdant-aquaponics" / "dana" / "SOUL.md").exists())
+        self.assertFalse((out_base / "harbor-capital").exists())
         self.assertIn("1 organization(s) compiled, 1 skipped", result.output)
 
     def test_deploy_all_after_build_all(self):
@@ -132,8 +130,8 @@ class TestBuildAllDeployAll(_TmpOrgsTestCase):
             ],
         )
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertTrue((target_dir / "alma").exists())
-        self.assertTrue((target_dir / "anna").exists())
+        self.assertTrue((target_dir / "dana").exists())
+        self.assertTrue((target_dir / "nadia").exists())
 
     def test_deploy_all_announces_archive_dir_creation(self):
         out_base, target_dir = self.tmp / "dist", self.tmp / "target"
@@ -167,9 +165,9 @@ class TestBuildAllDeployAll(_TmpOrgsTestCase):
             [
                 "build",
                 "--org",
-                str(self.orgs_dir / "aquaponics-united/org.yaml"),
+                str(self.orgs_dir / "verdant-aquaponics/org.yaml"),
                 "--out",
-                str(out_base / "aquaponics-united"),
+                str(out_base / "verdant-aquaponics"),
             ],
         )
 
@@ -186,7 +184,7 @@ class TestBuildAllDeployAll(_TmpOrgsTestCase):
                 "--yes",
             ],
         )
-        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(result.exit_code, 1, result.output)
         self.assertIn("no build", result.output)
         self.assertIn("1 organization(s) deployed", result.output)
 
@@ -194,19 +192,19 @@ class TestBuildAllDeployAll(_TmpOrgsTestCase):
 class TestDeployPruneCli(_TmpOrgsTestCase):
     def test_prune_flag_removes_stale_actor(self):
         out_dir, target_dir = self.tmp / "dist", self.tmp / "target"
-        au_org = self.orgs_dir / "aquaponics-united/org.yaml"
+        au_org = self.orgs_dir / "verdant-aquaponics/org.yaml"
 
         self.runner.invoke(main, ["build", "--org", str(au_org), "--out", str(out_dir)])
         self.runner.invoke(
             main,
             ["deploy", "--from", str(out_dir), "--target", str(target_dir), "--yes"],
         )
-        self.assertTrue((target_dir / "elena").exists())
+        self.assertTrue((target_dir / "elias").exists())
 
-        # We remove elena from the spec and recompile: her folder in out_dir
+        # We remove elias from the spec and recompile: her folder in out_dir
         # disappears from the build, but would stay orphaned in target without --prune.
         self.runner.invoke(
-            main, ["remove-actor", "--org", str(au_org), "--id", "elena", "--yes"]
+            main, ["remove-actor", "--org", str(au_org), "--id", "elias", "--yes"]
         )
         shutil.rmtree(out_dir)
         self.runner.invoke(main, ["build", "--org", str(au_org), "--out", str(out_dir)])
@@ -224,20 +222,20 @@ class TestDeployPruneCli(_TmpOrgsTestCase):
             ],
         )
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertFalse((target_dir / "elena").exists())
-        self.assertTrue((target_dir / "alma").exists())
+        self.assertFalse((target_dir / "elias").exists())
+        self.assertTrue((target_dir / "dana").exists())
 
 
 class TestImportAuditApply(_TmpOrgsTestCase):
     def test_apply_adds_role_and_actor_to_target_org(self):
-        persona_dir = self.tmp / "personas" / "carla"
+        persona_dir = self.tmp / "personas" / "vera"
         persona_dir.mkdir(parents=True)
         (persona_dir / "IDENTITY.md").write_text(
             _FAKE_PERSONA_IDENTITY, encoding="utf-8"
         )
         (persona_dir / "tools.md").write_text(_FAKE_PERSONA_TOOLS, encoding="utf-8")
 
-        au_org = self.orgs_dir / "aquaponics-united/org.yaml"
+        au_org = self.orgs_dir / "verdant-aquaponics/org.yaml"
         result = self.runner.invoke(
             main,
             [
@@ -257,14 +255,14 @@ class TestImportAuditApply(_TmpOrgsTestCase):
 
         doc = yaml.safe_load(au_org.read_text(encoding="utf-8"))
         self.assertIn("analista", {r["id"] for r in doc["roles"]})
-        self.assertIn("carla", {a["id"] for a in doc["actors"]})
-        carla = next(a for a in doc["actors"] if a["id"] == "carla")
-        self.assertEqual(carla["telegram_bot"], "@Analista_bot")
+        self.assertIn("vera", {a["id"] for a in doc["actors"]})
+        vera = next(a for a in doc["actors"] if a["id"] == "vera")
+        self.assertEqual(vera["telegram_bot"], "@Analista_bot")
 
         analista_role = next(r for r in doc["roles"] if r["id"] == "analista")
         self.assertEqual(
             analista_role["reports_to"], "chief_of_staff"
-        )  # resolved from "Pepa"
+        )  # resolved from "Lucia"
 
         result = self.runner.invoke(main, ["validate", "--org", str(au_org)])
         self.assertEqual(result.exit_code, 0, result.output)
@@ -295,7 +293,7 @@ class TestImportAuditApply(_TmpOrgsTestCase):
             _FAKE_PERSONA_IDENTITY, encoding="utf-8"
         )
 
-        au_org = self.orgs_dir / "aquaponics-united/org.yaml"
+        au_org = self.orgs_dir / "verdant-aquaponics/org.yaml"
         result = self.runner.invoke(
             main,
             [
@@ -323,7 +321,7 @@ class TestImportAuditApply(_TmpOrgsTestCase):
             _FAKE_PERSONA_IDENTITY, encoding="utf-8"
         )
 
-        au_org = self.orgs_dir / "aquaponics-united/org.yaml"
+        au_org = self.orgs_dir / "verdant-aquaponics/org.yaml"
         result = self.runner.invoke(
             main,
             [
@@ -346,7 +344,7 @@ class TestImportAuditApply(_TmpOrgsTestCase):
 
 class TestAddCommandsRejectDuplicates(_TmpOrgsTestCase):
     def test_add_role_cli_rejects_duplicate(self):
-        au_org = self.orgs_dir / "aquaponics-united/org.yaml"
+        au_org = self.orgs_dir / "verdant-aquaponics/org.yaml"
         result = self.runner.invoke(
             main,
             [
@@ -379,7 +377,7 @@ class TestPathOptionHardening(_TmpOrgsTestCase):
             [
                 "build",
                 "--org",
-                str(self.orgs_dir / "aquaponics-united/org.yaml"),
+                str(self.orgs_dir / "verdant-aquaponics/org.yaml"),
                 "--out",
                 str(out_dir),
             ],
@@ -399,7 +397,7 @@ class TestPathOptionHardening(_TmpOrgsTestCase):
                 env={"HOME": fake_home},
             )
             self.assertEqual(result.exit_code, 0, result.output)
-            self.assertTrue((Path(fake_home) / "personas" / "alma").exists())
+            self.assertTrue((Path(fake_home) / "personas" / "dana").exists())
             # No literal "~" directory may exist under the CWD.
             self.assertFalse((Path.cwd() / "~").exists())
 
@@ -430,7 +428,7 @@ class TestInterruptHandling(_TmpOrgsTestCase):
             [
                 "build",
                 "--org",
-                str(self.orgs_dir / "aquaponics-united/org.yaml"),
+                str(self.orgs_dir / "verdant-aquaponics/org.yaml"),
                 "--out",
                 str(out_dir),
             ],
@@ -460,7 +458,7 @@ class TestRenameConfirmation(_TmpOrgsTestCase):
     """cli-tests F9: rename-* confirm unless --yes (matching remove-*)."""
 
     def test_rename_role_cancelled_without_yes(self):
-        au_org = self.orgs_dir / "aquaponics-united/org.yaml"
+        au_org = self.orgs_dir / "verdant-aquaponics/org.yaml"
         before = au_org.read_bytes()
         result = self.runner.invoke(
             main,
@@ -480,7 +478,7 @@ class TestRenameConfirmation(_TmpOrgsTestCase):
         self.assertEqual(au_org.read_bytes(), before)
 
     def test_rename_actor_with_yes_applies(self):
-        au_org = self.orgs_dir / "aquaponics-united/org.yaml"
+        au_org = self.orgs_dir / "verdant-aquaponics/org.yaml"
         result = self.runner.invoke(
             main,
             [
@@ -488,7 +486,7 @@ class TestRenameConfirmation(_TmpOrgsTestCase):
                 "--org",
                 str(au_org),
                 "--old-id",
-                "alma",
+                "dana",
                 "--new-id",
                 "alma2",
                 "--yes",

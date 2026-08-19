@@ -287,7 +287,7 @@ def _resolve_reports_to(
         resolved.resolution_notes.append(
             f"'{raw}' matches {len(matched_role_ids)} different roles "
             f"({sorted(matched_role_ids)}) — it is the same ambiguous "
-            f"escalation pattern detected in the original Aquaponics United "
+            f"escalation pattern detected in the original Verdant Aquaponics Co-op "
             f"audit (an agent escalating to several people without an "
             f"explicit matrix). It must be resolved by hand with a single "
             f"escalation_matrix entry per condition, not left as free text "
@@ -377,8 +377,8 @@ def resolve_against_org(
 
     reports_to rules:
     - The text is split into candidates by commas/"o"/"y"/"or"/"and" (the
-      real pattern from the Aquaponics United audit: "Roberto escalates to
-      Paco, Salvador or Fran").
+      real pattern from the Verdant Aquaponics Co-op audit: "Diego escalates to
+      Marco, Board President or Tomás").
     - Each candidate is resolved by exact match → substring → fuzzy
       (difflib, for typos/non-literal abbreviations), in that order of
       confidence. Fuzzy matches are flagged separately and always with an

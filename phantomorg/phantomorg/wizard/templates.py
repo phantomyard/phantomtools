@@ -8,7 +8,7 @@ template there would be exactly the mistake that Epic 3 wants to avoid
 hand, do repeat fairly regularly within the same sector and save the
 first hand-typed `add-department` calls.
 
-`ngo` is modeled directly on the real structure of Aquaponics United
+`ngo` is modeled directly on the real structure of Verdant Aquaponics Co-op
 (Management/Operations/Training/Finance), the first validated use case
 of PhantomOrg.
 """

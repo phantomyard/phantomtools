@@ -28,6 +28,7 @@ from phantomorg.compiler.phantomchat import (
     IDENTITY_FILENAME,
     MISMATCH,
     MISSING_IDENTITY,
+    MISSING_PHANTOMCHAT,
     NOT_DECLARED,
     OK,
     PHANTOMCHAT_FILENAME,
@@ -37,7 +38,7 @@ from phantomorg.compiler.phantomchat import (
 )
 from phantomorg.spec.loader import load_org_yaml
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
 # Real AU runtime npubs (extracted non-invasively from the MacBookPro
 # identities) — used to build realistic fixtures.
@@ -112,11 +113,11 @@ class PhantomchatVerifyTestCase(unittest.TestCase):
         self.personas = Path(self.tmp.name)
         self.spec = load_org_yaml(AU_ORG)
         self._real = {
-            "paco": PACO_NPUB,
-            "pepa": PEPA_NPUB,
-            "roberto": ROBERTO_NPUB,
-            "alma": ALMA_NPUB,
-            "elena": ELENA_NPUB,
+            "marco": PACO_NPUB,
+            "lucia": PEPA_NPUB,
+            "diego": ROBERTO_NPUB,
+            "dana": ALMA_NPUB,
+            "elias": ELENA_NPUB,
         }
 
     def tearDown(self):
@@ -162,9 +163,9 @@ class PhantomchatVerifyTestCase(unittest.TestCase):
         self.assertEqual([a[0] for a in runner.calls], ["phantomchat"] * 5)
 
     def test_mismatch_when_declared_differs(self):
-        # Declare pepa's npub for paco -> mismatch on paco, ok elsewhere.
+        # Declare lucia's npub for marco -> mismatch on marco, ok elsewhere.
         wrong = dict(self._real)
-        wrong["paco"] = PEPA_NPUB
+        wrong["marco"] = PEPA_NPUB
         spec = self._with_declared_npubs(wrong)
         for a in self._real:
             self._make_actor_dir(a)
@@ -172,10 +173,10 @@ class PhantomchatVerifyTestCase(unittest.TestCase):
             spec, self.personas, runner=FakeRunner(self._real)
         )
         by_id = {c.actor_id: c for c in manifest.checks}
-        self.assertEqual(by_id["paco"].status, MISMATCH)
-        self.assertEqual(by_id["paco"].declared_npub, PEPA_NPUB)
-        self.assertEqual(by_id["paco"].real_npub, PACO_NPUB)
-        self.assertEqual(by_id["pepa"].status, OK)
+        self.assertEqual(by_id["marco"].status, MISMATCH)
+        self.assertEqual(by_id["marco"].declared_npub, PEPA_NPUB)
+        self.assertEqual(by_id["marco"].real_npub, PACO_NPUB)
+        self.assertEqual(by_id["lucia"].status, OK)
         self.assertFalse(manifest.ok)
 
     def test_no_declared_npub_is_not_declared(self):
@@ -196,36 +197,36 @@ class PhantomchatVerifyTestCase(unittest.TestCase):
 
     def test_missing_identity_with_declared_npub(self):
         spec = self._with_declared_npubs(self._real)
-        self._make_actor_dir("paco", identity=False)  # paco has no keypair
-        for a in ("pepa", "roberto", "alma", "elena"):
+        self._make_actor_dir("marco", identity=False)  # marco has no keypair
+        for a in ("lucia", "diego", "dana", "elias"):
             self._make_actor_dir(a)
         runner = FakeRunner(self._real)
         manifest = verify_phantomchat(spec, self.personas, runner=runner)
         by_id = {c.actor_id: c for c in manifest.checks}
-        self.assertEqual(by_id["paco"].status, MISSING_IDENTITY)
-        self.assertFalse(by_id["paco"].identity_exists)
+        self.assertEqual(by_id["marco"].status, MISSING_IDENTITY)
+        self.assertFalse(by_id["marco"].identity_exists)
         self.assertFalse(manifest.ok)
-        # the runner was never asked about paco (no identity to check)
+        # the runner was never asked about marco (no identity to check)
         asked = [c[2] for c in runner.calls if len(c) > 2]
-        self.assertNotIn("paco", asked)
-        self.assertEqual(sorted(asked), ["alma", "elena", "pepa", "roberto"])
+        self.assertNotIn("marco", asked)
+        self.assertEqual(sorted(asked), ["dana", "diego", "elias", "lucia"])
 
     def test_identity_without_nsec_treated_as_missing(self):
         spec = self._with_declared_npubs(self._real)
-        d = self._make_actor_dir("paco")
+        d = self._make_actor_dir("marco")
         (d / IDENTITY_FILENAME).write_text(json.dumps({"foo": "bar"}), encoding="utf-8")
-        for a in ("pepa", "roberto", "alma", "elena"):
+        for a in ("lucia", "diego", "dana", "elias"):
             self._make_actor_dir(a)
         manifest = verify_phantomchat(
             spec, self.personas, runner=FakeRunner(self._real)
         )
         by_id = {c.actor_id: c for c in manifest.checks}
-        self.assertEqual(by_id["paco"].status, MISSING_IDENTITY)
+        self.assertEqual(by_id["marco"].status, MISSING_IDENTITY)
 
     def test_missing_phantomchat_json_reported(self):
         spec = self._with_declared_npubs(self._real)
-        self._make_actor_dir("paco", phantomchat=False)
-        for a in ("pepa", "roberto", "alma", "elena"):
+        self._make_actor_dir("marco", phantomchat=False)
+        for a in ("lucia", "diego", "dana", "elias"):
             self._make_actor_dir(a)
         manifest = verify_phantomchat(
             spec, self.personas, runner=FakeRunner(self._real)
@@ -233,9 +234,9 @@ class PhantomchatVerifyTestCase(unittest.TestCase):
         by_id = {c.actor_id: c for c in manifest.checks}
         # identity exists and npub matches -> ok, but the missing
         # phantomchat.json is visible in the check (not a failure).
-        self.assertEqual(by_id["paco"].status, OK)
-        self.assertFalse(by_id["paco"].phantomchat_exists)
-        self.assertTrue(manifest.ok)
+        self.assertEqual(by_id["marco"].status, MISSING_PHANTOMCHAT)
+        self.assertFalse(by_id["marco"].phantomchat_exists)
+        self.assertFalse(manifest.ok)
 
     def test_runner_failure_is_error(self):
         spec = self._with_declared_npubs(self._real)
@@ -273,7 +274,7 @@ class PhantomchatVerifyTestCase(unittest.TestCase):
         )
         data = json.loads(manifest.to_json())
         self.assertEqual(data["format_version"], 1)
-        self.assertEqual(data["org"], "aquaponics-united")
+        self.assertEqual(data["org"], "verdant-aquaponics")
         self.assertEqual(data["checked_at"], "2026-08-11T00:00:00+00:00")
         self.assertEqual(
             data["summary"],
@@ -319,7 +320,7 @@ class PhantomchatVerifyTestCase(unittest.TestCase):
     # ------------------------------------------------------------- extract
 
     def test_extract_npub_from_tui_output(self):
-        out = TUI_OUTPUT.format(id="paco", npub=PACO_NPUB)
+        out = TUI_OUTPUT.format(id="marco", npub=PACO_NPUB)
         self.assertEqual(_extract_npub(out), PACO_NPUB)
 
     def test_extract_npub_none_when_absent(self):
@@ -355,12 +356,12 @@ class PhantomchatCheckCLITest(unittest.TestCase):
         )
 
         checks = [
-            ActorCheck(actor_id="paco", status=OK_STATUS),
+            ActorCheck(actor_id="marco", status=OK_STATUS),
         ]
         if not ok:
             checks.append(
                 ActorCheck(
-                    actor_id="roberto",
+                    actor_id="diego",
                     status=MISMATCH_STATUS,
                     declared_npub="npub1" + "c" * 58,
                     real_npub="npub1" + "d" * 58,
@@ -370,7 +371,7 @@ class PhantomchatCheckCLITest(unittest.TestCase):
                 )
             )
         return PhantomchatManifest(
-            org_id="aquaponics-united",
+            org_id="verdant-aquaponics",
             personas_dir=".",
             phantomchat_bin="phantombot",
             checked_at="2026-08-11T00:00:00+00:00",
@@ -413,7 +414,7 @@ class PhantomchatCheckCLITest(unittest.TestCase):
                 ],
             )
         self.assertEqual(result.exit_code, 1, result.output)
-        self.assertIn("roberto: mismatch", result.output)
+        self.assertIn("diego: mismatch", result.output)
 
     def test_json_output_exit_codes(self):
         import phantomorg.cli as cli_mod
@@ -434,8 +435,8 @@ class PhantomchatCheckCLITest(unittest.TestCase):
             )
         self.assertEqual(result.exit_code, 1, result.output)
         data = json.loads(result.output)
-        self.assertEqual(data["org"], "aquaponics-united")
-        self.assertEqual(data["checks"]["roberto"]["status"], "mismatch")
+        self.assertEqual(data["org"], "verdant-aquaponics")
+        self.assertEqual(data["checks"]["diego"]["status"], "mismatch")
 
     def test_invalid_org_rejected(self):
         import phantomorg.cli as cli_mod

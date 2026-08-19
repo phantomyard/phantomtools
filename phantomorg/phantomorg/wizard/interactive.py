@@ -82,7 +82,7 @@ def _require_org_doc_structure(doc: dict, org_path: Path) -> None:
 
 
 def run_new_org_wizard() -> Path:
-    org_id = click.prompt("Organization ID (slug, e.g. aquaponics-united)")
+    org_id = click.prompt("Organization ID (slug, e.g. verdant-aquaponics)")
     name = click.prompt("Organization name")
     sector = click.prompt("Sector (e.g. ngo, pyme, educacion)")
     langs = click.prompt("Languages (comma-separated, e.g. en,es)", default="en")
@@ -260,7 +260,7 @@ def run_setup_wizard(
         )
 
     if create_new:
-        org_id = click.prompt("Organization ID (slug, e.g. aquaponics-united)")
+        org_id = click.prompt("Organization ID (slug, e.g. verdant-aquaponics)")
         if not is_valid_identifier(org_id):
             click.secho(
                 f"Invalid organization id {org_id!r}: must match "

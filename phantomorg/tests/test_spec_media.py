@@ -32,7 +32,7 @@ from phantomorg.spec.shape_validator import (
     validate_shape,
 )
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
 
 def _load_doc():
@@ -73,7 +73,7 @@ class TestDuplicateKeysRejected(unittest.TestCase):
 
     def test_no_duplicate_keys_loads_fine(self):
         spec = load_org_yaml(AU_ORG)
-        self.assertEqual(spec.organization.id, "aquaponics-united")
+        self.assertEqual(spec.organization.id, "verdant-aquaponics")
 
 
 class TestLoaderErrorContract(unittest.TestCase):
@@ -313,7 +313,9 @@ class TestBuildAllSkipsBrokenOrg(unittest.TestCase):
             result = runner.invoke(
                 main, ["build-all", "--base", str(base), "--out", str(out)]
             )
-            self.assertEqual(result.exit_code, 0, result.output)
+            # Partial success now exits non-zero (a broken org must not
+            # report a complete build-all); the good org still compiles.
+            self.assertEqual(result.exit_code, 1, result.output)
             self.assertIn("load error, skipping", result.output)
             self.assertIn("good-org", result.output)
             self.assertTrue((out / "good-org").exists())

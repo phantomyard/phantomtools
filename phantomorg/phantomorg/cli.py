@@ -735,18 +735,30 @@ def telegram_check_cmd(org_path, config_path, state_path, as_json):
     help="Removes from the target actors of this same organization that are no longer in the current build",
 )
 @click.option(
+    "--reset",
+    is_flag=True,
+    default=False,
+    help="DESTRUCTIVE: archive and replace the WHOLE live persona directories "
+    "(loses runtime state). Normal deploy is additive and never moves the "
+    "directory.",
+)
+@click.option(
     "--yes",
     "assume_yes",
     is_flag=True,
     default=False,
     help="Skip the final confirmation (for scripting/CI)",
 )
-def deploy_cmd(compiled_dir, target, force, prune, assume_yes):
-    """Copies the already compiled output to the runtime's personas directory.
+def deploy_cmd(compiled_dir, target, force, prune, reset, assume_yes):
+    """Deploys the compiled output into the runtime's personas directory.
 
-    Existing personas that will be overwritten are first MOVED to
-    personas-archive/ (phantombot's own backup convention) so the
-    previous state can be restored with `phantombot import-persona`.
+    Normal deploy is ADDITIVE: it writes only the files PhantomOrg owns,
+    in place, preserving identity.json, the vault, accumulated memory and
+    the KB. Files being overwritten are backed up to personas-archive/
+    (per-file) so `po rollback` can restore them.
+
+    ``--reset`` is the destructive whole-directory replacement; it
+    requires explicit confirmation (unless --yes).
     """
     target_path = Path(target) if target else None
     effective_target = target_path or default_personas_dir()
@@ -769,9 +781,24 @@ def deploy_cmd(compiled_dir, target, force, prune, assume_yes):
         click.echo(
             "  --prune    : actors of this org no longer in the build will be archived"
         )
+    if reset:
+        click.secho(
+            "  --reset    : DESTRUCTIVE — whole persona directories will be "
+            "archived and replaced (identity/vault/memory/KB are NOT preserved "
+            "in place; they only survive in the archive).",
+            fg="yellow",
+        )
     click.echo(
-        "  overwrites : existing personas are archived to personas-archive/ first"
+        "  overwrites : files this tool owns are backed up to personas-archive/ "
+        "first (per-file)"
     )
+    if (
+        reset
+        and not assume_yes
+        and not click.confirm("Apply this DESTRUCTIVE reset?", default=False)
+    ):
+        click.secho("Cancelled — no changes were made.", fg="yellow")
+        raise SystemExit(1)
     if not assume_yes and not click.confirm("Apply this deployment?", default=False):
         click.secho("Cancelled — no changes were made.", fg="yellow")
         raise SystemExit(1)
@@ -824,6 +851,7 @@ def deploy_cmd(compiled_dir, target, force, prune, assume_yes):
                 effective_target,
                 force=force,
                 prune=prune,
+                reset=reset,
             )
         except DeployCollisionError as e:
             # Collisions are detected in preflight, BEFORE anything is
@@ -1032,7 +1060,7 @@ def build_all_cmd(base_dir, out_base):
     click.echo(
         f"\n{ok} organization(s) compiled, {failed} skipped due to validation error."
     )
-    if failed and not ok:
+    if failed:
         raise SystemExit(1)
 
 
@@ -1316,11 +1344,10 @@ def deploy_all_cmd(base_dir, dist_base, target, force, prune, assume_yes):
     click.echo(
         f"\n{ok} organization(s) deployed, {collided} with collision, {failed} without build."
     )
-    # F3: a filesystem/mutation failure mid-deploy-all must exit non-zero
-    # even when some orgs deployed fine — callers (CI) treat exit 0 as
-    # "everything deployed". The in_progress session still records what
-    # actually happened for `po rollback`.
-    if mutation_failed or ((failed or collided) and not ok):
+    # Exit non-zero whenever ANY organization failed or collided — even
+    # when others succeeded. Automation treats exit 0 as "everything
+    # deployed"; a partial rollout must not report as complete.
+    if mutation_failed or failed or collided:
         raise SystemExit(1)
 
 

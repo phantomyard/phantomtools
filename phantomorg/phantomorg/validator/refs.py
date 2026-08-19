@@ -1,7 +1,7 @@
 """
 Cross-reference check: every id mentioned anywhere else in the spec must
-exist. This is what prevents gap G4 detected in the Aquaponics United
-audit (escalation paths to "Salvador" or "Fran" that didn't correspond to
+exist. This is what prevents gap G4 detected in the Verdant Aquaponics Co-op
+audit (escalation paths to "Board President" or "Tomás" that didn't correspond to
 any declared role).
 """
 

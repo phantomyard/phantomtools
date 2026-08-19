@@ -521,11 +521,7 @@ def run_update(
         return EXIT_ERROR
 
     origin_repo = remote_origin_repo(root)
-    repo = (
-        repo_override
-        or os.environ.get(UPDATE_REPO_ENV)
-        or origin_repo
-    )
+    repo = repo_override or os.environ.get(UPDATE_REPO_ENV) or origin_repo
     if not repo:
         err.write(
             "update failed: no GitHub remote found. Add remote.origin or set "

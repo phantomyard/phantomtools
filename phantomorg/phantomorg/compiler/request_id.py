@@ -7,7 +7,7 @@ happened in one place (e.g. an f-string in new_org.py substituting
 {org_id} when creating the file), any org.yaml written or edited by hand
 through any other path would keep the unresolved placeholder — which is
 exactly the real bug that appeared when comparing the org.yaml of
-Aquaponics United / United Capital Group (written by hand) against what
+Verdant Aquaponics Co-op / Harbor Capital Advisors (written by hand) against what
 `po new-org` generates.
 
 With the resolution centralized here, it doesn't matter how the org.yaml

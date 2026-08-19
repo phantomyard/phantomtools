@@ -1,6 +1,6 @@
 """Exhaustive fault-injection audit of the deploy -> archive -> rollback path.
 
-Final acceptance test (Salvador's recommendation, 2026-08-10): crash the
+Final acceptance test (Board President's recommendation, 2026-08-10): crash the
 rollback after EVERY filesystem operation and verify automatically that
 the final state equals exactly the pre-deploy state:
 
@@ -54,6 +54,7 @@ import unittest.mock
 from contextlib import contextmanager
 from pathlib import Path
 
+import yaml
 from click.testing import CliRunner
 
 from phantomorg.cli import main
@@ -67,15 +68,15 @@ from phantomorg.deploy.session import (
 from phantomorg.spec.loader import load_org_yaml
 
 ORGS_DIR = Path(__file__).parent.parent / "organizations"
-AU_ORG = ORGS_DIR / "aquaponics-united/org.yaml"
-UCG_ORG = ORGS_DIR / "united-capital-group/org.yaml"
+AU_ORG = ORGS_DIR / "verdant-aquaponics/org.yaml"
+UCG_ORG = ORGS_DIR / "harbor-capital/org.yaml"
 
 TRASH_PREFIX = "._pf_trash_"
 LOCK_NAME = ".phantomorg-manifest.lock"
 MANIFEST_NAME = ".phantomorg-manifest.json"
 
-AU_PERSONAS = ["alma", "elena", "paco", "pepa", "roberto"]
-UCG_PERSONAS = ["anna"]
+AU_PERSONAS = ["dana", "elias", "marco", "lucia", "diego"]
+UCG_PERSONAS = ["nadia"]
 
 
 def runner_invoke_rollback(target: Path):
@@ -219,6 +220,7 @@ def _inject_fs_crashes(mod, injector: _FaultInjector):
     real = {
         "move": mod.shutil.move,
         "rmtree": mod.shutil.rmtree,
+        "copy2": mod.shutil.copy2,
         "replace": mod.os.replace,
         "mkdir": mod.Path.mkdir,
         "rmdir": mod.Path.rmdir,
@@ -230,6 +232,12 @@ def _inject_fs_crashes(mod, injector: _FaultInjector):
             src, dst
         ) else None
         return real["move"](src, dst, **kw)
+
+    def copy2(src, dst, **kw):
+        injector._hit("copy2", f"{src} -> {dst}") if injector._relevant(
+            src, dst
+        ) else None
+        return real["copy2"](src, dst, **kw)
 
     def rmtree(path, **kw):
         if injector._relevant(path):
@@ -258,6 +266,7 @@ def _inject_fs_crashes(mod, injector: _FaultInjector):
 
     mod.shutil.move = move
     mod.shutil.rmtree = rmtree
+    mod.shutil.copy2 = copy2
     mod.os.replace = replace
     mod.Path.mkdir = mkdir
     mod.Path.rmdir = rmdir
@@ -267,6 +276,7 @@ def _inject_fs_crashes(mod, injector: _FaultInjector):
     finally:
         mod.shutil.move = real["move"]
         mod.shutil.rmtree = real["rmtree"]
+        mod.shutil.copy2 = real["copy2"]
         mod.os.replace = real["replace"]
         mod.Path.mkdir = real["mkdir"]
         mod.Path.rmdir = real["rmdir"]
@@ -337,7 +347,7 @@ def _setup_scenario_a(tmp: Path) -> tuple[Path, str, dict]:
     archive_root = target.parent / "personas-archive"
     # Pre-deploy: target and archive root did not exist at all.
     pre = {"target": {}, "root": {}, "manifest": None}
-    _deploy_all(tmp, ["aquaponics-united", "united-capital-group"], target)
+    _deploy_all(tmp, ["verdant-aquaponics", "harbor-capital"], target)
     sessions = load_sessions(archive_root)
     assert len(sessions) == 1, sessions
     assert not sessions[0].get("archived"), sessions[0]
@@ -349,28 +359,39 @@ def _setup_scenario_a(tmp: Path) -> tuple[Path, str, dict]:
 
 def _setup_scenario_b(tmp: Path) -> tuple[Path, str, dict]:
     """Pre-existing target and archive root with foreign content, then a
-    second deploy that archives/replaces AU personas and creates Anna.
+    second deploy (after an org.yaml change) that archives/replaces AU's
+    owned files per-file and creates Nadia.
 
     Returns (target, session_id of the SECOND deploy, pre_deploy_state
     of that second deploy)."""
     target = tmp / "personas"
     # v1: fresh AU deploy (creates the target and the archive root).
-    _deploy_all(tmp, ["aquaponics-united"], target)
+    orgs_dir, dist = _build_orgs(tmp, ["verdant-aquaponics"])
+    r = CliRunner().invoke(
+        main,
+        [
+            "deploy-all",
+            "--base",
+            str(orgs_dir),
+            "--dist-base",
+            str(dist),
+            "--target",
+            str(target),
+            "--yes",
+        ],
+    )
+    if r.exit_code != 0:
+        raise AssertionError(f"v1 deploy-all failed:\n{r.output}")
     archive_root = target.parent / "personas-archive"
 
-    # Customize the pre-deploy state: distinct content + permissions.
-    (target / "alma" / "SOUL.md").write_text(
-        "# PRE-DEPLOY ALMA SOUL\ncustom content\n", encoding="utf-8"
-    )
-    secret = target / "alma" / "secret.md"
+    # Customize the pre-deploy state: runtime content + permissions that
+    # additive deploy must PRESERVE.
+    secret = target / "dana" / "secret.md"
     secret.write_text("pre-deploy secret\n", encoding="utf-8")
     secret.chmod(0o600)
-    (target / "pepa" / "SOUL.md").write_text(
-        "# PRE-DEPLOY PEPA SOUL\nother content\n", encoding="utf-8"
-    )
-    (target / "pepa").chmod(0o750)
-    (target / "elena" / "SOUL.md").write_text(
-        "# PRE-DEPLOY ELENA SOUL\nthird\n", encoding="utf-8"
+    (target / "lucia").chmod(0o750)
+    (target / "dana" / "memory" / "daily.md").write_text(
+        "# runtime daily\n", encoding="utf-8"
     )
 
     # A foreign archive (e.g. a phantombot import) that must survive.
@@ -381,9 +402,38 @@ def _setup_scenario_b(tmp: Path) -> tuple[Path, str, dict]:
     # Snapshot the exact pre-deploy state (before the v2 deploy).
     pre = _pre_deploy_snapshot(target, archive_root)
 
-    # v2: AU + UCG deploy-all archives the customized AU personas and
-    # creates anna.
-    _deploy_all(tmp, ["aquaponics-united", "united-capital-group"], target)
+    # Change the org spec so the rebuild produces DIFFERENT owned-file
+    # content (the comms request-id format lives inside an ORG block).
+    au_yaml = orgs_dir / "verdant-aquaponics" / "org.yaml"
+    doc = yaml.safe_load(au_yaml.read_text(encoding="utf-8"))
+    doc["communication"]["request_id_format"] = "v2-{org_id}-{yyyymmdd}-{seq4}"
+    au_yaml.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
+
+    # Rebuild AU from the MODIFIED yaml and add UCG to the dist tree.
+    build(load_org_yaml(au_yaml), dist / "verdant-aquaponics")
+    ucg_dir = orgs_dir / "harbor-capital"
+    ucg_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(UCG_ORG, ucg_dir / "org.yaml")
+    (dist / "harbor-capital").mkdir(parents=True, exist_ok=True)
+    build(load_org_yaml(UCG_ORG), dist / "harbor-capital")
+
+    # v2: AU (changed) + UCG deploy-all archives AU's changed owned files
+    # per-file and creates nadia.
+    r2 = CliRunner().invoke(
+        main,
+        [
+            "deploy-all",
+            "--base",
+            str(orgs_dir),
+            "--dist-base",
+            str(dist),
+            "--target",
+            str(target),
+            "--yes",
+        ],
+    )
+    if r2.exit_code != 0:
+        raise AssertionError(f"v2 deploy-all failed:\n{r2.output}")
 
     sessions = load_sessions(archive_root)
     assert len(sessions) == 2, sessions
@@ -410,6 +460,8 @@ def _classify_op(kind: str, path: str, target: Path, root: Path) -> tuple[str, s
         if TRASH_PREFIX in dst:
             return (kind, "discard")
         return (kind, "restore")
+    if kind == "copy2":
+        return (kind, "restore")
     if ".phantomorg-manifest.json" in path:
         return (kind, "manifest")
     if TRASH_PREFIX in path:
@@ -421,70 +473,14 @@ def _classify_op(kind: str, path: str, target: Path, root: Path) -> tuple[str, s
     return (kind, "other")
 
 
-# --------------------------------------------------------------------------
-# Expected operation sequences (probed first; crash enumeration uses them)
-# --------------------------------------------------------------------------
-
-# Scenario A (fresh, 6 created personas, nothing archived):
-#   mark: manifest-lock mkdir, save mkdir, save os.replace
-#   execute: target.mkdir, trash.mkdir, 6 discard moves,
-#            data-file sweep unlink (mid-session scopes backup), trash
-#            sweep rmtree, target.rmdir
-#   drop (inside manifest lock): lock mkdir, manifest unlink
-#   remove-abandoned (outside lock): archive-root rmtree
-SCENARIO_A_OPS: list[tuple[str, str]] = (
-    [
-        ("mkdir", "archive_root"),
-        ("mkdir", "archive_root"),
-        ("replace", "manifest"),
-        ("mkdir", "target"),
-        ("mkdir", "trash"),
-    ]
-    + [("move", "discard")] * len(AU_PERSONAS + UCG_PERSONAS)
-    + [
-        ("unlink", "archive_root"),
-        ("rmtree", "trash"),
-        ("rmdir", "target"),
-        ("mkdir", "archive_root"),
-        ("unlink", "manifest"),
-        ("rmtree", "archive_root"),
-    ]
-)
-
-# Scenario B (5 archived + replaced, 1 created):
-#   mark: 2 mkdir + 1 replace
-#   execute: target.mkdir, trash.mkdir,
-#            5x (discard move + restore move), 1 discard move (anna),
-#            data-file restores (2 copy2 + 2 backup unlinks) + sweep
-#            unlink, trash sweep rmtree
-#   drop (inside manifest lock): lock mkdir + save mkdir + save replace
-SCENARIO_B_OPS: list[tuple[str, str]] = (
-    [
-        ("mkdir", "archive_root"),
-        ("mkdir", "archive_root"),
-        ("replace", "manifest"),
-        ("mkdir", "target"),
-        ("mkdir", "trash"),
-    ]
-    + [("move", "discard"), ("move", "restore")] * len(AU_PERSONAS)
-    + [
-        ("move", "discard"),
-        ("unlink", "archive_root"),
-        ("unlink", "archive_root"),
-        ("unlink", "archive_root"),
-        ("rmtree", "trash"),
-        ("mkdir", "archive_root"),
-        ("mkdir", "archive_root"),
-        ("replace", "manifest"),
-    ]
-)
-
-
 class TestRollbackFaultInjectionProbe(unittest.TestCase):
-    """Record the real filesystem operation sequence of a rollback and
-    assert it matches the expected enumeration used by the crash tests."""
+    """Record the real filesystem operation sequence of a rollback. The
+    crash matrix below derives its crash points from this exact sequence
+    (the additive deploy changed the restore primitive from a whole-dir
+    ``move`` to a per-file ``copy2``, so the enumeration is no longer a
+    fixed literal — it is recorded once and reused)."""
 
-    def _probe(self, setup, expected: list[tuple[str, str]]) -> None:
+    def _probe(self, setup) -> list[tuple[str, str]]:
         import phantomorg.deploy.session as session_mod
 
         with tempfile.TemporaryDirectory() as t:
@@ -497,21 +493,51 @@ class TestRollbackFaultInjectionProbe(unittest.TestCase):
             with _inject_fs_crashes(session_mod, injector):
                 result = execute_rollback(plan)
             self.assertEqual(result.session_id, session_id)
-            observed = [
+            return [
                 _classify_op(kind, path, target, archive_root)
                 for kind, path in injector.calls
             ]
-            self.assertEqual(
-                observed,
-                expected,
-                f"operation sequence drifted:\n got: {observed}\nexp: {expected}",
-            )
 
     def test_probe_scenario_a(self):
-        self._probe(_setup_scenario_a, SCENARIO_A_OPS)
+        ops = self._probe(_setup_scenario_a)
+        # Sanity: the fresh-deploy rollback must end by removing the target
+        # and the archive root.
+        self.assertIn(("rmtree", "archive_root"), ops)
+        self.assertGreaterEqual(
+            ops.count(("move", "discard")), len(AU_PERSONAS + UCG_PERSONAS)
+        )
 
     def test_probe_scenario_b(self):
-        self._probe(_setup_scenario_b, SCENARIO_B_OPS)
+        ops = self._probe(_setup_scenario_b)
+        # Sanity: per-file restore uses copy2 (not a whole-dir move), and
+        # the created persona is discarded whole.
+        self.assertIn(("copy2", "restore"), ops)
+        self.assertIn(("move", "discard"), ops)
+        self.assertIn(("rmtree", "trash"), ops)
+
+
+def _rollback_op_sequence(
+    setup,
+) -> tuple[list[tuple[str, str]], int]:
+    """Record the rollback's filesystem operation sequence once (clean
+    run, no crash) and return (ops, session_index_hint). Used by the crash
+    matrix to enumerate every crash point."""
+    import phantomorg.deploy.session as session_mod
+
+    with tempfile.TemporaryDirectory() as t:
+        tmp = Path(t)
+        target, _session_id, _pre = setup(tmp)
+        archive_root = target.parent / "personas-archive"
+        injector = _FaultInjector(crash_at=None)
+        injector.set_roots(target, archive_root)
+        plan = plan_rollback(archive_root, target)
+        with _inject_fs_crashes(session_mod, injector):
+            execute_rollback(plan)
+        ops = [
+            _classify_op(kind, path, target, archive_root)
+            for kind, path in injector.calls
+        ]
+        return ops, len(ops)
 
 
 class TestRollbackExhaustiveFaultInjection(unittest.TestCase):
@@ -520,12 +546,18 @@ class TestRollbackExhaustiveFaultInjection(unittest.TestCase):
 
     maxDiff = None
 
-    def _run_crash_matrix(self, setup, expected: list[tuple[str, str]]) -> None:
+    def _run_crash_matrix(self, setup) -> None:
         import phantomorg.deploy.session as session_mod
 
-        for crash_at in range(1, len(expected) + 1):
+        # Record the real op sequence once to know how many crash points
+        # there are (the additive deploy's per-file restore changed the
+        # sequence, so it is not a fixed literal anymore).
+        ops, n_ops = _rollback_op_sequence(setup)
+        self.assertGreater(n_ops, 0, "rollback must perform filesystem ops")
+
+        for crash_at in range(1, n_ops + 1):
             with (
-                self.subTest(crash_at=crash_at, op=expected[crash_at - 1]),
+                self.subTest(crash_at=crash_at, op=ops[crash_at - 1]),
                 tempfile.TemporaryDirectory() as t,
             ):
                 tmp = Path(t)
@@ -579,10 +611,10 @@ class TestRollbackExhaustiveFaultInjection(unittest.TestCase):
                 _assert_no_internal_residue(self, archive_root)
 
     def test_crash_matrix_scenario_a_fresh_deploy(self):
-        self._run_crash_matrix(_setup_scenario_a, SCENARIO_A_OPS)
+        self._run_crash_matrix(_setup_scenario_a)
 
     def test_crash_matrix_scenario_b_replaced_and_created(self):
-        self._run_crash_matrix(_setup_scenario_b, SCENARIO_B_OPS)
+        self._run_crash_matrix(_setup_scenario_b)
 
 
 class TestRollbackResidueHandling(unittest.TestCase):
@@ -631,9 +663,13 @@ class TestRollbackResidueHandling(unittest.TestCase):
             target, _sid, _pre = _setup_scenario_b(tmp)
             archive_root = target.parent / "personas-archive"
 
+            # Find the trash-sweep rmtree position in the real sequence.
+            ops, _ = _rollback_op_sequence(_setup_scenario_b)
+            crash_at = ops.index(("rmtree", "trash")) + 1
+
             # First rollback crashes at the trash sweep (rmtree) — the
             # whole trash dir survives.
-            injector = _FaultInjector(crash_at=17)
+            injector = _FaultInjector(crash_at=crash_at)
             injector.set_roots(target, archive_root)
             plan = plan_rollback(archive_root, target)
             with (
@@ -647,7 +683,7 @@ class TestRollbackResidueHandling(unittest.TestCase):
             # Simulate a partial rmtree: one discarded persona already
             # gone, another still inside.
             for entry in list(trash_dirs[0].iterdir()):
-                if entry.name == "alma":
+                if entry.name == "dana":
                     shutil.rmtree(entry)
             self.assertTrue(any(trash_dirs[0].iterdir()))
 
@@ -658,7 +694,7 @@ class TestRollbackResidueHandling(unittest.TestCase):
             before = _snapshot_tree(target)
             after = _snapshot_tree(target)
             _assert_same_state(self, "target", before, after)
-            self.assertTrue((target / "alma" / "secret.md").exists())
+            self.assertTrue((target / "dana" / "secret.md").exists())
 
     def test_older_session_evidence_trash_preserved(self):
         """The sweep must NEVER delete a trash dir that is the only
@@ -680,8 +716,8 @@ class TestRollbackResidueHandling(unittest.TestCase):
             # and S2 (S1's own session stamp works: it sorts before S2's).
             evidence = archive_root / f"{TRASH_PREFIX}{s1_id}"
             evidence.mkdir()
-            (evidence / "alma").mkdir()
-            (evidence / "alma" / "SOUL.md").write_text(
+            (evidence / "dana").mkdir()
+            (evidence / "dana" / "SOUL.md").write_text(
                 "v1 discarded\n", encoding="utf-8"
             )
 

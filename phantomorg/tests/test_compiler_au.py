@@ -7,8 +7,8 @@ from pathlib import Path
 from phantomorg.compiler import build
 from phantomorg.validator import validate_org
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
-EXPECTED_ACTORS = {"paco", "pepa", "roberto", "alma", "elena"}
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
+EXPECTED_ACTORS = {"marco", "lucia", "diego", "dana", "elias"}
 # build() also reports the org-level derived artifact under __scopes__ and
 # per-actor structured warnings under __warnings__ (empty when none).
 EXPECTED_BUILD_KEYS = EXPECTED_ACTORS | {"__scopes__", "__humans__", "__warnings__"}
@@ -41,10 +41,11 @@ class TestCompilerAU(unittest.TestCase):
                 self.assertTrue((actor_dir / "memory" / "decisions.md").exists())
                 self.assertTrue((actor_dir / "memory" / "lessons.md").exists())
                 self.assertTrue((actor_dir / "memory" / "commitments.md").exists())
+                self.assertTrue((actor_dir / "memory" / "norms.md").exists())
                 self.assertTrue((actor_dir / "kb" / "runbooks").is_dir())
                 self.assertTrue((actor_dir / "kb" / "Home.md").exists())
                 self.assertTrue(
-                    (actor_dir / "kb" / "templates" / "atomic-note.md").exists()
+                    (actor_dir / "kb" / "templates" / "concept.md").exists()
                 )
 
     def test_build_generates_humans_registry(self):
@@ -60,8 +61,8 @@ class TestCompilerAU(unittest.TestCase):
             self.assertTrue(humans_path.exists())
             self.assertIn("__humans__", written)
             content = humans_path.read_text(encoding="utf-8")
-            self.assertIn("Human Registry — Aquaponics United", content)
-            for human_id in ("salvador", "brigitte", "fran", "beatriz"):
+            self.assertIn("Human Registry — Verdant Aquaponics Co-op", content)
+            for human_id in ("mar", "julia", "leo", "mirta"):
                 self.assertIn(f"`{human_id}`", content)
             # telegram ids rendered
             self.assertIn("1000000001", content)
@@ -96,10 +97,10 @@ class TestCompilerAU(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
-            # Plant out/alma -> out/pepa: resolve() keeps it "inside" the
-            # tree, but alice's files would land in pepa's directory.
-            (out_dir / "pepa").mkdir()
-            (out_dir / "alma").symlink_to(out_dir / "pepa", target_is_directory=True)
+            # Plant out/dana -> out/lucia: resolve() keeps it "inside" the
+            # tree, but alice's files would land in lucia's directory.
+            (out_dir / "lucia").mkdir()
+            (out_dir / "dana").symlink_to(out_dir / "lucia", target_is_directory=True)
             with self.assertRaises(ValueError):
                 build(spec, out_dir)
 
@@ -113,7 +114,7 @@ class TestCompilerAU(unittest.TestCase):
             out_dir = Path(tmp)
             outside = Path(tmp) / "outside"
             outside.mkdir()
-            (out_dir / "alma").symlink_to(outside, target_is_directory=True)
+            (out_dir / "dana").symlink_to(outside, target_is_directory=True)
             with self.assertRaises(ValueError):
                 build(spec, out_dir)
 
@@ -126,16 +127,16 @@ class TestCompilerAU(unittest.TestCase):
         spec, _ = validate_org(AU_ORG)
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
-            build(spec, out_dir, only="alma")
-            drawer = out_dir / "alma" / "memory" / "people.md"
+            build(spec, out_dir, only="dana")
+            drawer = out_dir / "dana" / "memory" / "people.md"
             self.assertTrue(drawer.exists())
             drawer.write_text("# People\n\n## (custom entries)\n", encoding="utf-8")
 
             # Second build must not touch the edited drawer.
-            written = build(spec, out_dir, only="alma")
+            written = build(spec, out_dir, only="dana")
             self.assertNotIn(
-                "alma/memory/people.md",
-                [str(p.relative_to(out_dir)) for p in written["alma"]],
+                "dana/memory/people.md",
+                [str(p.relative_to(out_dir)) for p in written["dana"]],
             )
             self.assertEqual(
                 drawer.read_text(encoding="utf-8"),
@@ -159,10 +160,10 @@ class TestCompilerAU(unittest.TestCase):
 
     def test_category_0_exception_only_on_paco(self):
         spec, _ = validate_org(AU_ORG)
-        paco = spec.actor_by_id("paco")
-        pepa = spec.actor_by_id("pepa")
-        self.assertIn("category-0", paco.actor_exceptions)
-        self.assertNotIn("category-0", pepa.actor_exceptions)
+        marco = spec.actor_by_id("marco")
+        lucia = spec.actor_by_id("lucia")
+        self.assertIn("category-0", marco.actor_exceptions)
+        self.assertNotIn("category-0", lucia.actor_exceptions)
 
     def test_training_lead_role_has_category_3(self):
         spec, _ = validate_org(AU_ORG)
@@ -179,30 +180,30 @@ class TestCompilerAU(unittest.TestCase):
         spec, _ = validate_org(AU_ORG)
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
-            build(spec, out_dir, only="alma")
+            build(spec, out_dir, only="dana")
 
-            soul_path = out_dir / "alma" / "SOUL.md"
+            soul_path = out_dir / "dana" / "SOUL.md"
             original = soul_path.read_text(encoding="utf-8")
             self.assertIn("<!-- ORG:BEGIN security -->", original)
 
             # We add a manual note OUTSIDE any block.
             manual_note = (
-                "\n## Personal note\nAlma prefers a direct tone with Operations.\n"
+                "\n## Personal note\nDana prefers a direct tone with Operations.\n"
             )
             edited = original + manual_note
             soul_path.write_text(edited, encoding="utf-8")
 
             # We change the spec: we give project_lead a new security
             # exception (equivalent to what actually happened with
-            # Elena/Category 3 in the original audit).
+            # Elias/Category 3 in the original audit).
             role = spec.role_by_id("project_lead")
             role.security_exceptions.append("category-2")
 
-            build(spec, out_dir, only="alma")
+            build(spec, out_dir, only="dana")
             rebuilt = soul_path.read_text(encoding="utf-8")
 
             # The manual note is still there...
-            self.assertIn("Alma prefers a direct tone with Operations.", rebuilt)
+            self.assertIn("Dana prefers a direct tone with Operations.", rebuilt)
             # ...and the security block did update with the spec change.
             self.assertIn("category-2", rebuilt)
 
@@ -215,15 +216,15 @@ class TestCompilerAU(unittest.TestCase):
         spec, _ = validate_org(AU_ORG)
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
-            build(spec, out_dir, only="alma")
+            build(spec, out_dir, only="dana")
 
-            soul_path = out_dir / "alma" / "SOUL.md"
+            soul_path = out_dir / "dana" / "SOUL.md"
             fully_manual = "# Completely rewritten by hand, without markers.\n"
             soul_path.write_text(fully_manual, encoding="utf-8")
 
             with self.assertWarns(UserWarning):
-                written = build(spec, out_dir, only="alma")
-            self.assertNotIn(soul_path, written["alma"])
+                written = build(spec, out_dir, only="dana")
+            self.assertNotIn(soul_path, written["dana"])
             self.assertEqual(soul_path.read_text(encoding="utf-8"), fully_manual)
 
     def test_memory_md_is_never_regenerated_after_creation(self):
@@ -235,14 +236,14 @@ class TestCompilerAU(unittest.TestCase):
         spec, _ = validate_org(AU_ORG)
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
-            build(spec, out_dir, only="alma")
+            build(spec, out_dir, only="dana")
 
-            memory_path = out_dir / "alma" / "MEMORY.md"
+            memory_path = out_dir / "dana" / "MEMORY.md"
             runtime_written_content = "# Memory\n\n- Fact accumulated in production: client X prefers email.\n"
             memory_path.write_text(runtime_written_content, encoding="utf-8")
 
-            written = build(spec, out_dir, only="alma")
-            self.assertNotIn(memory_path, written["alma"])
+            written = build(spec, out_dir, only="dana")
+            self.assertNotIn(memory_path, written["dana"])
             self.assertEqual(
                 memory_path.read_text(encoding="utf-8"), runtime_written_content
             )
@@ -255,24 +256,24 @@ class TestCompilerAU(unittest.TestCase):
         spec, _ = validate_org(AU_ORG)
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
-            build(spec, out_dir, only="alma")
+            build(spec, out_dir, only="dana")
 
             # Plant a stale mkstemp leftover (old mtime) next to a fresh
             # one (recent mtime) and a lookalike real file.
-            stale = out_dir / "alma" / ".SOUL.md.abc123"
+            stale = out_dir / "dana" / ".SOUL.md.abc123"
             stale.write_text("partial", encoding="utf-8")
             old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
                 hours=2
             )
             os.utime(stale, (old.timestamp(), old.timestamp()))
 
-            fresh = out_dir / "alma" / ".SOUL.md.zzz999"
+            fresh = out_dir / "dana" / ".SOUL.md.zzz999"
             fresh.write_text("live writer", encoding="utf-8")
 
-            lookalike = out_dir / "alma" / ".SOUL.md.backup"
+            lookalike = out_dir / "dana" / ".SOUL.md.backup"
             lookalike.write_text("real file", encoding="utf-8")
 
-            build(spec, out_dir, only="alma")
+            build(spec, out_dir, only="dana")
 
             self.assertFalse(stale.exists(), "stale tmp must be swept")
             self.assertTrue(fresh.exists(), "fresh tmp must survive")
@@ -312,29 +313,29 @@ class TestNpubBuildWarnings(unittest.TestCase):
         self.assertEqual(len(warnings_out), 5)
         self.assertEqual(
             {w["actor"] for w in warnings_out},
-            {"paco", "pepa", "roberto", "alma", "elena"},
+            {"marco", "lucia", "diego", "dana", "elias"},
         )
         for w in warnings_out:
             self.assertEqual(w["code"], "no-npub")
             self.assertIn("phantomchat", w["message"])
 
     def test_actor_with_npub_does_not_warn(self):
-        spec = self._strip_npubs(keep={"paco"})
+        spec = self._strip_npubs(keep={"marco"})
         with tempfile.TemporaryDirectory() as tmp:
             written = build(spec, Path(tmp))
         warnings_out = written.get("__warnings__", [])
         self.assertEqual(len(warnings_out), 4)
         warned = {w["actor"] for w in warnings_out}
-        self.assertNotIn("paco", warned)
-        self.assertEqual(warned, {"pepa", "roberto", "alma", "elena"})
+        self.assertNotIn("marco", warned)
+        self.assertEqual(warned, {"lucia", "diego", "dana", "elias"})
 
     def test_only_build_warns_for_that_actor(self):
         spec = self._strip_npubs()
         with tempfile.TemporaryDirectory() as tmp:
-            written = build(spec, Path(tmp), only="alma")
+            written = build(spec, Path(tmp), only="dana")
         warnings_out = written.get("__warnings__", [])
         self.assertEqual(len(warnings_out), 1)
-        self.assertEqual(warnings_out[0]["actor"], "alma")
+        self.assertEqual(warnings_out[0]["actor"], "dana")
         self.assertEqual(warnings_out[0]["code"], "no-npub")
 
 

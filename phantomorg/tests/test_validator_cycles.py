@@ -5,7 +5,7 @@ from phantomorg.spec.loader import load_org_yaml
 from phantomorg.spec.model import EscalationEntry
 from phantomorg.validator.graph import EscalationCycleError, check_no_cycles
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
 
 class TestValidatorCycles(unittest.TestCase):

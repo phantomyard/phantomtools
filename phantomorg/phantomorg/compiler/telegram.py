@@ -1,7 +1,7 @@
 """
 Telegram verification: contrast declared bot usernames against the runtime.
 
-org.yaml declares a ``telegram_bot`` handle (e.g. ``@CEO_bot``) for
+org.yaml declares a ``telegram_bot`` handle (e.g. ``@marco_bot``) for
 every actor — the username citizens use to reach that persona in the
 "cadena de personas" (norma de comunicación). The handle is *declared*
 state (org.yaml), but the authoritative value lives in the runtime:
@@ -49,7 +49,9 @@ from ..spec.model import OrgSpec
 # Config keys (phantombot config.toml)
 DEFAULT_PERSONA_KEY = "default_persona"
 TELEGRAM_SECTION = "channels.telegram"
-TOKEN_KEY = "token"
+# The literal config key name, not a credential value (bandit B105
+# false positive).
+TOKEN_KEY = "token"  # nosec B105
 PERSONAS_PREFIX = f"{TELEGRAM_SECTION}.personas."
 
 # Optional: path to state.json whose default_persona overrides config.toml
@@ -64,7 +66,8 @@ TELEGRAM_API = "https://api.telegram.org"
 # Statuses (sorted for deterministic manifests)
 OK = "ok"
 MISMATCH = "mismatch"
-NO_TOKEN = "no-token"
+# A status string, not a credential value (bandit B105 false positive).
+NO_TOKEN = "no-token"  # nosec B105
 NOT_DECLARED = "not-declared"
 ERROR = "error"
 
@@ -168,7 +171,9 @@ def _load_json(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _token_for_actor(config: dict, state: dict, actor_id: str) -> tuple[str, str] | None:
+def _token_for_actor(
+    config: dict, state: dict, actor_id: str
+) -> tuple[str, str] | None:
     """Return (token, source) for an actor, or None when no token exists.
 
     Resolution order:
@@ -180,16 +185,18 @@ def _token_for_actor(config: dict, state: dict, actor_id: str) -> tuple[str, str
     personas = config.get("channels", {}).get("telegram", {}).get("personas", {})
     if isinstance(personas, dict):
         sub = personas.get(actor_id)
-        if isinstance(sub, dict) and isinstance(sub.get(TOKEN_KEY), str) and sub[TOKEN_KEY]:
+        if (
+            isinstance(sub, dict)
+            and isinstance(sub.get(TOKEN_KEY), str)
+            and sub[TOKEN_KEY]
+        ):
             return sub[TOKEN_KEY], f"personas.{actor_id}"
 
     default_persona = state.get(STATE_DEFAULT_PERSONA_KEY)
     if not isinstance(default_persona, str):
         default_persona = config.get(DEFAULT_PERSONA_KEY)
     if default_persona == actor_id:
-        main_token = (
-            config.get("channels", {}).get("telegram", {}).get(TOKEN_KEY)
-        )
+        main_token = config.get("channels", {}).get("telegram", {}).get(TOKEN_KEY)
         if isinstance(main_token, str) and main_token:
             return main_token, "main (default persona)"
 
@@ -205,7 +212,10 @@ def _getme(token: str, timeout: float) -> tuple[str | None, str]:
     url = f"{TELEGRAM_API}/bot{token}/getMe"
     req = urllib.request.Request(url, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        # Fixed https URL to Telegram's public API — not attacker-controlled
+        # and no custom schemes are reachable from ``token`` (a Telegram bot
+        # token, constrained to [A-Za-z0-9:_-]).
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             payload = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
         return None, f"getMe failed: {e}"

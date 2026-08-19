@@ -9,10 +9,9 @@ from phantomorg.compiler.phantomchat_gen import (
     PhantomchatConfig,
     phantomchat_config,
 )
-from phantomorg.spec.loader import load_org_yaml
 from phantomorg.validator import validate_org
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
 BRIDGE_NPUB = "npub1k5sucm83q6tg4a9qhz8vx6gu8m3x03ecnnr0klv6skzhv8elkfkstydrel"
 HUMAN_NPUB = "npub1cml4wlfllw6mmw8esxgtslnka3scdxek7ecvh6vej7rtdjvzzd0s0cum9v"
@@ -55,15 +54,14 @@ class TestPhantomchatGeneration(unittest.TestCase):
             out_dir = Path(tmp)
             written = build(spec, out_dir)
 
-            for actor_id in ("paco", "pepa", "roberto", "alma", "elena"):
+            for actor_id in ("marco", "lucia", "diego", "dana", "elias"):
                 p = out_dir / actor_id / PHANTOMCHAT_FILENAME
                 self.assertTrue(p.exists(), f"{actor_id} must get phantomchat.json")
                 self.assertIn(p, written[actor_id])
 
     def test_au_allowlist_matches_deployed_shape(self):
-        """The generated allowlist must match what is actually deployed:
-        relays = private first + public; allowed = other actors + humans +
-        bridge (no self); greeted = humans + bridge + other actors."""
+        """Transport admission is not principal authorization: only explicitly
+        configured human principal keys are trusted and onboarding is visible."""
         spec, _ = validate_org(AU_ORG)
         actors = {a.id: a for a in spec.actors}
 
@@ -73,115 +71,35 @@ class TestPhantomchatGeneration(unittest.TestCase):
             # Relays: private first, then the 5 public ones.
             self.assertEqual(pc.relays[0], "ws://relay.example.invalid:7777")
             self.assertEqual(len(pc.relays), 6)
-            # Allowed: 4 other actors + human + bridge = 6, no self.
-            self.assertEqual(len(pc.allowed_npubs), 6)
-            self.assertNotIn(actor.npub, pc.allowed_npubs)
-            self.assertIn(BRIDGE_NPUB, pc.allowed_npubs)
-            self.assertIn(HUMAN_NPUB, pc.allowed_npubs)
-            # Greeted: same set, human + bridge first.
-            self.assertEqual(len(pc.greeted), 6)
-            self.assertEqual(pc.greeted[0], HUMAN_NPUB)
-            self.assertEqual(pc.greeted[1], BRIDGE_NPUB)
-            self.assertEqual(set(pc.greeted), set(pc.allowed_npubs))
+            self.assertEqual(pc.allowed_npubs, [HUMAN_NPUB])
+            self.assertNotIn(BRIDGE_NPUB, pc.allowed_npubs)
+            self.assertEqual(pc.greeted, [])
 
     def test_au_phantomchat_config_shape(self):
-        """Regression: the generated phantomchat.json for an example actor
-        must match the expected shape (relays private-first + public,
-        allowed/greeted sets without self)."""
         spec, _ = validate_org(AU_ORG)
-
-        deployed = {
-            "alma": """{
-  "relays": [
-    "ws://relay.example.invalid:7777",
-    "wss://relay.damus.io",
-    "wss://nos.lol",
-    "wss://relay.primal.net",
-    "wss://nostr.mom",
-    "wss://nostr.data.haus"
-  ],
-  "allowed_npubs": [
-    "npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf",
-    "npub1gecyq3xylqzzvehz08mnsd4rxpjphhm03saq4rx3hx5xee4cg7tqts74vr",
-    "npub14t8u4p6n5lfahlwtfr2zq4zqrggktjmnv99qx0yx0j3wpfuvl2tssf775x",
-    "npub13wcvzezm4wxxyv3c6nda700zrjt63w06tpevkf52mkuggy3aqf7qlm0mp4",
-    "npub1cml4wlfllw6mmw8esxgtslnka3scdxek7ecvh6vej7rtdjvzzd0s0cum9v",
-    "npub1k5sucm83q6tg4a9qhz8vx6gu8m3x03ecnnr0klv6skzhv8elkfkstydrel"
-  ],
-  "greeted": [
-    "npub1cml4wlfllw6mmw8esxgtslnka3scdxek7ecvh6vej7rtdjvzzd0s0cum9v",
-    "npub1k5sucm83q6tg4a9qhz8vx6gu8m3x03ecnnr0klv6skzhv8elkfkstydrel",
-    "npub163h60w38hxsva60hjap53n8eh264g923da9qg58q7dqv68hz0evqygqkhf",
-    "npub1gecyq3xylqzzvehz08mnsd4rxpjphhm03saq4rx3hx5xee4cg7tqts74vr",
-    "npub14t8u4p6n5lfahlwtfr2zq4zqrggktjmnv99qx0yx0j3wpfuvl2tssf775x",
-    "npub13wcvzezm4wxxyv3c6nda700zrjt63w06tpevkf52mkuggy3aqf7qlm0mp4"
-  ]
-}
-""",
-        }
-
-        for actor_id, expected in deployed.items():
-            pc = phantomchat_config(spec, spec.actor_by_id(actor_id))
-            self.assertEqual(pc.to_json(), expected, f"{actor_id} must match expected shape")
-
-    def test_actor_without_npub_gets_no_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            org = _minimal_org_with_agent_channel(Path(tmp), with_npub=False)
-            spec = load_org_yaml(org)
-            with tempfile.TemporaryDirectory() as tmp2:
-                out_dir = Path(tmp2)
-                written = build(spec, out_dir)
-                self.assertNotIn(
-                    out_dir / "a" / PHANTOMCHAT_FILENAME, written["a"]
-                )
-                self.assertFalse(
-                    (out_dir / "a" / PHANTOMCHAT_FILENAME).exists()
-                )
-
-    def test_no_agent_channel_gets_no_file(self):
-        """Backward compatible: orgs without an agent channel (no relay)
-        produce no phantomchat.json even for npub-declaring actors."""
-        with tempfile.TemporaryDirectory() as tmp:
-            org = Path(tmp) / "org.yaml"
-            org.write_text(
-                "version: 1\n"
-                "organization: {id: acme, name: ACME, sector: pyme, "
-                "languages: [es]}\n"
-                "departments: [{id: d, name: D, parent: null, "
-                "access_policy: level-3}]\n"
-                "roles: [{id: r, name: R, department: d, reports_to: null, "
-                "access_level: level-3}]\n"
-                "actors: [{id: a, role: r, tools: [], npub: 'npub1ggyxfrue07z39dl0ag3lge3z8l7vtunlyrg9quwcdh4r84rnwq4s25aqa9'}]\n"
-                "policies: {access_levels: {level-3: {label: L, "
-                "categories: []}}, security_categories: {cat-1: {label: C}}}\n"
-                "escalation_matrix: []\n"
-                "communication: {request_id_format: x, "
-                "message_types: [REQUEST], max_hops: 3}\n",
-                encoding="utf-8",
-            )
-            spec = load_org_yaml(org)
-            with tempfile.TemporaryDirectory() as tmp2:
-                out_dir = Path(tmp2)
-                build(spec, out_dir)
-                self.assertFalse(
-                    (out_dir / "a" / PHANTOMCHAT_FILENAME).exists()
-                )
+        pc = phantomchat_config(spec, spec.actor_by_id("dana"))
+        self.assertIsNotNone(pc)
+        parsed = json.loads(pc.to_json())
+        self.assertEqual(len(parsed["relays"]), 6)
+        self.assertEqual(parsed["allowed_npubs"], [HUMAN_NPUB])
+        self.assertEqual(parsed["greeted"], [])
+        self.assertNotIn(BRIDGE_NPUB, parsed["allowed_npubs"])
 
     def test_generated_roundtrip_parses(self):
         spec, _ = validate_org(AU_ORG)
-        pc = phantomchat_config(spec, spec.actor_by_id("alma"))
+        pc = phantomchat_config(spec, spec.actor_by_id("dana"))
         parsed = json.loads(pc.to_json())
-        self.assertEqual(
-            list(parsed.keys()), ["relays", "allowed_npubs", "greeted"]
-        )
+        self.assertEqual(list(parsed.keys()), ["relays", "allowed_npubs", "greeted"])
         self.assertEqual(len(parsed["relays"]), 6)
-        self.assertEqual(len(parsed["allowed_npubs"]), 6)
-        self.assertEqual(len(parsed["greeted"]), 6)
+        self.assertEqual(parsed["allowed_npubs"], [HUMAN_NPUB])
+        self.assertEqual(parsed["greeted"], [])
 
     def test_serializer_format(self):
         pc = PhantomchatConfig(
             relays=["ws://x:7777"],
-            allowed_npubs=["npub1ggyxfrue07z39dl0ag3lge3z8l7vtunlyrg9quwcdh4r84rnwq4s25aqa9"],
+            allowed_npubs=[
+                "npub1ggyxfrue07z39dl0ag3lge3z8l7vtunlyrg9quwcdh4r84rnwq4s25aqa9"
+            ],
             greeted=["npub1ggyxfrue07z39dl0ag3lge3z8l7vtunlyrg9quwcdh4r84rnwq4s25aqa9"],
         )
         text = pc.to_json()

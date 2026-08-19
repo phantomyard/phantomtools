@@ -1,8 +1,8 @@
 version: 1
 
 organization:
-  id: united-capital-group
-  name: "United Capital Group"
+  id: harbor-capital
+  name: "Harbor Capital Advisors"
   sector: finance
   languages: [en, es]
   default_language: en
@@ -10,7 +10,7 @@ organization:
 departments:
   - { id: board, name: "Board", parent: null, access_policy: level-3 }
   # Add the remaining real departments here (e.g. operations, investments,
-  # compliance) with `po add-department --org organizations/united-capital-group/org.yaml`
+  # compliance) with `po add-department --org organizations/harbor-capital/org.yaml`
   # as more agents are added.
 
 roles:
@@ -18,16 +18,16 @@ roles:
     name: "CEO"
     department: board
     reports_to: null
-    reports_to_human: null   # if Anna reports to a specific human (founder/partner), set it here
+    reports_to_human: null   # if Nadia reports to a specific human (founder/partner), set it here
     functions: [vision, leadership, external_communication, tools]
     access_level: level-3
     security_exceptions: []
 
 actors:
-  - id: anna
+  - id: nadia
     role: ceo
-    telegram_bot: "@Anna_bot"
-    tools: [email, drive, calendar]   # adjust to the real tools Anna already uses in Phantombot
+    telegram_bot: "@Nadia_bot"
+    tools: [email, drive, calendar]   # adjust to the real tools Nadia already uses in Phantombot
     tools_excluded: []
     actor_exceptions: []              # if there is an absolute-access exception (the "Category 0"
                                        # equivalent in AU), declare it here, e.g. [category-0]
@@ -45,7 +45,7 @@ policies:
     category-3: { label: "Credentials / sensitive financial" }
 
 escalation_matrix: []
-  # Empty because there is only one actor today (Anna, at the root). As soon as
+  # Empty because there is only one actor today (Nadia, at the root). As soon as
   # you add a second role reporting to her, use `po add-role --reports-to ceo ...`
   # and an escalation_matrix entry (from: <new_role>, to: ceo, condition: "...").
 

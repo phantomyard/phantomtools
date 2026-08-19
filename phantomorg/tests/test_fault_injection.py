@@ -43,8 +43,8 @@ from phantomorg.deploy.session import (
 from phantomorg.deploy.target import DeployResult, archives_dir
 from phantomorg.spec.loader import load_org_yaml
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
-UCG_ORG = Path(__file__).parent.parent / "organizations/united-capital-group/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
+UCG_ORG = Path(__file__).parent.parent / "organizations/harbor-capital/org.yaml"
 
 
 def _build_au(tmp: Path) -> Path:
@@ -66,9 +66,9 @@ class TestDeployCrashRecovery(unittest.TestCase):
     that `po rollback` can reconcile from the filesystem."""
 
     def test_crash_between_archive_and_swap_then_rollback(self):
-        """Simulate a process crash (OSError in os.replace — the swap)
-        after the pre-overwrite archive was taken. The actor is archived
-        but not replaced; rollback must restore it from the archive."""
+        """Simulate a process crash (OSError in os.replace — the per-file
+        write) after the pre-overwrite backup was taken. The owned file is
+        archived but not replaced; rollback must restore it from the archive."""
         from click.testing import CliRunner
 
         with tempfile.TemporaryDirectory() as t:
@@ -78,17 +78,26 @@ class TestDeployCrashRecovery(unittest.TestCase):
             dist = base / "dist"
             au_spec = load_org_yaml(AU_ORG)
             build(au_spec, dist)
-            # Deploy once, then modify a file to force an overwrite.
+            # Deploy once, then change the compiled SOUL so a redeploy
+            # actually overwrites it.
             from phantomorg.deploy.target import deploy as deploy_fn
 
             deploy_fn(dist, target_dir=target)
-            (target / "alma" / "SOUL.md").write_text("EDITED", encoding="utf-8")
+            soul = dist / "dana" / "SOUL.md"
+            soul.write_text(
+                soul.read_text(encoding="utf-8").replace(
+                    "Seguridad de la información antes que velocidad",
+                    "V2: Seguridad de la información antes que velocidad",
+                ),
+                encoding="utf-8",
+            )
+            v1_soul = (target / "dana" / "SOUL.md").read_text(encoding="utf-8")
 
             real_replace = os.replace
 
             def crash_replace(src, dst, **kwargs):
-                if Path(dst).name == "alma" and Path(dst).parent == target:
-                    raise OSError("simulated crash on swap")
+                if Path(dst).name == "SOUL.md" and Path(dst).parent.name == "dana":
+                    raise OSError("simulated crash on write")
                 return real_replace(src, dst, **kwargs)
 
             runner = CliRunner()
@@ -110,16 +119,16 @@ class TestDeployCrashRecovery(unittest.TestCase):
                 )
             self.assertEqual(result.exit_code, 1, result.output)
 
-            # The session is in_progress; rollback must restore "alma"
-            # (with its pre-deploy EDITED content — the archive holds it).
+            # The session is in_progress; rollback must restore dana's SOUL
+            # (with its pre-deploy content — the archive holds it).
             archive_root = archives_dir(target)
             sessions = load_sessions(archive_root)
             self.assertTrue(any(s.get("state") == "in_progress" for s in sessions))
             result = runner.invoke(main, ["rollback", "--target", str(target), "--yes"])
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertEqual(
-                (target / "alma" / "SOUL.md").read_text(encoding="utf-8"),
-                "EDITED",
+                (target / "dana" / "SOUL.md").read_text(encoding="utf-8"),
+                v1_soul,
             )
 
     def test_crash_mid_deploy_all_then_rollback_restores_all(self):
@@ -136,15 +145,14 @@ class TestDeployCrashRecovery(unittest.TestCase):
             au_spec = load_org_yaml(AU_ORG)
             build(au_spec, dist / "au")
             # Pre-existing persona that will be overwritten by AU deploy.
-            (target / "alma").mkdir()
-            (target / "alma" / "SOUL.md").write_text("ORIGINAL", encoding="utf-8")
+            (target / "dana").mkdir()
+            (target / "dana" / "SOUL.md").write_text("ORIGINAL", encoding="utf-8")
 
             real_replace = os.replace
 
             def crash_second(src, dst, **kwargs):
-                # Fail on the FIRST actor of the second org... we only
-                # deploy AU here; simulate a crash on the second actor.
-                if Path(dst).name == "pepa" and Path(dst).parent == target:
+                # Fail on the FIRST owned-file write of the second actor.
+                if Path(dst).name == "IDENTITY.md" and Path(dst).parent.name == "lucia":
                     raise OSError("simulated crash")
                 return real_replace(src, dst, **kwargs)
 
@@ -169,14 +177,14 @@ class TestDeployCrashRecovery(unittest.TestCase):
 
             result = runner.invoke(main, ["rollback", "--target", str(target), "--yes"])
             self.assertEqual(result.exit_code, 0, result.output)
-            # Pre-deploy state: only alma existed, with ORIGINAL content.
-            self.assertTrue((target / "alma").is_dir())
+            # Pre-deploy state: only dana existed, with ORIGINAL content.
+            self.assertTrue((target / "dana").is_dir())
             self.assertEqual(
-                (target / "alma" / "SOUL.md").read_text(encoding="utf-8"),
+                (target / "dana" / "SOUL.md").read_text(encoding="utf-8"),
                 "ORIGINAL",
             )
-            # pepa (created by the interrupted deploy) must be gone.
-            self.assertFalse((target / "pepa").exists())
+            # lucia (created by the interrupted deploy) must be gone.
+            self.assertFalse((target / "lucia").exists())
 
 
 class TestRollbackCrashRecovery(unittest.TestCase):
@@ -195,7 +203,7 @@ class TestRollbackCrashRecovery(unittest.TestCase):
         build(load_org_yaml(AU_ORG), dist)
         # Create the pre-deploy versions of two actors with distinctive
         # content.
-        for name in ("alma", "pepa"):
+        for name in ("dana", "lucia"):
             (target / name).mkdir()
             (target / name / "SOUL.md").write_text(f"PRE-{name}", encoding="utf-8")
         # Deploy via CLI so the committed session is journaled.
@@ -263,7 +271,7 @@ class TestRollbackCrashRecovery(unittest.TestCase):
             result = runner.invoke(main, ["rollback", "--target", str(target), "--yes"])
             self.assertEqual(result.exit_code, 0, result.output)
             # Both pre-deploy versions restored.
-            for name in ("alma", "pepa"):
+            for name in ("dana", "lucia"):
                 self.assertTrue((target / name).is_dir())
                 self.assertEqual(
                     (target / name / "SOUL.md").read_text(encoding="utf-8"),
@@ -295,7 +303,7 @@ class TestRollbackCrashRecovery(unittest.TestCase):
                 target,
                 command="rollback",
                 orgs=[],
-                planned_archived=["alma", "pepa"],
+                planned_archived=["dana", "lucia"],
                 planned_created=[],
                 planned_pruned=[],
                 archive_root_pre_existed=True,
@@ -367,7 +375,7 @@ class TestManifestWriteCrash(unittest.TestCase):
             target = tmp / "personas"
             target.mkdir()
             archive_root = archives_dir(target)
-            result = DeployResult(target=target, deployed=["alma"])
+            result = DeployResult(target=target, deployed=["dana"])
             record_session(
                 target,
                 result,
@@ -391,7 +399,7 @@ class TestManifestWriteCrash(unittest.TestCase):
             ):
                 record_session(
                     target,
-                    DeployResult(target=target, deployed=["pepa"]),
+                    DeployResult(target=target, deployed=["lucia"]),
                     command="deploy",
                     orgs=["org"],
                     archive_root_pre_existed=False,

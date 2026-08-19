@@ -5,7 +5,7 @@ from pathlib import Path
 from phantomorg.compiler import build, get_strings, resolve_lang
 from phantomorg.spec.loader import load_org_yaml
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
 _EN_ORG_YAML = """
 version: 1
@@ -64,8 +64,8 @@ class TestSoulRendersInResolvedLanguage(unittest.TestCase):
         spec = load_org_yaml(AU_ORG)
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
-            build(spec, out_dir, only="alma")
-            soul = (out_dir / "alma" / "SOUL.md").read_text(encoding="utf-8")
+            build(spec, out_dir, only="dana")
+            soul = (out_dir / "dana" / "SOUL.md").read_text(encoding="utf-8")
 
         self.assertIn("Principios de decisión", soul)
         self.assertIn("Alcance y jerarquía", soul)

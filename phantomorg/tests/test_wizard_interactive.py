@@ -35,7 +35,7 @@ class TestNewOrgWizardTemplate(unittest.TestCase):
     @patch("phantomorg.wizard.interactive.click.prompt")
     def test_wizard_passes_chosen_template(self, mock_prompt, mock_new_org):
         mock_prompt.side_effect = [
-            "aquaponics-united-3",
+            "verdant-aquaponics-3",
             "AU 3",
             "ngo",
             "es",
@@ -43,7 +43,7 @@ class TestNewOrgWizardTemplate(unittest.TestCase):
         ]
         interactive.run_new_org_wizard()
         mock_new_org.assert_called_once_with(
-            "aquaponics-united-3", "AU 3", "ngo", ["es"], template="ngo"
+            "verdant-aquaponics-3", "AU 3", "ngo", ["es"], template="ngo"
         )
 
     @patch("phantomorg.wizard.interactive.click.prompt")

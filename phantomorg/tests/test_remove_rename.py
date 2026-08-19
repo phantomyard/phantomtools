@@ -23,7 +23,7 @@ from phantomorg.wizard.mutations import (
     rename_role,
 )
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
 
 class _AUCopyTestCase(unittest.TestCase):
@@ -101,12 +101,12 @@ class TestRemoveDepartment(_AUCopyTestCase):
 class TestRemoveRole(_AUCopyTestCase):
     def test_blocks_if_actors_assigned(self):
         with self.assertRaises(RemovalBlockedError):
-            remove_role(self.org_path, "ceo")  # paco is assigned
+            remove_role(self.org_path, "ceo")  # marco is assigned
 
     def test_blocks_even_with_cascade_if_actors_assigned(self):
         # cascade NEVER deletes actors — it must keep blocking.
         with self.assertRaises(RemovalBlockedError):
-            remove_role(self.org_path, "chief_of_staff", cascade=True)  # pepa assigned
+            remove_role(self.org_path, "chief_of_staff", cascade=True)  # lucia assigned
 
     def test_blocks_subordinates_and_escalation_without_cascade(self):
         doc = self._raw()
@@ -146,9 +146,9 @@ class TestRemoveRole(_AUCopyTestCase):
 
 class TestRemoveActor(_AUCopyTestCase):
     def test_removes_actor_cleanly(self):
-        remove_actor(self.org_path, "elena")
+        remove_actor(self.org_path, "elias")
         doc = self._raw()
-        self.assertNotIn("elena", {a["id"] for a in doc["actors"]})
+        self.assertNotIn("elias", {a["id"] for a in doc["actors"]})
         # the training_lead role still exists (remove_actor does not touch roles)
         self.assertIn("training_lead", {r["id"] for r in doc["roles"]})
 
@@ -157,10 +157,10 @@ class TestRemoveActor(_AUCopyTestCase):
             remove_actor(self.org_path, "does-not-exist")
 
     def test_resulting_org_is_still_shape_valid(self):
-        remove_actor(self.org_path, "elena")
+        remove_actor(self.org_path, "elias")
         # there is still >=1 actor, so it loads without a problem
         spec = load_org_yaml(self.org_path)
-        self.assertNotIn("elena", [a.id for a in spec.actors])
+        self.assertNotIn("elias", [a.id for a in spec.actors])
 
 
 class TestRenameDepartment(_AUCopyTestCase):
@@ -193,9 +193,9 @@ class TestRenameRole(_AUCopyTestCase):
         self.assertIn("cos", role_ids)
         self.assertNotIn("chief_of_staff", role_ids)
 
-        # actors.pepa.role updated
-        pepa = next(a for a in doc["actors"] if a["id"] == "pepa")
-        self.assertEqual(pepa["role"], "cos")
+        # actors.lucia.role updated
+        lucia = next(a for a in doc["actors"] if a["id"] == "lucia")
+        self.assertEqual(lucia["role"], "cos")
 
         # roles that reported to chief_of_staff now report to cos
         for r in doc["roles"]:
@@ -210,7 +210,7 @@ class TestRenameRole(_AUCopyTestCase):
     def test_result_is_shape_and_reference_valid(self):
         rename_role(self.org_path, "chief_of_staff", "cos")
         spec = load_org_yaml(self.org_path)  # no debe lanzar
-        self.assertEqual(spec.actor_by_id("pepa").role, "cos")
+        self.assertEqual(spec.actor_by_id("lucia").role, "cos")
 
     def test_clashing_new_id_raises(self):
         with self.assertRaises(ValueError):
@@ -223,15 +223,15 @@ class TestRenameRole(_AUCopyTestCase):
 
 class TestRenameActor(_AUCopyTestCase):
     def test_renames_actor_id(self):
-        rename_actor(self.org_path, "alma", "alma2")
+        rename_actor(self.org_path, "dana", "alma2")
         doc = self._raw()
         actor_ids = {a["id"] for a in doc["actors"]}
         self.assertIn("alma2", actor_ids)
-        self.assertNotIn("alma", actor_ids)
+        self.assertNotIn("dana", actor_ids)
 
     def test_clashing_new_id_raises(self):
         with self.assertRaises(ValueError):
-            rename_actor(self.org_path, "alma", "pepa")
+            rename_actor(self.org_path, "dana", "lucia")
 
     def test_nonexistent_raises_keyerror(self):
         with self.assertRaises(KeyError):
@@ -259,7 +259,7 @@ class TestDuplicateIdError(_AUCopyTestCase):
 
     def test_add_actor_rejects_duplicate_id(self):
         with self.assertRaises(DuplicateIdError):
-            add_actor(self.org_path, "paco", "cfo", ["email"])
+            add_actor(self.org_path, "marco", "cfo", ["email"])
 
     def test_validator_flags_duplicate_ids_if_introduced_by_hand(self):
         # Simulates someone editing the YAML by hand and actually introducing a duplicate.

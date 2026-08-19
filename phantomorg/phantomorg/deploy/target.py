@@ -41,6 +41,7 @@ never makes on its own.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -49,6 +50,7 @@ from uuid import uuid4
 
 import yaml
 
+from ..compiler.blocks import has_blocks, merge_content
 from ..compiler.humans import HUMANS_FILENAME
 from ..compiler.scopes import SCOPES_FILENAME
 
@@ -211,7 +213,15 @@ class DeployResult:
     removed to return the system to its pre-deploy state."""
     pruned: list[str] = field(default_factory=list)
     archived: list[tuple[str, str]] = field(default_factory=list)
-    """(persona_name, archive_dir) for each pre-overwrite backup made."""
+    """(persona_name, archive_dir) for each pre-overwrite backup made.
+
+    With additive deploy these archive dirs hold PER-FILE backups (the
+    owned files at their relative paths); with ``--reset`` they hold a
+    whole persona directory. ``file_archives`` marks which are which."""
+    file_archives: set[str] = field(default_factory=set)
+    """Resolved archive-dir paths that contain per-file (additive)
+    backups rather than a whole persona directory. Rollback copies these
+    files back in place instead of moving a directory."""
     created_archive_dirs: set[Path] = field(default_factory=set)
     """Archive roots created during this deploy (to announce once)."""
     scopes_written: bool = False
@@ -276,7 +286,7 @@ def _write_data_file(
     backup (the true pre-session state), matching the archive-dedup
     semantics. The deferred phantombot issue will define the full
     multi-org contract (e.g. per-org files); for the single-org
-    deployments (the norm, e.g. aquaponics-united) this is exactly
+    deployments (the norm, e.g. verdant-aquaponics) this is exactly
     right.
     """
     src = compiled_dir / filename
@@ -303,7 +313,14 @@ def _write_data_file(
         archive_root = archives_dir(target)
         _assert_real_directory(archive_root, "personas-archive")
         archive_root.mkdir(parents=True, exist_ok=True)
-        backup_path = archive_root / f"._pf_data_{filename}-{_archive_stamp()}"
+        # Collision-safe backup name (adversarial review P1): timestamp-only
+        # names collide at millisecond precision and ``copy2`` would then
+        # silently overwrite a sibling backup. Use exclusive creation with a
+        # UUID suffix so two deploy-all writes landing on the same stamp can
+        # never share (or clobber) a backup path.
+        backup_path = archive_root / (
+            f"._pf_data_{filename}-{_archive_stamp()}-{uuid4().hex}"
+        )
         shutil.copy2(dest, backup_path)
         backup = str(backup_path.resolve())
 
@@ -511,12 +528,262 @@ def _preflight(
     return collisions, prune_list
 
 
+# ---------------------------------------------------------------------------
+# Additive deploy: PhantomOrg owns FILES (and marker-delimited sections),
+# never DIRECTORY trees. See CONTRIBUTING.md §1.3. The compiled output is a
+# source of "what PhantomOrg wants"; deploy writes only the paths below,
+# in place, atomically per file, preserving every runtime-owned file
+# (identity.json, vault.sqlite, memory.sqlite, daily files, kb notes, ...).
+# ---------------------------------------------------------------------------
+
+# Relative paths PhantomOrg owns inside a persona directory, mapped to the
+# strategy used to write each into a LIVE persona:
+#   "merge"  -> block-merge (ORG:BEGIN/END) against the live file: the
+#                compiled ORG blocks replace the live ones, everything
+#                OUTSIDE the blocks is preserved byte-for-byte.
+#   "plain"  -> fully derived file, plain atomic overwrite (archived first).
+#   "seed"   -> write only if missing (accumulating runtime state; the
+#                live content always outranks the compiled template).
+#   "norm"   -> merge only the <!-- phantomorg:start/end --> block into the
+#                live file (preserving runtime content around it).
+_OWNED_FILES: dict[str, str] = {
+    "IDENTITY.md": "merge",
+    "SOUL.md": "merge",
+    "tools.md": "merge",
+    ".phantomorg.yaml": "plain",
+    "kb/procedures/comunicacion-agentes.md": "plain",
+    "MEMORY.md": "seed",
+    "memory/people.md": "seed",
+    "memory/decisions.md": "seed",
+    "memory/lessons.md": "seed",
+    "memory/commitments.md": "seed",
+    "memory/norms.md": "norm",
+    "kb/Home.md": "seed",
+    "kb/templates/concept.md": "seed",
+    "kb/templates/runbook.md": "seed",
+    "kb/templates/decision.md": "seed",
+    "kb/templates/postmortem.md": "seed",
+    # The allowlist is runtime state (TOFU / persistTrust write to it);
+    # PhantomOrg seeds it once and never overwrites it.
+    "phantomchat.json": "seed",
+}
+
+# Scaffold directories PhantomOrg creates (mkdir exist_ok, never deletes).
+_OWNED_DIRS: tuple[str, ...] = (
+    "memory/archive",
+    "kb/inbox",
+    "kb/concepts",
+    "kb/runbooks",
+    "kb/procedures",
+    "kb/decisions",
+    "kb/infra",
+    "kb/people",
+    "kb/projects",
+    "kb/postmortems",
+    "kb/templates",
+)
+
+_NORM_START = "<!-- phantomorg:start -->"
+_NORM_END = "<!-- phantomorg:end -->"
+
+# Marker file placed inside an archive dir that holds PER-FILE (additive)
+# backups rather than a whole persona directory. Rollback checks for it to
+# choose between "copy files back in place" and "move the directory back".
+PER_FILE_MARKER = ".pf-file-archive"
+
+
+def _merge_norm_block(existing: str, new: str) -> str:
+    """Replace the phantomorg:start/end block in ``existing`` with the
+    one in ``new``; append it if absent. Everything outside the block is
+    preserved byte-for-byte. Returns the merged text."""
+    new_block_m = re.search(
+        re.escape(_NORM_START) + r"(.*?)" + re.escape(_NORM_END),
+        new,
+        re.DOTALL,
+    )
+    if new_block_m is None:
+        return existing
+    new_block = new_block_m.group(0)
+    if _NORM_START in existing and _NORM_END in existing:
+        merged = re.sub(
+            re.escape(_NORM_START) + r".*?" + re.escape(_NORM_END),
+            lambda _m: new_block,
+            existing,
+            count=1,
+            flags=re.DOTALL,
+        )
+        return merged
+    return existing.rstrip() + "\n\n" + new_block + "\n"
+
+
+def _apply_owned_file(
+    strategy: str, live_path: Path, compiled_path: Path
+) -> str | None:
+    """Compute the new content for ``live_path`` given the compiled file,
+    or None when nothing should be written (seed on an existing file, or
+    no change). Never writes; the caller archives and writes atomically."""
+    compiled_content = compiled_path.read_text(encoding="utf-8")
+    if strategy == "seed":
+        if live_path.exists():
+            return None
+        return compiled_content
+    if strategy == "plain":
+        if (
+            live_path.exists()
+            and live_path.read_text(encoding="utf-8") == compiled_content
+        ):
+            return None
+        return compiled_content
+    if strategy == "merge":
+        if not live_path.exists():
+            return compiled_content
+        # A compiled file with no ORG markers provides no owned sections to
+        # merge (tampered/partial build); leave the live file untouched
+        # rather than stripping its blocks.
+        if not has_blocks(compiled_content):
+            return None
+        live = live_path.read_text(encoding="utf-8")
+        merged = merge_content(live, compiled_content)
+        return merged if merged != live else None
+    if strategy == "norm":
+        if not live_path.exists():
+            return compiled_content
+        live = live_path.read_text(encoding="utf-8")
+        merged = _merge_norm_block(live, compiled_content)
+        return merged if merged != live else None
+    raise DeployError(f"internal error: unknown owned-file strategy {strategy!r}")
+
+
+def _archive_file(
+    personas_dir: Path,
+    name: str,
+    rel: str,
+    archive_dirs: dict[str, Path],
+    created_flags: set[Path],
+) -> Path | None:
+    """Back up the current content of ``personas_dir/<name>/<rel>`` into
+    ``personas-archive/<name>-<stamp>/<rel>`` before it is overwritten.
+
+    Returns the backup file path, or None when there was nothing to back
+    up. One archive directory is reused for all files of the same persona
+    within a single deploy (so a persona's overwritten files are grouped
+    under one restorable directory)."""
+    src = personas_dir / name / rel
+    if not src.exists() or src.is_symlink():
+        return None
+    if name not in archive_dirs:
+        archive_root = archives_dir(personas_dir)
+        _assert_real_directory(archive_root, "archive root")
+        created_root = not archive_root.exists()
+        archive_root.mkdir(parents=True, exist_ok=True)
+        base = f"{name}-{_archive_stamp()}"
+        dst = archive_root / base
+        for suffix in range(1, 1000):
+            if not dst.exists():
+                break
+            dst = archive_root / f"{base}-{suffix}"
+        else:
+            raise DeployError(
+                f"unable to allocate a unique archive destination for "
+                f"'{name}': 1000 same-millisecond archives already exist"
+            )
+        dst.mkdir(parents=True, exist_ok=False)
+        (dst / PER_FILE_MARKER).write_text("", encoding="utf-8")
+        archive_dirs[name] = dst
+        if created_root:
+            created_flags.add(archive_root)
+    backup = archive_dirs[name] / rel
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, backup)
+    return backup
+
+
+def _write_owned_file(live_path: Path, content: str) -> None:
+    """Atomically write ``content`` to ``live_path`` (tmp + os.replace on
+    the FILE, never on a directory)."""
+    live_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = live_path.with_name(f".{live_path.name}.pf-tmp-{uuid4().hex}")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, live_path)
+
+
+def _deploy_reset(
+    compiled_dir: Path,
+    target: Path,
+    force: bool,
+    prune: bool,
+    compiled_actor_dirs: list[Path],
+    prune_list: list[str],
+    has_scopes: bool,
+    has_humans: bool,
+    result: DeployResult,
+    created_flags: set[Path],
+) -> DeployResult:
+    """DESTRUCTIVE reset: archive the whole live persona directory and swap
+    in a pristine compiled scaffold. This is the legacy whole-directory
+    replacement, kept ONLY behind an explicit ``--reset`` (CONTRIBUTING.md
+    §1.4). It is never reached by a normal ``po deploy``."""
+    staging: Path | None = None
+    try:
+        if compiled_actor_dirs or has_scopes or has_humans:
+            staging = _staging_dir(target)
+            staging.mkdir(parents=True, exist_ok=True)
+
+        for actor_dir in compiled_actor_dirs:
+            dest = target / actor_dir.name
+            dest_existed = dest.exists()
+            if staging is None:
+                raise RuntimeError("internal error: staging dir missing")
+            staging_dest = staging / actor_dir.name
+            shutil.copytree(actor_dir, staging_dest)
+            if dest_existed:
+                archived_dir = _move_to_archive(target, actor_dir.name, created_flags)
+                result.archived.append((actor_dir.name, str(archived_dir)))
+            os.replace(staging_dest, dest)
+            result.deployed.append(actor_dir.name)
+            if not dest_existed:
+                result.created.append(actor_dir.name)
+
+        if staging is not None:
+            result.scopes_written, result.scopes_backup, result.scopes_created = (
+                _write_scopes_file(compiled_dir, target, staging)
+            )
+            result.humans_written, result.humans_backup, result.humans_created = (
+                _write_humans_file(compiled_dir, target, staging)
+            )
+    finally:
+        if staging is not None and staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+
+    for name in prune_list:
+        archived_dir = _move_to_archive(target, name, created_flags)
+        result.pruned.append(name)
+        result.archived.append((name, str(archived_dir)))
+
+    if created_flags:
+        result.created_archive_dirs.update(created_flags)
+
+    return result
+
+
 def deploy(
     compiled_dir: Path,
     target_dir: Path | None = None,
     force: bool = False,
     prune: bool = False,
+    reset: bool = False,
 ) -> DeployResult:
+    """Deploy compiled personas into ``target``.
+
+    By default this is ADDITIVE (CONTRIBUTING.md §1.3): only the files
+    PhantomOrg owns are written, in place, atomically per file. The live
+    persona directory is never moved, replaced or archived.
+
+    ``reset=True`` opts into the DESTRUCTIVE whole-directory replacement
+    (archive the live persona dir, then swap in a pristine compiled
+    scaffold). It must only be offered through an unmistakable, confirmed
+    CLI path (``po deploy --reset``).
+    """
     target = target_dir or default_personas_dir()
     # C1 (adversarial review, v0.5.5): the deploy tree must not be reached
     # through a symlink — the archive/restore machinery moves real
@@ -573,68 +840,128 @@ def deploy(
             + "\nUse --force if you really want to overwrite."
         )
 
-    # Every actor is first copied to a staging dir inside the target and
-    # only moved into place with an atomic rename AFTER its previous
-    # version (if any) has been safely archived. A copy failure can then
-    # never leave a half-written persona in the runtime or consume a
-    # backup without a replacement in place.
-    staging: Path | None = None
-    try:
-        if compiled_actor_dirs or has_scopes or has_humans:
-            staging = _staging_dir(target)
-            staging.mkdir(parents=True, exist_ok=True)
+    if reset:
+        return _deploy_reset(
+            compiled_dir,
+            target,
+            force,
+            prune,
+            compiled_actor_dirs,
+            prune_list,
+            has_scopes,
+            has_humans,
+            result,
+            created_flags,
+        )
 
-        for actor_dir in compiled_actor_dirs:
-            dest = target / actor_dir.name
-            dest_existed = dest.exists()
+    # ------------------------------------------------------------------
+    # ADDITIVE deploy (the only path for a normal `po deploy`): write the
+    # files PhantomOrg owns into the LIVE persona directory, in place,
+    # atomically per file. The persona directory itself is never moved,
+    # replaced or archived, and every runtime-owned file (identity.json,
+    # vault.sqlite, memory/, kb/ notes, daily files, ...) is left exactly
+    # as it was. Files being overwritten are backed up per-file into
+    # personas-archive/ so `po rollback` can restore them.
+    # ------------------------------------------------------------------
+    archive_dirs: dict[str, Path] = {}
+    for actor_dir in compiled_actor_dirs:
+        dest = target / actor_dir.name
+        dest_existed = dest.exists()
 
-            # 1. Stage the new content first (never touches the target or
-            #    the archive). If this fails, nothing was changed.
-            if staging is None:
-                raise RuntimeError("internal error: staging dir missing")
-            staging_dest = staging / actor_dir.name
-            shutil.copytree(actor_dir, staging_dest)
+        # Create the scaffold directories (mkdir exist_ok, never delete).
+        for _d in _OWNED_DIRS:
+            (dest / _d).mkdir(parents=True, exist_ok=True)
 
-            # 2. Only now archive the previous version (pre-overwrite
-            #    backup, same-org or --force overwrites).
-            if dest_existed:
-                archived_dir = _move_to_archive(target, actor_dir.name, created_flags)
-                result.archived.append((actor_dir.name, str(archived_dir)))
+        touched = False
+        for rel, strategy in _OWNED_FILES.items():
+            compiled_path = actor_dir / rel
+            if not compiled_path.exists():
+                # The build did not produce this file (e.g. phantomchat.json
+                # when the actor has no npub). Do NOT touch a live file of
+                # that name: it is runtime state.
+                continue
+            live_path = dest / rel
+            new_content = _apply_owned_file(strategy, live_path, compiled_path)
+            if new_content is None:
+                continue
+            # Back up the live file before overwriting it (per-file).
+            if live_path.exists():
+                _archive_file(target, actor_dir.name, rel, archive_dirs, created_flags)
+            _write_owned_file(live_path, new_content)
+            touched = True
 
-            # 3. Atomic swap into place.
-            os.replace(staging_dest, dest)
+        if touched or not dest_existed:
             result.deployed.append(actor_dir.name)
-            if not dest_existed:
-                result.created.append(actor_dir.name)
+        if not dest_existed:
+            result.created.append(actor_dir.name)
 
-        # Org-level derived artifact: transport scopes.json (if the build
-        # produced one) to the DATA DIR (target.parent), not the target
-        # tree. The pre-overwrite version is snapshotted into
-        # personas-archive/ so rollback can restore the data dir to its
-        # exact pre-deploy state.
-        if staging is not None:
+    # Org-level derived artifact: transport scopes.json (if the build
+    # produced one) to the DATA DIR (target.parent), not the target tree.
+    staging = None
+    if has_scopes or has_humans:
+        staging = _staging_dir(target)
+        staging.mkdir(parents=True, exist_ok=True)
+        try:
             result.scopes_written, result.scopes_backup, result.scopes_created = (
                 _write_scopes_file(compiled_dir, target, staging)
             )
             result.humans_written, result.humans_backup, result.humans_created = (
                 _write_humans_file(compiled_dir, target, staging)
             )
-    finally:
-        if staging is not None and staging.exists():
+        finally:
             shutil.rmtree(staging, ignore_errors=True)
 
-    # Prune AFTER the deploy loop, using the preflight-computed list: the
-    # same-org/no-longer-in-build criterion is evaluated against the
-    # pre-deploy state (deploys never touch those actors, so the result
-    # is identical) and decided before any mutation.
+    # Prune AFTER the deploy loop, using the preflight-computed list. A
+    # pruned persona's PhantomOrg-OWNED files are archived per-file and
+    # removed from the live directory; its accumulated mind (identity,
+    # vault, memory, KB notes) is left untouched. If nothing else remains
+    # (a freshly deployed, compiler-only persona), the now-empty scaffold
+    # dirs and the persona dir itself are removed too.
     for name in prune_list:
-        # Archive instead of deleting: pruning is a destructive operation
-        # and must be reversible.
-        archived_dir = _move_to_archive(target, name, created_flags)
+        persona_dir = target / name
+        for rel in _OWNED_FILES:
+            live_path = persona_dir / rel
+            if not live_path.exists() or live_path.is_symlink():
+                continue
+            backup = _archive_file(target, name, rel, archive_dirs, created_flags)
+            if backup is not None:
+                live_path.unlink()
+        _remove_empty_dirs_up(persona_dir, target)
         result.pruned.append(name)
-        result.archived.append((name, str(archived_dir)))
+
+    for name, archive_dir in archive_dirs.items():
+        result.archived.append((name, str(archive_dir)))
+        result.file_archives.add(str(archive_dir.resolve()))
 
     if created_flags:
         result.created_archive_dirs.update(created_flags)
 
     return result
+
+
+def _remove_empty_dirs_up(path: Path, stop_at: Path) -> None:
+    """Remove empty directories under ``path`` (bottom-up) and then ``path``
+    itself and its empty ancestors, stopping AT (never removing)
+    ``stop_at``. Used after a prune to drop the now-empty scaffold dirs
+    and the persona dir itself ONLY when no runtime content remains. The
+    personas root (``stop_at``) and everything above it are never touched."""
+    stop_resolved = stop_at.resolve()
+
+    def _prune_empty(d: Path) -> None:
+        if d.resolve() == stop_resolved or not d.is_dir() or d.is_symlink():
+            return
+        for child in sorted(d.iterdir()):
+            _prune_empty(child)
+        try:
+            d.rmdir()
+        except OSError:
+            pass  # non-empty (runtime content) — leave it
+
+    _prune_empty(path)
+    current = path
+    while current.resolve() != stop_resolved and current != current.parent:
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        current = current.parent

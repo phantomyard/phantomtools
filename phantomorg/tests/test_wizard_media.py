@@ -22,7 +22,7 @@ from phantomorg.cli import main
 from phantomorg.wizard.mutations import add_actor
 from phantomorg.wizard.new_org import new_org
 
-AU_ORG = Path(__file__).parent.parent / "organizations/aquaponics-united/org.yaml"
+AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
 
 
 def _copy_au(tmp: Path) -> Path:

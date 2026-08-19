@@ -30,10 +30,12 @@ from __future__ import annotations
 import datetime
 import os
 import re
+import shutil
 import tempfile
 import warnings
 from pathlib import Path
 
+import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 
 from ..spec.model import Actor, OrgSpec, Role
@@ -41,13 +43,17 @@ from .access import merge_access
 from .blocks import has_blocks, merge_content
 from .errors import CompileError
 from .escalation import escalation_paths_for
-from .humans import write_humans
+from .humans import HUMANS_FILENAME, write_humans
 from .i18n import available_languages, get_strings
 from .phantomchat_gen import PHANTOMCHAT_FILENAME, phantomchat_config
 from .request_id import resolve_request_id_format
 from .scopes import SCOPES_FILENAME, derive_scopes, serialize_scopes
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+# Marker block used for the org communication norm inside memory/norms.md.
+_NORM_START = "<!-- phantomorg:start -->"
+_NORM_END = "<!-- phantomorg:end -->"
 
 # mkstemp leftovers from a crashed `_atomic_write` (SIGKILL between mkstemp
 # and os.replace) are named `.{name}.{6 alnum}` in the output tree. They are
@@ -124,8 +130,15 @@ _SEED_FILES: dict[str, str] = {
         "[commitment]-tagged entries.\n\n"
         "## (no entries yet)\n"
     ),
+    "memory/norms.md": (
+        "# Norms\n\nRoutine communication patterns used by the operator.\n"
+        "Channels, expected cadence, request-id conventions, and known "
+        "counterparties belong here.\n\n"
+        "<!-- phantomorg:start -->\n"
+        "<!-- phantomorg:end -->\n"
+    ),
     "kb/Home.md": (
-        "---\ntype: home\ntags: [navigation]\ncreated: {today}\nupdated: {today}\n---\n\n"
+        "---\ntype: index\ntitle: Home\ndescription: Persona knowledge-base index.\naliases: [home]\ntags: [navigation]\ncreated: {today}\nupdated: {today}\n---\n\n"
         "# Home\n\nAtomic notes — one idea per file, linked with [[wikilinks]]. "
         "Every note carries YAML frontmatter (`type`, `tags`, `created`, "
         "`updated`).\n\n## Categories\n\n"
@@ -150,26 +163,26 @@ _SEED_FILES: dict[str, str] = {
         "drop a one-liner into `inbox/`. The nightly cycle files or discards "
         "it.\n"
     ),
-    "kb/templates/atomic-note.md": (
-        "---\ntype: concept\ntags: []\ncreated: YYYY-MM-DD\nupdated: YYYY-MM-DD\n---\n\n"
+    "kb/templates/concept.md": (
+        "---\ntype: concept\ntitle: <title>\ndescription: <short description>\naliases: []\ntags: []\ncreated: YYYY-MM-DD\nupdated: YYYY-MM-DD\n---\n\n"
         "# Title\n\nOne idea per note. Link related notes with [[wikilinks]].\n\n"
         "## Why this exists\n\n\n## Notes\n\n\n## Related\n- [[ ]]\n"
     ),
     "kb/templates/runbook.md": (
-        "---\ntype: runbook\ntags: [ops]\ncreated: YYYY-MM-DD\nupdated: YYYY-MM-DD\n---\n\n"
+        "---\ntype: runbook\ntitle: <title>\ndescription: <short description>\naliases: []\ntags: [ops]\ncreated: YYYY-MM-DD\nupdated: YYYY-MM-DD\n---\n\n"
         "# Runbook: <action>\n\n## Trigger\nWhat situation calls for this runbook.\n\n"
         "## Prerequisites\n- [ ] Access to X\n- [ ] Knowledge of Y\n\n## Steps\n"
         "1.\n2.\n3.\n\n## Verification\nHow you confirm it worked.\n\n## Rollback\n"
         "What to do if a step fails.\n\n## Related\n- [[ ]]\n"
     ),
     "kb/templates/decision.md": (
-        "---\ntype: decision\ntags: []\ncreated: YYYY-MM-DD\nupdated: YYYY-MM-DD\n---\n\n"
+        "---\ntype: decision\ntitle: <title>\ndescription: <short description>\naliases: []\ntags: []\ncreated: YYYY-MM-DD\nupdated: YYYY-MM-DD\n---\n\n"
         "# Decision: <topic>\n\n## Context\nWhat forced this decision now.\n\n"
         "## Options considered\n\n### Option A\n\n\n### Option B\n\n\n## Decision\n"
         "We chose X because Y.\n\n## Trade-offs accepted\n\n\n## Revisit when\n\n"
     ),
     "kb/templates/postmortem.md": (
-        "---\ntype: postmortem\ntags: [incident]\ncreated: YYYY-MM-DD\nupdated: YYYY-MM-DD\n---\n\n"
+        "---\ntype: postmortem\ntitle: <title>\ndescription: <short description>\naliases: []\ntags: [incident]\ncreated: YYYY-MM-DD\nupdated: YYYY-MM-DD\n---\n\n"
         "# Postmortem: <incident>\n\n## Timeline\n\n\n## Root cause\n\n\n## Impact\n"
         "\n\n## What went well\n\n\n## What didn't\n\n\n## Action items\n- [ ]\n"
     ),
@@ -222,7 +235,7 @@ def _norma_context(spec: OrgSpec) -> dict:
     actors = list(spec.actors)
 
     # Root role = the one with reports_to None (e.g. ceo). Its
-    # reports_to_human is the human the org escalates to (e.g. Salvador).
+    # reports_to_human is the human the org escalates to (e.g. Board President).
     root = next((r for r in spec.roles if not r.reports_to), None)
     ceo_name = root.name if root else "CEO"
     reports_to_human = root.reports_to_human if root else None
@@ -579,19 +592,42 @@ def build_actor(
 
     ensure_scaffold(actor_dir)
 
-    # Communication norm (kb/normas/comunicacion-agentes.md): compiled from
-    # org.yaml, written when the org declares communication channels. Fully
-    # regenerated on every build (write_if_changed), so the deployed norm
-    # always matches the org model — no manual per-persona maintenance.
+    # Operational communication norms belong in memory/norms.md because the
+    # threat judge reads that drawer before untrusted turns. Only the marked
+    # PhantomOrg section is owned; operator/runtime content remains intact.
     if spec.communication.human_channel or spec.communication.agent_channel:
-        normas_dir = actor_dir / "kb" / "normas"
-        normas_dir.mkdir(parents=True, exist_ok=True)
         norma_md = env.get_template("norma.j2").render(t=t, **_norma_context(spec))
-        p = normas_dir / "comunicacion-agentes.md"
-        # Plain overwrite (like .phantomorg.yaml), NOT block merge: the
-        # norm is fully generated state, no hand-editable sections — a
-        # ORG-less existing file must not freeze it forever.
-        if write_plain_if_changed(p, norma_md):
+        # Keep an optional human-readable protocol page in the canonical KB
+        # category; the judge-facing copy remains memory/norms.md.
+        procedures_dir = actor_dir / "kb" / "procedures"
+        procedures_dir.mkdir(parents=True, exist_ok=True)
+        procedure_path = procedures_dir / "comunicacion-agentes.md"
+        procedure_body = norma_md
+        if write_plain_if_changed(procedure_path, procedure_body):
+            written.append(procedure_path)
+        p = actor_dir / "memory" / "norms.md"
+        existing = p.read_text(encoding="utf-8") if p.exists() else "# Norms\n\n"
+        marker = (
+            "<!-- phantomorg:start -->\n"
+            + norma_md.strip()
+            + "\n<!-- phantomorg:end -->"
+        )
+        if (
+            "<!-- phantomorg:start -->" in existing
+            and "<!-- phantomorg:end -->" in existing
+        ):
+            import re as _re
+
+            merged = _re.sub(
+                r"<!-- phantomorg:start -->.*?<!-- phantomorg:end -->",
+                marker,
+                existing,
+                count=1,
+                flags=_re.DOTALL,
+            )
+        else:
+            merged = existing.rstrip() + "\n\n" + marker + "\n"
+        if write_plain_if_changed(p, merged):
             written.append(p)
 
     # Phantomchat config (phantomchat.json): compiled from org.yaml when the
@@ -606,16 +642,116 @@ def build_actor(
     return written
 
 
+def _reconcile_stale_output(spec: OrgSpec, out_dir: Path) -> None:
+    """Remove stale PhantomOrg-owned actors and derived artifacts from a
+    REUSED output directory (P1: build() only visits current actors, so a
+    ``remove-actor -> build --out same-dir`` left the removed actor's
+    directory behind and the next deploy redeployed it).
+
+    Only entries that PhantomOrg OWNS are removed, confined by metadata:
+
+    - An actor directory is removed only when its ``.phantomorg.yaml``
+      declares ``organization_id == this org`` AND its ``actor_id`` is no
+      longer in the spec (it belongs to this org but was removed). Actor
+      dirs of OTHER orgs, unmanaged dirs, or dirs without our metadata are
+      left untouched.
+    - Derived artifacts (``phantomchat.json``, the communication norm
+      ``kb/procedures/comunicacion-agentes.md`` and the ``memory/norms.md``
+      marker block, ``HUMANS.md``) are removed from a current actor when the
+      org model no longer produces them (npub dropped, no channels, no
+      humans block).
+
+    This runs only on the build OUTPUT (regenerable state), never on a live
+    persona directory.
+    """
+    current_ids = {a.id for a in spec.actors}
+
+    # 1. Stale actor directories owned by this org.
+    for child in sorted(out_dir.iterdir()):
+        if not child.is_dir() or child.is_symlink():
+            continue
+        meta = _read_build_meta(child)
+        if meta is None:
+            continue
+        if meta.get("organization_id") == spec.organization.id:
+            actor_id = meta.get("actor_id")
+            if actor_id not in current_ids:
+                _remove_tree(child)
+
+    # 2. Obsolete derived artifacts inside a CURRENT actor directory.
+    for actor in spec.actors:
+        actor_dir = out_dir / actor.id
+        if not actor_dir.is_dir():
+            continue
+        if not (spec.communication.agent_channel and actor.npub):
+            _remove_if_exists(actor_dir / PHANTOMCHAT_FILENAME)
+        if not (spec.communication.human_channel or spec.communication.agent_channel):
+            _remove_if_exists(
+                actor_dir / "kb" / "procedures" / "comunicacion-agentes.md"
+            )
+            _strip_norm_marker(actor_dir / "memory" / "norms.md")
+
+    # 3. Obsolete org-level HUMANS.md (no humans block in the model).
+    if not spec.humans:
+        _remove_if_exists(out_dir / HUMANS_FILENAME)
+
+
+def _read_build_meta(actor_dir: Path) -> dict | None:
+    """Best-effort read of a build-output actor's .phantomorg.yaml.
+    Returns None when absent/unreadable/invalid (callers treat None as
+    'not ours — leave it alone')."""
+    meta_path = actor_dir / ".phantomorg.yaml"
+    if not meta_path.exists():
+        return None
+    try:
+        data = yaml.safe_load(meta_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _remove_tree(path: Path) -> None:
+    """Recursively remove a build-output entry (regenerable state)."""
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _remove_if_exists(path: Path) -> None:
+    if path.exists():
+        _remove_tree(path)
+
+
+def _strip_norm_marker(path: Path) -> None:
+    """Remove the ``<!-- phantomorg:start/end -->`` block from a build
+    output ``memory/norms.md`` (the org no longer declares channels)."""
+    if not path.exists():
+        return
+    content = path.read_text(encoding="utf-8")
+    if _NORM_START in content and _NORM_END in content:
+        stripped = re.sub(
+            re.escape(_NORM_START) + r".*?" + re.escape(_NORM_END) + r"\n?",
+            "",
+            content,
+            count=1,
+            flags=re.DOTALL,
+        )
+        _atomic_write(path, stripped)
+
+
 def build(
     spec: OrgSpec,
     out_dir: Path,
     only: str | None = None,
     scope_rule: str = "chain",
-) -> dict[str, list[Path]]:
+) -> dict[str, list[Path] | list[dict[str, str]]]:
     """
     Compiles all actors (or just one if `only` is specified).
     Returns a dict actor_id -> list of written files (empty if there were
-    no changes, thanks to write_if_changed).
+    no changes, thanks to write_if_changed), plus the reserved keys
+    ``__warnings__`` (list of warning dicts) and, when ``only`` is None,
+    ``__scopes__`` / ``__humans__`` (lists of written paths).
 
     When `only` is None, also derives the org-wide memory scopes from the
     org model and writes them to ``out_dir/scopes.json`` (see
@@ -624,7 +760,7 @@ def build(
     when the content changes, never block-merged).
     """
     env = _env()
-    result: dict[str, list[Path]] = {}
+    result: dict[str, list[Path] | list[dict[str, str]]] = {}
     warnings_out: list[dict[str, str]] = []
     actors = spec.actors if only is None else [spec.actor_by_id(only)]
     _cleanup_stale_tmp(out_dir)
@@ -647,15 +783,17 @@ def build(
     result["__warnings__"] = warnings_out
 
     if only is None:
+        _reconcile_stale_output(spec, out_dir)
+
         scopes = derive_scopes(spec, rule=scope_rule)
         scopes_path = out_dir / SCOPES_FILENAME
         if write_plain_if_changed(
             scopes_path, serialize_scopes(spec, scopes, scope_rule)
         ):
-            result.setdefault("__scopes__", []).append(scopes_path)
+            result["__scopes__"] = [scopes_path]
 
         humans_path = write_humans(spec, out_dir)
         if humans_path is not None:
-            result.setdefault("__humans__", []).append(humans_path)
+            result["__humans__"] = [humans_path]
 
     return result

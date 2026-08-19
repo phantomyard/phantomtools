@@ -26,7 +26,7 @@ Merge rule on regeneration:
 This replaces the previous "whole file frozen by [ORG:manual]"
 mechanism, which also froze the spec-derived sections
 (security/escalation/comms) — the real gap reported after the pilot on
-the United Capital Group VPS.
+the Harbor Capital Advisors VPS.
 """
 
 from __future__ import annotations
@@ -50,9 +50,7 @@ _END_RE = re.compile(r"<!-- ORG:END (?P<name>[\w:.-]+) -->\r?\n?")
 # Matches either marker, capturing the kind (BEGIN/END) and the name. Used
 # by the stack-based nesting check (_structurally_sound). CRLF-tolerant so
 # a Windows-edited file is validated exactly like an LF file.
-_MARKER_RE = re.compile(
-    r"<!-- ORG:(?P<kind>BEGIN|END) (?P<name>[\w:.-]+) -->\r?\n?"
-)
+_MARKER_RE = re.compile(r"<!-- ORG:(?P<kind>BEGIN|END) (?P<name>[\w:.-]+) -->\r?\n?")
 
 
 def extract_blocks(content: str) -> dict[str, str]:
