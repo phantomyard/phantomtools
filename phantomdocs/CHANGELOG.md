@@ -2,6 +2,35 @@
 
 All notable changes to PhantomDocs are documented in this file.
 
+## Unreleased
+
+**PR #27 review hardening — enforce the advertised ACL.**
+
+- **ACL is enforced, not just declared** (`cli.py`): `get`, `search`,
+  `versions`, `add`, `mkdir` and `tag` now require `--org-yaml` (the
+  authoritative org model) and `PHANTOMDOCS_ACTOR` (set per-persona by
+  PhantomOrg at deploy time), and gate every read/write on `can_read` /
+  `can_write`. Absent either is denied (fail-closed). `--actor` remains a
+  self-asserted audit label only.
+- **Cross-org root collision fixed** (`identity.py`): `root_mac` is now
+  `H(len(org_id)||org_id||len(pubkey)||pubkey||len(namespace)||namespace)`,
+  so two orgs can never collide under the documented defaults. Folder/doc
+  components are length-prefixed too.
+- **Manifest mutations serialized** (`manifest.py`): `save` uses a unique
+  `mkstemp` file, and mutating commands hold an inter-process lock
+  (`manifest.lock`) across the full read-modify-write, so concurrent personas
+  no longer lose updates.
+- **`local://<root>` two-slash URI fixed** (`storage.py`): `urlparse` puts the
+  root in `netloc`; it is now recombined with `path` instead of silently
+  resolving to the current directory.
+- **Integrity on the read path** (`storage.py`): `LocalBackend.get` and
+  `SshBackend.get` re-hash the bytes and refuse a mutated blob.
+- **Hash-chained audit log** (`audit.py`): each entry carries `prev` = SHA-256
+  of the previous line; `pd verify` walks the chain and reports tampering.
+- **Honest wording** (`README.md`, `docs/SPEC.md`): the unkeyed chain is
+  described as detecting corruption/accidental divergence, with
+  authenticity/tamper-evidence deferred to the optional §4.3 HMAC.
+
 ## [0.3.0] - 2026-08-19
 
 - Per-URN versioning: re-`add` with new content creates a new version (MAC)

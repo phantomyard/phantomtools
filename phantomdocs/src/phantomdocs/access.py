@@ -8,6 +8,7 @@ node's category. Fail-closed: no rule -> denied.
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import yaml
@@ -40,9 +41,39 @@ def resolved_categories(org: dict[str, Any], actor_id: str) -> list[int]:
             num = exc[len("category-") :]
             if num.isdigit():
                 categories.add(int(num))
+            else:
+                warnings.warn(
+                    f"actor {actor_id!r}: exception {exc!r} does not parse as "
+                    "'category-<N>' and is ignored (fail-closed)",
+                    stacklevel=2,
+                )
+        elif exc:
+            # Free-text / structured exceptions are NOT category grants in
+            # PhantomOrg's resolver; they are carried as prose. Fail-closed:
+            # don't grant anything from them, but don't fail silently either.
+            warnings.warn(
+                f"actor {actor_id!r}: exception {exc!r} is not a 'category-<N>' "
+                "grant and is ignored (fail-closed)",
+                stacklevel=2,
+            )
     return sorted(categories)
 
 
 def can_read(org: dict[str, Any], actor_id: str, category: int) -> bool:
     """True iff the actor's resolved access covers the given category."""
     return category in resolved_categories(org, actor_id)
+
+
+def can_write(
+    org: dict[str, Any], actor_id: str, category: int, owners: list[str] | None = None
+) -> bool:
+    """True iff the actor may write a node of ``category``.
+
+    Write requires read access to the category AND, when the node declares
+    explicit ``owners``, membership in that list. No rule -> denied.
+    """
+    if not can_read(org, actor_id, category):
+        return False
+    if owners:
+        return actor_id in owners
+    return True

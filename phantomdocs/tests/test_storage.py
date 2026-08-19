@@ -1,5 +1,6 @@
 import pytest
 
+from phantomdocs.identity import content_hash as _content_hash
 from phantomdocs.storage import (
     GdriveBackend,
     LocalBackend,
@@ -11,10 +12,26 @@ from phantomdocs.storage import (
 
 def test_local_backend_put_get_has(tmp_path):
     b = LocalBackend(str(tmp_path))
-    h = "a" * 64
-    b.put(h, b"hello")
+    data = b"hello"
+    h = _content_hash(data)
+    b.put(h, data)
     assert b.has(h) is True
-    assert b.get(h) == b"hello"
+    assert b.get(h) == data
+
+
+def test_local_backend_get_rejects_mismatched_content(tmp_path):
+    """A mutated blob (content no longer matches its hash) is refused on
+    read — integrity holds on the read path, not only under `pd verify`."""
+    b = LocalBackend(str(tmp_path))
+    data = b"hello"
+    h = _content_hash(data)
+    b.put(h, data)
+    # Corrupt the stored bytes.
+    blob = b.blob_path(h)
+    with open(blob, "wb") as f:
+        f.write(b"tampered")
+    with pytest.raises(StorageError):
+        b.get(h)
 
 
 def test_local_backend_rejects_bad_hash(tmp_path):
@@ -27,6 +44,13 @@ def test_resolve_backend_local():
     b = resolve_backend("local:///tmp/x")
     assert isinstance(b, LocalBackend)
     assert b.root == "/tmp/x"
+
+
+def test_resolve_backend_local_two_slash():
+    """local://<root> (two slashes) resolves to <root>, not the cwd."""
+    b = resolve_backend("local://mystore")
+    assert isinstance(b, LocalBackend)
+    assert b.root.endswith("mystore")
 
 
 def test_resolve_backend_bare_path():

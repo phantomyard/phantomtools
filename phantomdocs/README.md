@@ -3,18 +3,20 @@
 **Agnostic document management for PhantomOrg-provisioned personas.**
 
 PhantomDocs gives AI personas of any PhantomOrg-provisioned organization a
-self-managed document store with hard guarantees of **identity, integrity and
-access control**. It is **standalone**: it consumes PhantomOrg but does not
-modify it.
+self-managed document store with **identity, integrity and access control**.
+It is **standalone**: it consumes PhantomOrg but does not modify it.
 
 - **Identity** — every node carries a chained, self-describing header (MAC).
-- **Integrity** — content is hash-bound; `pd verify` re-checks the chain.
+- **Integrity** — content is hash-bound; `pd verify` re-checks the chain and
+  detects **corruption and accidental divergence** (the chain is unkeyed;
+  authenticity/tamper-evidence lands with the optional HMAC in SPEC §4.3).
 - **Access control** — resolved from a PhantomOrg `org.yaml` (access levels,
-  security categories, role/actor exceptions); PhantomDocs only declares each
-  node's `category`. Fail-closed: no rule → denied.
+  security categories, role/actor exceptions) and **enforced** on every read
+  and write (`get`, `search`, `versions`, `add`, `mkdir`, `tag`). Fail-closed:
+  no rule → denied.
 - **Location** — content-addressed blob stores: `local://` filesystem, `ssh://`
   remote, `gdrive://` (delegates to the persona's `workspace.py`).
-- **Search** — index search over the manifest.
+- **Search** — index search over the manifest (filtered by the reader's access).
 
 The operating model is **git / GitHub** (see `docs/SPEC.md` §5): the chained
 MAC is exactly git's commit parent-chain, "refs" are branches/tags, and the
@@ -45,30 +47,37 @@ See `examples/example-org.yaml` and `docs/SPEC.md`.
 pd init --org my-org --root ./docs
 pd derive-manifest --org-yaml organizations/<org>/org.yaml --out ./docs/manifest.yaml
 
+# Access-controlled commands require the actor (env) + the org model.
+# PhantomOrg sets PHANTOMDOCS_ACTOR per persona at deploy time.
+export PHANTOMDOCS_ACTOR=marco
+
 # Create a folder, then ingest a document under it
-pd mkdir --name reports --root ./docs
-pd add ./report.pdf --slug "reports/2026-08-19-q3.pdf" --category 2 --folder reports --root ./docs
+pd mkdir --name reports --org-yaml organizations/<org>/org.yaml --root ./docs
+pd add ./report.pdf --slug "reports/2026-08-19-q3.pdf" --category 2 \
+  --folder reports --org-yaml organizations/<org>/org.yaml --root ./docs
 
 # Ingest to a remote / cloud backend
-pd add ./report.pdf --slug "reports/q3.pdf" --backend ssh://user@vps:22/var/phantomdocs --root ./docs
-pd add ./report.pdf --slug "reports/q3.pdf" --backend gdrive:// --root ./docs
+pd add ./report.pdf --slug "reports/q3.pdf" --backend ssh://user@vps:22/var/phantomdocs \
+  --org-yaml organizations/<org>/org.yaml --root ./docs
+pd add ./report.pdf --slug "reports/q3.pdf" --backend gdrive:// \
+  --org-yaml organizations/<org>/org.yaml --root ./docs
 
 # Resolve / retrieve (by urn, path, slug, or ref name)
-pd get "reports/2026-08-19-q3.pdf" --root ./docs
-pd get "reports/2026-08-19-q3.pdf" --cat --root ./docs
+pd get "reports/2026-08-19-q3.pdf" --org-yaml organizations/<org>/org.yaml --root ./docs
+pd get "reports/2026-08-19-q3.pdf" --cat --org-yaml organizations/<org>/org.yaml --root ./docs
 
-# Search the index
-pd search "q3" --root ./docs
+# Search the index (filtered by the reader's access)
+pd search "q3" --org-yaml organizations/<org>/org.yaml --root ./docs
 
 # Version pointers (refs)
-pd tag latest "reports/2026-08-19-q3.pdf" --root ./docs
+pd tag latest "reports/2026-08-19-q3.pdf" --org-yaml organizations/<org>/org.yaml --root ./docs
 pd refs --root ./docs
 
 # Version history (re-add with new content creates a new version)
-pd versions "reports/2026-08-19-q3.pdf" --root ./docs
-pd get "reports/2026-08-19-q3.pdf" --mac <mac> --cat --root ./docs
+pd versions "reports/2026-08-19-q3.pdf" --org-yaml organizations/<org>/org.yaml --root ./docs
+pd get "reports/2026-08-19-q3.pdf" --mac <mac> --cat --org-yaml organizations/<org>/org.yaml --root ./docs
 
-# Verify integrity (MAC chain + content hashes)
+# Verify integrity (MAC chain + content hashes + audit chain)
 pd verify --root ./docs
 
 # Resolve an actor's access from a PhantomOrg org.yaml
@@ -107,6 +116,14 @@ phantomdocs/
   `ssh://`/`gdrive://` live I/O needs a reachable host / the persona's
   `workspace.py`; `pd update` install lands once the tool is published as a
   release.
+
+## Dependency
+
+PhantomDocs consumes the PhantomOrg `org.yaml` schema (org/version 1:
+`policies.access_levels`, `policies.security_categories`, `roles`, `actors`,
+`organization.id`). It requires a PhantomOrg org model with that shape;
+`pd derive-manifest` reads `organization.id` and validates the access model at
+resolution time.
 
 ## License
 

@@ -35,19 +35,33 @@ def content_hash(data: bytes) -> str:
     return _sha256(data).hex()
 
 
-def root_mac(org_pubkey: str, namespace: str) -> str:
-    """The namespace root MAC: H(org_pubkey || namespace)."""
-    return _sha256(f"{org_pubkey}{namespace}".encode()).hex()
+def root_mac(org_id: str, org_pubkey: str, namespace: str) -> str:
+    """The namespace root MAC: H(len(org_id) || org_id || len(pubkey) ||
+    pubkey || len(namespace) || namespace).
+
+    Every field is length-prefixed so the root is domain-separated: two orgs
+    with the documented defaults (empty pubkey, namespace "docs") can never
+    collide, because the validated org id is part of the preimage. The empty
+    ``--org-pubkey`` default is therefore safe rather than a foot-gun."""
+
+    def field(value: str) -> bytes:
+        raw = value.encode()
+        return len(raw).to_bytes(4, "big") + raw
+
+    return _sha256(field(org_id) + field(org_pubkey) + field(namespace)).hex()
 
 
 def component_for_folder(slug: str) -> bytes:
-    """Folder component = slug (folders are structural)."""
-    return slug.encode()
+    """Folder component = len(slug) || slug (folders are structural)."""
+    raw = slug.encode()
+    return len(raw).to_bytes(4, "big") + raw
 
 
 def component_for_doc(slug: str, content: bytes) -> bytes:
-    """Document component = slug || H(content) (identity bound to content)."""
-    return slug.encode() + _sha256(content)
+    """Document component = len(slug) || slug || H(content). The slug is
+    length-prefixed so a slug boundary can never be ambiguous."""
+    raw = slug.encode()
+    return len(raw).to_bytes(4, "big") + raw + _sha256(content)
 
 
 def node_mac(parent_mac: str, component: bytes) -> str:

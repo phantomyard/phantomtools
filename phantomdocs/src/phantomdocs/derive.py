@@ -20,5 +20,5 @@ def derive_manifest(
     org_id = (org.get("organization") or {}).get("id")
     if not org_id:
         raise ValueError("org.yaml is missing organization.id")
-    mac = root_mac(org_pubkey, namespace)
+    mac = root_mac(org_id, org_pubkey, namespace)
     return empty_manifest(org_id, namespace, mac)

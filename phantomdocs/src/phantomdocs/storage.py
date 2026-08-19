@@ -21,6 +21,7 @@ import subprocess  # nosec B404
 import tempfile
 from urllib.parse import urlparse
 
+from .identity import content_hash as _content_hash
 from .identity import is_valid_hex64
 
 
@@ -68,7 +69,13 @@ class LocalBackend:
         if not os.path.isfile(path):
             raise StorageError(f"blob not found: {content_hash}")
         with open(path, "rb") as f:
-            return f.read()
+            data = f.read()
+        # Content-addressed store: verify the bytes against the requested
+        # hash on read, so a mutated blob is refused (integrity on the read
+        # path, not only under `pd verify`).
+        if _content_hash(data) != content_hash:
+            raise StorageError(f"content hash mismatch for {content_hash}")
+        return data
 
     def has(self, content_hash: str) -> bool:
         return os.path.isfile(self.blob_path(content_hash))
@@ -135,7 +142,11 @@ class SshBackend:
         proc = _run_checked(self._ssh_args() + [f"cat {remote}"])
         if proc.returncode != 0:
             raise StorageError(self._err(proc, "ssh get failed (blob not found?)"))
-        return proc.stdout
+        data = proc.stdout
+        # Integrity on the read path: verify the bytes against the hash.
+        if _content_hash(data) != content_hash:
+            raise StorageError(f"content hash mismatch for {content_hash}")
+        return data
 
     def has(self, content_hash: str) -> bool:
         remote = self.remote_path(content_hash)
@@ -210,7 +221,11 @@ def resolve_backend(uri: str):
     parsed = urlparse(uri)
     scheme = parsed.scheme
     if scheme == "local":
-        return LocalBackend(parsed.path or ".")
+        # ``local://<root>`` puts the root in netloc; ``local:///abs`` puts it
+        # in path. Recombine so the documented two-slash form never silently
+        # resolves to the current directory.
+        root = (parsed.netloc or "") + (parsed.path or "")
+        return LocalBackend(root or ".")
     if scheme == "ssh":
         return SshBackend(
             host=parsed.hostname or "",

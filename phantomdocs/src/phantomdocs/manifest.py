@@ -6,17 +6,26 @@ metadata, classification and relations. Version 1 is single-tenant.
 Versioning: a URN may map to several nodes (one per version, each with its own
 MAC). The *current* version is the last node for that URN; earlier versions are
 linked via the `previous` field (git commit-parent style).
+
+Concurrency: every mutating command performs a read-modify-write under an
+inter-process lock (``manifest.lock``), and each write uses its own unique
+``mkstemp`` file, so concurrent personas never clobber each other's updates
+or rename the same temp file.
 """
 
 from __future__ import annotations
 
 import os
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import yaml
 
 MANIFEST_VERSION = 1
 MANIFEST_FILENAME = "manifest.yaml"
+LOCK_FILENAME = "manifest.lock"
 
 
 class ManifestError(ValueError):
@@ -50,11 +59,60 @@ def load(path: str) -> dict[str, Any]:
 
 
 def save(path: str, data: dict[str, Any]) -> None:
-    """Atomically write a manifest to disk."""
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
-    os.replace(tmp, path)
+    """Atomically write a manifest to disk using a unique temp file.
+
+    The temp name is unique per call (``mkstemp``), so concurrent writers
+    can never collide on the same temp path. The caller is expected to hold
+    the inter-process lock (``manifest_lock``) across its read-modify-write,
+    but the atomic replace is correct even without it.
+    """
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".manifest-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+@contextmanager
+def manifest_lock(path: str) -> Iterator[None]:
+    """Hold an inter-process lock for ``path`` across a read-modify-write.
+
+    POSIX uses ``fcntl.flock`` on a sidecar ``manifest.lock``; Windows falls
+    back to an ``msvcrt`` range lock. The lock is advisory but serializes the
+    mutating commands, so a concurrent ``add``/``tag``/``mkdir`` cannot lose
+    the other's update.
+    """
+    lock_path = os.path.join(
+        os.path.dirname(os.path.abspath(path)) or ".", LOCK_FILENAME
+    )
+    with open(lock_path, "a+", encoding="utf-8") as lock_file:
+        try:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        except ImportError:
+            import msvcrt
+
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def validate(data: dict[str, Any]) -> list[str]:

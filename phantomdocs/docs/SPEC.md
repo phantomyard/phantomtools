@@ -10,15 +10,16 @@
 PhantomDocs is a **self-contained document management tool** for the
 phantomyard ecosystem. It gives phantombot personas of any
 PhantomOrg-provisioned organization the ability to **autonomously manage
-their entity's documents and document requests**, with hard guarantees of:
+their entity's documents and document requests**, with guarantees of:
 
 - **Identity** — every document and folder carries a unique, verifiable
   identifier.
-- **Integrity** — content is hash-bound; tampering is detectable by
-  re-verification.
+- **Integrity** — content is hash-bound; corruption and accidental
+  divergence are detectable by re-verification. (The chain is unkeyed:
+  authenticity/tamper-evidence is the optional HMAC in §4.3.)
 - **Access control** — resolved from PhantomOrg (access levels, security
-  categories, role/actor exceptions); PhantomDocs only declares each node's
-  classification.
+  categories, role/actor exceptions) and **enforced** on every read/write;
+  PhantomDocs only declares each node's classification.
 - **Location** — every node maps to a physical path or URL, independent of
   backend and operating system.
 - **Search** — index-, full-text- and backend-native search.
@@ -268,6 +269,11 @@ security classification, referencing PhantomOrg's `security_categories`.
 
 **Enforcement (fail-closed):**
 
+- The **actor identity** comes from the `PHANTOMDOCS_ACTOR` environment
+  variable, set per-persona by PhantomOrg at deploy time. A `--actor` flag is
+  a self-asserted audit label only and never establishes access. Without a
+  `--org-yaml` (the authoritative org model) and an actor, read and write are
+  denied — never fail-open.
 - **Read** — allowed iff the actor's resolved access (`merge_access`) covers
   the node's `category` (i.e. the category number is in the actor's resolved
   category set, or the actor holds a category exception). `category-0` is
@@ -307,9 +313,10 @@ Enables queries like "which minutes cite this policy?".
   verifiable by hash.
 - **Verification (cotejo)** — `pd verify` recomputes the MAC chain and content
   hashes against the manifest and reports any divergence.
-- **Audit** — an append-only log (`audit.log`) records
-  `{ts, actor, action, urn, mac, hash}`. Without this there is no "total
-  guarantee" worth the name.
+- **Audit** — an append-only, **hash-chained** log (`audit.log`) records
+  `{ts, actor, action, urn, mac, hash, prev}` where `prev` is the SHA-256 of
+  the preceding line; `pd verify` walks the chain and reports a deleted or
+  reordered entry. Without this there is no "total guarantee" worth the name.
 
 ## 13. Update package (what PhantomDocs applies)
 
@@ -327,7 +334,7 @@ Idempotent, applied on top of a PhantomOrg persona installation:
 - Identity + integrity via the chained MAC; optional HMAC authenticity.
 - Secrets never stored in the manifest; backends reuse the persona's existing
   credentials (SSH keys, OAuth2).
-- Audit log is append-only.
+- Audit log is append-only and hash-chained (`prev` = SHA-256 of the prior line).
 
 ## 15. Integration with PhantomOrg
 
