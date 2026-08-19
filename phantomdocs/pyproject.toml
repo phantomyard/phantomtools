@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phantomdocs"
+version = "0.1.0"
+description = "Agnostic document management for PhantomOrg-provisioned agent personas."
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML>=6.0",
+    "click>=8.1",
+]
+
+[project.scripts]
+phantomdocs = "phantomdocs.cli:main"
+pd = "phantomdocs.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
