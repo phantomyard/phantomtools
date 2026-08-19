@@ -1,19 +1,33 @@
+process.umask(0o077);
 // Tests del mapeo org.yaml → agents + routing DM↔DM (norma v1.6).
 // Unit tests de org-routing.js + integración con bridge.js (HTTP /status).
 // Uso: node test-org-routing.js
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 const {generateSecretKey, getPublicKey, nip19} = require('nostr-tools');
 
 // ---------------------------------------------------------------------------
-// Fixture: estructura de una organización de ejemplo (flow-maps YAML como org.yaml real)
+// Fixture: estructura de Aquaponics United (flow-maps YAML como org.yaml real)
 // ---------------------------------------------------------------------------
+const HEX = {
+  paco: '1111111111111111111111111111111111111111111111111111111111111111',
+  pepa: '2222222222222222222222222222222222222222222222222222222222222222',
+  roberto: '3333333333333333333333333333333333333333333333333333333333333333',
+  alma: '4444444444444444444444444444444444444444444444444444444444444444',
+  elena: '5555555555555555555555555555555555555555555555555555555555555555',
+};
+const FIXTURE_NPUBS = [
+  HEX.paco, HEX.pepa, HEX.roberto, HEX.alma, HEX.elena
+].map(pk => nip19.npubEncode(pk));
+
+
 const ORG_AU = `
 version: 1
 organization:
-  id: example-org
+  id: aquaponics-united
 departments:
   - { id: direccion, name: "Dirección", parent: null }
   - { id: operaciones, name: "Operaciones", parent: direccion }
@@ -26,11 +40,11 @@ roles:
   - { id: project_lead, name: "Project Lead", department: operaciones, reports_to: chief_of_staff }
   - { id: training_lead, name: "Training Lead", department: formacion, reports_to: chief_of_staff }
 actors:
-  - { id: paco, role: ceo, npub: npub14jsyt77akpjdl6m70ru805xxqjxtqrajzv9yc59anj4t9uhg4tts72ua3d }
-  - { id: pepa, role: chief_of_staff, npub: npub1tplxldx86d3kya4n2t83nzd30r0r4katn9aw06mc6yh0yp2lpcpq0f0gtu }
-  - { id: roberto, role: cfo, npub: npub1n63l0sav8ruvpvu7ateqtrsekgv24yu77en00eve8459zec3ed7sq64jq5 }
-  - { id: alma, role: project_lead, npub: npub1wufqmlsam5nwvy9elmg9r5myvyahf9rws5pwfyakwzxq5ymkaknqal6420 }
-  - { id: elena, role: training_lead, npub: npub1ve9n5gg772q0rn3ujmkssxausv6d7jaszs2aftq3dpu8r29qq4pqtyludf }
+  - { id: paco, role: ceo, npub: ${FIXTURE_NPUBS[0]} }
+  - { id: pepa, role: chief_of_staff, npub: ${FIXTURE_NPUBS[1]} }
+  - { id: roberto, role: cfo, npub: ${FIXTURE_NPUBS[2]} }
+  - { id: alma, role: project_lead, npub: ${FIXTURE_NPUBS[3]} }
+  - { id: elena, role: training_lead, npub: ${FIXTURE_NPUBS[4]} }
 escalation_matrix:
   - { from: project_lead, to: chief_of_staff, condition: "bloqueo operativo" }
   - { from: training_lead, to: chief_of_staff, condition: "contenido fuera de alcance" }
@@ -38,16 +52,6 @@ escalation_matrix:
   - { from: chief_of_staff, to: ceo, condition: "bloqueo no resuelto" }
   - { from: "*", to: ceo, condition: "excepción Category 0" }
 `;
-
-// Hex reales de los npubs de AU (derivados con nip19.decode; verificados
-// contra los hashes del config.json del bridge en el VPS).
-const HEX = {
-  paco: 'aca045fbddb064dfeb7e78f877d0c6048cb00fb2130a4c50bd9caab2f2e8aad7',
-  pepa: '587e6fb4c7d3636276b352cf1989b178de3adbab997ae7eb78d12ef2055f0e02',
-  roberto: '9ea3f7c3ac38f8c0b39eeaf2058e19b218aa939ef666f7e5993d68516711cb7d',
-  alma: '77120dfe1ddd26e610b9fed051d364613b74946e8502e493b6708c0a1376eda6',
-  elena: '664b3a211ef280f1ce3c96ed081bbc8334df4bb01415d4ac11687871a8a00542',
-};
 
 // Resultado esperado de deriveRouting(ORG_AU):
 //   reports_to bidireccional: paco↔pepa, paco↔roberto, pepa↔alma, pepa↔elena
@@ -90,18 +94,49 @@ t('npubs reales de AU → hex exacto', () => {
   const agents = deriveAgents(parseOrgYaml(ORG_AU));
   assert.deepStrictEqual(agents, HEX);
 });
-t('actor sin npub se omite', () => {
+t('actor sin npub falla cerrado', () => {
   const org = parseOrgYaml(ORG_AU);
-  org.actors.push({id: 'fantasma', role: 'ceo'}); // sin npub
-  const agents = deriveAgents(org);
-  assert.strictEqual(agents.fantasma, undefined);
-  assert.strictEqual(Object.keys(agents).length, 5);
+  org.actors.push({id: 'fantasma', role: 'ceo'});
+  assert.throws(() => deriveAgents(org), /requiere id, role y npub/);
 });
-t('npub inválido se omite (con warning)', () => {
+t('npub inválido falla cerrado', () => {
   const org = parseOrgYaml(ORG_AU);
   org.actors.push({id: 'roto', role: 'ceo', npub: 'npub1noesvalido'});
-  const agents = deriveAgents(org);
-  assert.strictEqual(agents.roto, undefined);
+  assert.throws(() => deriveAgents(org), /npub inválido/);
+});
+
+// MEDIO-6: FAIL-CLOSED ante identidades ambiguas (pubkey/actor.id duplicados).
+// MEDIO-6: FAIL-CLOSED ante identidades ambiguas (pubkey/actor.id duplicados).
+function freshNpub() { return nip19.npubEncode(getPublicKey(generateSecretKey())); }
+t('actor.id duplicado → FAIL-CLOSED (lanza)', () => {
+  const org = parseOrgYaml(ORG_AU);
+  org.actors = [
+    {id: 'doble', role: 'ceo', npub: freshNpub()},
+    {id: 'doble', role: 'worker', npub: freshNpub()},
+  ];
+  assert.throws(() => deriveAgents(org), /duplicado/i);
+});
+t('pubkey duplicado entre actores → FAIL-CLOSED (lanza)', () => {
+  const shared = freshNpub();
+  const org = parseOrgYaml(ORG_AU);
+  org.actors = [
+    {id: 'ceoX', role: 'ceo', npub: shared},
+    {id: 'workerX', role: 'worker', npub: shared},
+  ];
+  assert.throws(() => deriveAgents(org), /duplicado/i);
+});
+t('loadOrgRouting ante pubkey duplicado → EINVALID (fail-closed, no fallback)', () => {
+  const shared = freshNpub();
+  const yaml = 'actors:\n  - id: a\n    role: ceo\n    npub: ' + shared +
+    '\n  - id: b\n    role: worker\n    npub: ' + shared + '\n';
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'org-dup-'));
+  const file = path.join(tmpDir, 'dup-org.yaml');
+  fs.writeFileSync(file, yaml);
+  try {
+    assert.throws(() => loadOrgRouting(file), (e) => { assert.strictEqual(e.code, 'EINVALID'); return true; });
+  } finally {
+    fs.rmSync(tmpDir, {recursive: true, force: true});
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -154,22 +189,33 @@ t('archivo válido → {agents, routing}', () => {
   assert.deepStrictEqual(r.agents, HEX);
   assert.deepStrictEqual(r.routing.permissions, EXPECTED_ROUTING);
 });
-t('archivo inexistente → null', () => {
-  assert.strictEqual(loadOrgRouting(path.join(TEST_DIR, 'no-existe.yaml')), null);
+t('archivo inexistente → EMISSING (legacy fallback legítimo)', () => {
+  let err = null;
+  try { loadOrgRouting(path.join(TEST_DIR, 'no-existe.yaml')); }
+  catch (e) { err = e; }
+  assert.ok(err && err.code === 'EMISSING', 'debe lanzar Error con code EMISSING');
 });
-t('yaml roto → null (con warning)', () => {
+t('yaml roto → EINVALID (FAIL-CLOSED, no fallback silencioso)', () => {
   const bad = path.join(TEST_DIR, 'roto.yaml');
   fs.writeFileSync(bad, 'roles: [unclosed');
-  assert.strictEqual(loadOrgRouting(bad), null);
+  let err = null;
+  try { loadOrgRouting(bad); }
+  catch (e) { err = e; }
+  assert.ok(err && err.code === 'EINVALID', 'debe lanzar Error con code EINVALID');
 });
 
 // ---------------------------------------------------------------------------
 // Integración con bridge.js: el routing derivado sustituye al manual
 // ---------------------------------------------------------------------------
 console.log('integración bridge.js:');
-function getJson(port, p) {
+function getJson(port, p, token) {
   return new Promise((resolve, reject) => {
-    const req = require('http').get({host: '127.0.0.1', port, path: p}, (res) => {
+    const req = require('http').get({
+      host: '127.0.0.1',
+      port,
+      path: p,
+      headers: {authorization: 'Bearer ' + token},
+    }, (res) => {
       let body = '';
       res.on('data', c => body += c);
       res.on('end', () => {
@@ -191,6 +237,7 @@ fs.writeFileSync(CFG, JSON.stringify({
   agents: {extra: getPublicKey(generateSecretKey())},
   routing: {permissions: {extra: ['paco']}, default: 'deny'},
 }, null, 2));
+fs.chmodSync(CFG, 0o600);
 
 t('bridge usa routing derivado de org.yaml, no el manual', async () => {
   delete require.cache[require.resolve('./bridge.js')];
@@ -198,12 +245,13 @@ t('bridge usa routing derivado de org.yaml, no el manual', async () => {
   const bridge = require('./bridge.js');
   await new Promise(resolve => bridge.server.listen(0, '127.0.0.1', resolve));
   const port = bridge.server.address().port;
-  const status = await getJson(port, '/status');
+  const status = await getJson(port, '/status', bridge.getAdminToken());
   assert.deepStrictEqual(status.routing.permissions, EXPECTED_ROUTING);
   assert.strictEqual(status.routing.default, 'deny');
   assert.strictEqual(status.routing.permissions.extra, undefined, 'routing manual ignorado');
-  // agents: los del config.json complementan a los derivados
-  assert.ok(status.agents.extra, 'agent extra del config mergeado');
+  // MEDIO-5: agents del config NO se complementan — org.yaml es la ÚNICA
+  // fuente de verdad de identidad. Un 'extra' del config NO debe aparecer.
+  assert.strictEqual(status.agents.extra, undefined, 'agent extra del config IGNORADO (org.yaml manda)');
   assert.ok(status.agents.paco, 'agent derivado presente');
   await new Promise(resolve => bridge.server.close(resolve));
 });

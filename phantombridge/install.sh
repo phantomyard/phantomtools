@@ -1,76 +1,107 @@
 #!/usr/bin/env bash
 #
-# install.sh — symlink phantombridge's CLI into your PATH.
-#
-# Two ways to run it:
-#
-#   1. From inside a checkout (the repo stays the single source of truth):
-#        ./install.sh
-#
-#   2. Standalone, piped straight from the repo (the one-line install):
-#        curl -fsSL https://raw.githubusercontent.com/phantomyard/phantomtools/main/phantombridge/install.sh | bash
-#      When run this way the script is not inside a working tree, so it
-#      clones the repo first and symlinks into that clone.
+# install.sh — symlink phantombridge into your PATH.
 #
 # Usage:
-#   ./install.sh                       # symlink into ~/.local/bin
-#   PREFIX=/usr/local ./install.sh     # symlink into /usr/local/bin (may need sudo)
+#   ./install.sh                          # symlink into ~/.local/bin
+#   PREFIX=/usr/local ./install.sh        # symlink into /usr/local/bin (may need sudo)
+#   curl -fsSL <url> | bash               # standalone: fetches the repo, then installs
 #
-# The symlink points at bin/phantombridge in the repo, so editing the repo
-# takes effect on the next run — no npm reinstall needed. Re-run install.sh
-# after moving the repo.
-#
-# Environment (all optional):
-#   PREFIX                  install prefix (default $HOME/.local)
-#   PHANTOMBRIDGE_REPO_URL  git URL to clone in standalone mode
-#                           (default https://github.com/phantomyard/phantomtools.git)
-#   PHANTOMBRIDGE_REPO_DIR  where to keep the clone in standalone mode
-#                           (default $HOME/.local/share/phantombridge)
-#
-# Dependencies: node >= 18 with npm. After installing, run:
-#   npm install            # inside the checkout (or the standalone clone)
-# and copy config.example.json to config.json with your real values.
-#
+# Requires: node 18+ and npm in PATH.
 set -euo pipefail
 
-REPO_URL="${PHANTOMBRIDGE_REPO_URL:-https://github.com/phantomyard/phantomtools.git}"
-REPO_DIR="${PHANTOMBRIDGE_REPO_DIR:-$HOME/.local/share/phantombridge}"
-PREFIX="${PREFIX:-$HOME/.local}"
-BIN_DIR="$PREFIX/bin"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+src="$here/bin/phantombridge"
 
-# Detect whether we are inside a checkout (i.e. ./bridge.js exists next to us).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/bridge.js" ] && [ -f "$SCRIPT_DIR/package.json" ]; then
-  REPO_DIR="$SCRIPT_DIR"
-  STANDALONE=0
-  echo "Using local checkout: $REPO_DIR"
-else
-  STANDALONE=1
-  echo "Not inside a checkout; cloning $REPO_URL ..."
+prefix="${PREFIX:-$HOME/.local}"
+bindir="$prefix/bin"
+
+# --- standalone install -------------------------------- #
+# When fetched via `curl | bash` there is no checkout: $here is a temp dir
+# with only this script. Clone the repo, then re-run from the checkout.
+if [[ ! -e "$here/bin/phantombridge" ]]; then
+    if ! command -v git >/dev/null 2>&1; then
+        echo "install: git required for standalone install" >&2
+        exit 1
+    fi
+    tmp="$(mktemp -d)"
+    echo "install: fetching phantomtools repo..."
+    git clone --depth 1 https://github.com/phantomyard/phantomtools.git "$tmp/phantomtools" >/dev/null 2>&1
+    here="$tmp/phantomtools/phantombridge"
+    src="$here/bin/phantombridge"
+    trap 'rm -rf "$tmp"' EXIT
 fi
 
-if [ "$STANDALONE" = "1" ]; then
-  if [ ! -f "$REPO_DIR/phantombridge/package.json" ]; then
-    mkdir -p "$(dirname "$REPO_DIR")"
-    git clone --depth 1 "$REPO_URL" "$REPO_DIR"
-  else
-    echo "Checkout already present at $REPO_DIR (not re-cloning)."
-  fi
-  REPO_DIR="$REPO_DIR/phantombridge"
+if [[ ! -x "$src" ]]; then
+    echo "install: $src not found or not executable" >&2
+    exit 1
 fi
 
-# Node sanity check.
 if ! command -v node >/dev/null 2>&1; then
-  echo "error: node not found in PATH. Install Node.js >= 18 first." >&2
-  exit 1
+    echo "install: node not found in PATH (required)" >&2
+    exit 1
 fi
 
-mkdir -p "$BIN_DIR"
-ln -sfn "$REPO_DIR/bin/phantombridge" "$BIN_DIR/phantombridge"
-echo "Installed: $BIN_DIR/phantombridge -> $REPO_DIR/bin/phantombridge"
+# Make sure the wrapper is executable (a clone may not preserve the bit).
+chmod +x "$src" 2>/dev/null || true
+
+# --- install npm deps (the bridge is Node) -------------- #
+# The bridge needs its node_modules. Install into the checkout so the symlinked
+# launcher (bin/phantombridge) resolves bridge.js + node_modules from it at
+# runtime. Skip if already present.
+if [[ ! -d "$here/node_modules" ]]; then
+    echo "install: installing npm dependencies (npm install)..."
+    (cd "$here" && npm install --no-audit --no-fund)
+fi
+
+mkdir -p "$bindir"
+
+# Don't blindly `ln -sf`: that silently clobbers a regular file someone may
+# have edited in place, losing the change. Reclaim only a symlink that already
+# points at our source (or a dangling one); refuse a foreign symlink or a real
+# file and point at report-drift so any in-place edit can be folded back in.
+target="$bindir/phantombridge"
+if [[ -L "$target" ]]; then
+    current="$(readlink -f "$target" 2>/dev/null || true)"
+    src_real="$(readlink -f "$src" 2>/dev/null || echo "$src")"
+    if [[ "$current" == "$src_real" || "$current" == "$src" ]]; then
+        rm -f "$target"
+    elif [[ -z "$current" ]]; then
+        rm -f "$target"  # dangling symlink, safe to replace
+    else
+        echo "install: refusing to overwrite $target — it links to $current, not this repo. Remove it manually if intended." >&2
+        exit 1
+    fi
+elif [[ -e "$target" ]]; then
+    echo "install: refusing to overwrite $target — it's a regular file, not our symlink. It may hold in-place edits; check with: github-app-auth report-drift phantombridge/phantombridge — then remove it manually if intended." >&2
+    exit 1
+fi
+ln -s "$src" "$target"
+
+echo "installed: $target -> $src"
+
+case ":$PATH:" in
+    *":$bindir:"*) ;;
+    *) echo "note: $bindir is not in your PATH — add it:"
+       echo "      export PATH=\"$bindir:\$PATH\"" ;;
+esac
+
+# --- config seed (optional) ----------------------------- #
+# Create config.json from the example on first install so the bridge can boot
+# after the operator fills in XMPP/Nostr credentials. Never overwrite.
+if [[ ! -e "$here/config.json" && -e "$here/config.example.json" ]]; then
+    cp "$here/config.example.json" "$here/config.json"
+    chmod 600 "$here/config.json"
+    mkdir -p "$here/secrets"
+    chmod 700 "$here/secrets"
+    echo "created $here/config.json (0600) — populate the 0600 secret files under $here/secrets/"
+fi
+
 echo
-echo "Next steps:"
-echo "  1. cd $REPO_DIR && npm install"
-echo "  2. cp config.example.json config.json and fill in your values"
-echo "     (xmpp password, nostr nsec, agent pubkeys, permissions)"
-echo "  3. Run: phantombridge"
+echo "next steps:"
+echo "  - keep config.json mode 0600 and create 0600 secret files for XMPP/Nostr/admin credentials"
+echo "  - if you use an org.yaml (norma v1.6), place it next to config.json — the bridge derives agents + DM routing from it"
+echo "  - smoke test:  phantombridge --version"
+echo "  - run the bridge in the foreground:  phantombridge  (or under systemd / your supervisor)"
+echo
+echo "see: phantombridge --help"

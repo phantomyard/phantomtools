@@ -1,10 +1,10 @@
 {
   "name": "phantombridge",
-  "version": "1.6.0",
-  "description": "Puente generico Jitsi↔Nostr y router DM↔DM para ecosistema phantombot. Modos: jitsi (salas XMPP MUC ↔ gift-wraps Nostr), nostr (solo enrutado DM↔DM entre agentes), both. Kill-switch por lado via HTTP POST /pause. Anti-backlog en reinicios. Anti-loop entre bots (envelope norma v1.3: hops/trace/expires + dedup + tasa por pareja + cortocircuito request_id). v1.6.0: org.yaml como fuente de verdad (norma v1.6) — el bridge deriva agents + routing DM↔DM desde roles.reports_to + escalation_matrix via org-routing.js; el routing manual de config.json queda como fallback si no hay org.yaml. v1.5.4: identidad de admisión MONOTÓNICA (F2-R03/R04) — Date.now() no es único; las marcas de pareja y hash se guardan como {id, ts} con id incremental y el rollback busca por id. v1.5.3: rollback por ADMISSION TOKEN (F2-R02) — el COMMIT devuelve la identidad exacta de cada mutación (hash+ts, marca de pareja concreta, instancia de request) y el rollback tras fallo de publish deshace SOLO esa admisión, aunque otra admisión concurrente haya tocado las mismas estructuras durante el await. v1.5.2: antiLoopCheck transaccional (F2-R01) — el estado anti-loop (hashes/pairs/requests) solo se registra tras superar TODAS las defensas; un drop por dedup/rate ya no consume cuota de request_id ni siembra aristas. v1.5.1: auditoria Fase 2 — envelope como primera linea real, validacion estricta de tipos, rollback en fallo de publicacion, caps de memoria, marker constante.",
+  "version": "1.8.0",
+  "description": "Optional Jitsi↔Nostr and Nostr↔Nostr bridge for phantombot. Hardened for fail-closed org routing, authenticated local control, private secrets, and untrusted room relaying.",
   "main": "bridge.js",
   "scripts": {
-    "test": "node test-routing.js && node test-org-routing.js && node test-pause.js && node test-antiloop.js && node e2e-nostr-test.js"
+    "test": "node test-audit-hardening.js && node test-routing.js && node test-org-routing.js && node test-pause.js && node test-pause-persist.js && node test-antiloop.js && node test-giftwrap-adversarial.js && node test-giftwrap-fix.js && node test-backpressure-recovery.js"
   },
   "keywords": [
     "nostr",
@@ -14,14 +14,13 @@
     "bridge",
     "gift-wrap"
   ],
-  "author": "salvaalba-dev",
+  "author": "Aquaponics United / salvaalba-dev",
   "license": "MIT",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@xmpp/client": "^0.14.0",
     "js-yaml": "^5.2.3",
-    "nostr-tools": "^2.24.1"
-  },
-  "devDependencies": {
+    "nostr-tools": "^2.24.1",
     "ws": "^8.21.3"
   }
 }

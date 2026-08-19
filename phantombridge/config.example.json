@@ -26,22 +26,22 @@
   "startRooms": [],
   "httpPort": 8090,
   "xmpp": {
-    "service": "xmpp://127.0.0.1:5222",
+    "service": "xmpps://127.0.0.1:5223",
     "domain": "auth.meet.example.com",
     "username": "bridge",
-    "password": "CHANGE_ME_XMPP_PASSWORD",
-    "rejectUnauthorized": true,
-    "focus": "focus.meet.example.com"
+    "focus": "focus.meet.example.com",
+    "passwordFile": "./secrets/xmpp.password"
   },
   "nostr": {
     "relay": "ws://relay.example.com:7777",
-    "nsec": "CHANGE_ME_BRIDGE_PRIVATE_KEY"
+    "nsecFile": "./secrets/bridge.nsec",
+    "relayNsecFile": "./secrets/jitsi-relay.nsec"
   },
   "agents": {
-    "pepa": "CHANGE_ME_HEX_PUBKEY_64",
-    "paco": "CHANGE_ME_HEX_PUBKEY_64",
-    "roberto": "CHANGE_ME_HEX_PUBKEY_64",
-    "alma": "CHANGE_ME_HEX_PUBKEY_64"
+    "pepa": "HEX_PUBKEY_64",
+    "paco": "HEX_PUBKEY_64",
+    "roberto": "HEX_PUBKEY_64",
+    "alma": "HEX_PUBKEY_64"
   },
   "permissions": {
     "full": [
@@ -78,5 +78,7 @@
   },
   "roomTimeouts": {
     "mia": 20
-  }
+  },
+  "orgFile": "./org.yaml",
+  "httpAdminTokenFile": "./secrets/http-admin.token"
 }

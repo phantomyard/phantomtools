@@ -1,3 +1,4 @@
+process.umask(0o077);
 // Unit tests of the per-side pause (kill-switch) — no relay, no XMPP.
 // Usage: node test-pause.js
 const assert = require('assert');

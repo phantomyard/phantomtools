@@ -3,6 +3,7 @@ config.json
 config.*.local.json
 testbridge-pw.txt
 *.secret
+secrets/
 .env
 
 # Dependencias
@@ -21,5 +22,7 @@ npm-debug.log*
 # Editor
 .vscode/
 
-# Directorios residuales de tests
-.test-tmp-*/
+# Estado temporal del bridge (test/runtime) — no versionar
+.bridge-state.json
+.bridge-pause.json
+.test-tmp*/

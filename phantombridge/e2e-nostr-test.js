@@ -1,3 +1,4 @@
+process.umask(0o077);
 // E2E: bridge modo nostr (routing DM↔DM) — Roberto -> bridge -> Alma
 // Uso: node e2e-nostr-test.js   (arranca relay local de prueba, corre todo, limpia)
 const {generateSecretKey, getPublicKey, nip19, SimplePool} = require('nostr-tools');
@@ -62,6 +63,7 @@ async function main() {
   fs.mkdirSync(TMP, {recursive: true});
   fs.writeFileSync(TMP + '/config.json', JSON.stringify({
     mode: 'nostr', nick: 'bridge-test', httpPort: 18099,
+    httpAdminToken: 'e2e-admin-token-123456',
     nostr: {relay: RELAY, nsec: nip19.nsecEncode(bridgeSk)},
     agents: {roberto: robertoPk, alma: almaPk},
     routing: {permissions: {roberto: ['alma'], alma: ['roberto']}, default: 'deny'}
@@ -128,11 +130,11 @@ async function main() {
   let ok = true;
 
   // Roberto -> bridge: REQUEST routed to Alma
-  const wrap = nip17.wrapEvent(robertoSk, {publicKey: bridgePk, relay: RELAY}, '@alma REQUEST example-org-20260811-9999: ¿puedes revisar el protocolo de custodia?');
+  const wrap = nip17.wrapEvent(robertoSk, {publicKey: bridgePk, relay: RELAY}, '@alma REQUEST aquaponics-united-20260811-9999: ¿puedes revisar el protocolo de custodia?');
   await pool.publish([RELAY], wrap);
   console.log('[e2e] REQUEST published by roberto');
 
-  if (await waitRid('example-org-20260811-9999', 20)) {
+  if (await waitRid('aquaponics-united-20260811-9999', 20)) {
     console.log('[e2e] ✅ ALMA received:', lastReceived && lastReceived.content);
     // F2-01: the envelope must be the FIRST real line; [from] after.
     const firstLine = (lastReceived && lastReceived.content.split('\n')[0] || '').trim();
@@ -150,11 +152,11 @@ async function main() {
   }
 
   // --- Anti-loop: re-sending the SAME REQUEST (loop) must be dropped ---
-  const loopWrap = nip17.wrapEvent(robertoSk, {publicKey: bridgePk, relay: RELAY}, '@alma REQUEST example-org-20260811-9999: ¿puedes revisar el protocolo de custodia?');
+  const loopWrap = nip17.wrapEvent(robertoSk, {publicKey: bridgePk, relay: RELAY}, '@alma REQUEST aquaponics-united-20260811-9999: ¿puedes revisar el protocolo de custodia?');
   await pool.publish([RELAY], loopWrap);
   await new Promise(r => setTimeout(r, 3000));
-  const deliveries9999 = [...receivedRids].filter(r => r === 'example-org-20260811-9999').length;
-  if (receivedRids.has('example-org-20260811-9999') && deliveries9999 <= 1) {
+  const deliveries9999 = [...receivedRids].filter(r => r === 'aquaponics-united-20260811-9999').length;
+  if (receivedRids.has('aquaponics-united-20260811-9999') && deliveries9999 <= 1) {
     console.log('[e2e] ✅ anti-loop: duplicated REQUEST dropped (only 1 delivery to Alma)');
   } else {
     console.log('[e2e] ❌ FAIL: the loop (same repeated REQUEST) DID reach Alma — anti-loop not working');
@@ -166,10 +168,10 @@ async function main() {
   // Hops 1 and 2 (new edges) must arrive; hop 3 (repeated edge (A,B))
   // and hop 4 (repeated edge (B,A)) must be cut by the bridge.
   const chain = [
-    {rid: 'example-org-20260811-1001', hops: 1, trace: ['roberto'], from: robertoSk, to: 'alma', text: 'REQUEST ¿estado de la custodia?'},
-    {rid: 'example-org-20260811-1002', hops: 1, trace: ['roberto', 'alma'], from: almaSk, to: 'roberto', text: 'INFORM proceso en curso'},
-    {rid: 'example-org-20260811-1003', hops: 2, trace: ['roberto', 'alma', 'roberto'], from: robertoSk, to: 'alma', text: 'REQUEST ¿y ahora?'},
-    {rid: 'example-org-20260811-1004', hops: 3, trace: ['roberto', 'alma', 'roberto', 'alma'], from: almaSk, to: 'roberto', text: 'INFORM sigue en curso'},
+    {rid: 'aquaponics-united-20260811-1001', hops: 1, trace: ['roberto'], from: robertoSk, to: 'alma', text: 'REQUEST ¿estado de la custodia?'},
+    {rid: 'aquaponics-united-20260811-1002', hops: 1, trace: ['roberto', 'alma'], from: almaSk, to: 'roberto', text: 'INFORM proceso en curso'},
+    {rid: 'aquaponics-united-20260811-1003', hops: 2, trace: ['roberto', 'alma', 'roberto'], from: robertoSk, to: 'alma', text: 'REQUEST ¿y ahora?'},
+    {rid: 'aquaponics-united-20260811-1004', hops: 3, trace: ['roberto', 'alma', 'roberto', 'alma'], from: almaSk, to: 'roberto', text: 'INFORM sigue en curso'},
   ];
   const sendHop = async (hop) => {
     const envLine = '[env] ' + JSON.stringify({rid: hop.rid, hops: hop.hops, trace: hop.trace, expires: Date.now() + 3600000}) + '\n';
@@ -204,11 +206,11 @@ async function main() {
   // defenses (dedup/rid/rate) without crashing the bridge nor being
   // immortal. ---
   const badEnvelopes = [
-    {rid: 'example-org-20260811-1101', hops: '-Infinity', trace: [], expires: Date.now() + 3600000, text: 'REQUEST hops -Infinity'},
-    {rid: 'example-org-20260811-1102', hops: 1, trace: [], expires: 'not-a-date', text: 'REQUEST expires garbage'},
-    {rid: 'example-org-20260811-1103', hops: 1.5, trace: [], expires: Date.now() + 3600000, text: 'REQUEST hops float'},
-    {rid: 'example-org-20260811-1104', hops: 1, trace: [123], expires: Date.now() + 3600000, text: 'REQUEST trace no-strings'},
-    {rid: 'example-org-20260811-1105', hops: -1, trace: [], expires: Date.now() + 3600000, text: 'REQUEST hops negativo'},
+    {rid: 'aquaponics-united-20260811-1101', hops: '-Infinity', trace: [], expires: Date.now() + 3600000, text: 'REQUEST hops -Infinity'},
+    {rid: 'aquaponics-united-20260811-1102', hops: 1, trace: [], expires: 'not-a-date', text: 'REQUEST expires garbage'},
+    {rid: 'aquaponics-united-20260811-1103', hops: 1.5, trace: [], expires: Date.now() + 3600000, text: 'REQUEST hops float'},
+    {rid: 'aquaponics-united-20260811-1104', hops: 1, trace: [123], expires: Date.now() + 3600000, text: 'REQUEST trace no-strings'},
+    {rid: 'aquaponics-united-20260811-1105', hops: -1, trace: [], expires: Date.now() + 3600000, text: 'REQUEST hops negativo'},
   ];
   for (const bad of badEnvelopes) {
     const envLine = '[env] ' + JSON.stringify(bad) + '\n';
@@ -228,10 +230,10 @@ async function main() {
 
   // F2-06: JSON with '}' inside a string must be fully parsed
   // (full first line as JSON, not non-greedy regex).
-  const braceEnv = '[env] ' + JSON.stringify({rid: 'example-org-20260811-1106', hops: 1, trace: ['roberto'], expires: Date.now() + 3600000, meta: 'texto } con llave'}) + '\n';
+  const braceEnv = '[env] ' + JSON.stringify({rid: 'aquaponics-united-20260811-1106', hops: 1, trace: ['roberto'], expires: Date.now() + 3600000, meta: 'texto } con llave'}) + '\n';
   const braceWrap = nip17.wrapEvent(robertoSk, {publicKey: bridgePk, relay: RELAY}, '@alma ' + braceEnv + 'REQUEST F2-06 llaves en JSON');
   await pool.publish([RELAY], braceWrap);
-  if (await waitRid('example-org-20260811-1106', 10)) {
+  if (await waitRid('aquaponics-united-20260811-1106', 10)) {
     console.log('[e2e] ✅ F2-06: envelope with } inside a JSON string parsed correctly');
   } else {
     console.log('[e2e] ❌ FAIL: F2-06 envelope with } in string did not arrive');
@@ -241,7 +243,7 @@ async function main() {
   // --- Kill-switch: pause nostr -> the next DM is NOT routed ---
   const pause = (side, paused) => new Promise((resolve, reject) => {
     const body = JSON.stringify({side, paused});
-    const req = http.request({host: '127.0.0.1', port: 18099, path: '/pause', method: 'POST', headers: {'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body)}}, res => {
+    const req = http.request({host: '127.0.0.1', port: 18099, path: '/pause', method: 'POST', headers: {'Content-Type': 'application/json', 'X-Admin-Token': 'e2e-admin-token-123456', 'Content-Length': Buffer.byteLength(body)}}, res => {
       let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(JSON.parse(d)));
     });
     req.on('error', reject); req.write(body); req.end();
@@ -254,12 +256,12 @@ async function main() {
     bridge.kill(); wss.close(); process.exit(1);
   }
 
-  receivedRids.delete('example-org-20260811-9002');
-  const wrap2 = nip17.wrapEvent(robertoSk, {publicKey: bridgePk, relay: RELAY}, '@alma REQUEST example-org-20260811-9002: este NO debe llegar (nostr pausado)');
+  receivedRids.delete('aquaponics-united-20260811-9002');
+  const wrap2 = nip17.wrapEvent(robertoSk, {publicKey: bridgePk, relay: RELAY}, '@alma REQUEST aquaponics-united-20260811-9002: este NO debe llegar (nostr pausado)');
   await pool.publish([RELAY], wrap2);
   console.log('[e2e] DM published with nostr paused');
   await new Promise(r => setTimeout(r, 6000));
-  if (receivedRids.has('example-org-20260811-9002')) {
+  if (receivedRids.has('aquaponics-united-20260811-9002')) {
     console.log('[e2e] ❌ FAIL: the DM arrived with nostr paused (kill-switch broken)');
     bridge.kill(); wss.close(); process.exit(1);
   }
@@ -268,10 +270,10 @@ async function main() {
   // Resume and verify the flow comes back
   const resumeRes = await pause('nostr', false);
   console.log('[e2e] nostr resume:', JSON.stringify(resumeRes));
-  const wrap3 = nip17.wrapEvent(robertoSk, {publicKey: bridgePk, relay: RELAY}, '@alma REQUEST example-org-20260811-9003: tras reanudar — ¿llega?');
+  const wrap3 = nip17.wrapEvent(robertoSk, {publicKey: bridgePk, relay: RELAY}, '@alma REQUEST aquaponics-united-20260811-9003: tras reanudar — ¿llega?');
   await pool.publish([RELAY], wrap3);
   console.log('[e2e] DM published after resume');
-  if (await waitRid('example-org-20260811-9003', 15)) {
+  if (await waitRid('aquaponics-united-20260811-9003', 15)) {
     console.log('[e2e] ✅ ALMA received after resume:', lastReceived && lastReceived.content);
   } else {
     console.log('[e2e] ❌ FAIL: DM did not arrive after resume');
@@ -307,7 +309,14 @@ async function main() {
     process.stdout.write('[bridge2] ' + s);
     if (s.includes('[nostr] subscription since')) sinceLog = true;
     if (s.includes('duplicate gift-wrap ignored')) dupLog = true;
-    if (s.includes('[routing] roberto -> alma')) reRouted = true;
+    // Dedup check targets the ALREADY-DELIVERED gift-wraps inside the overlap
+    // (the '9999' REQUEST delivered before the restart). NOTE: the prior
+    // kill-switch test deliberately RESUMED nostr (pause false) before this
+    // restart to verify the 9003 flow, so the bridge2 re-routes the 9002
+    // wrap legitimately (pause lifted) — we must NOT flag that as a dedup
+    // failure. Only a re-routing of an already-delivered overlap wrap
+    // (e.g. 9999) is a real regression.
+    if (/\[routing\] roberto -> alma : REQUEST aquaponics-united-20260811-(?!9002)\d+/.test(s)) reRouted = true;
   });
   bridge2.stderr.on('data', d => process.stderr.write('[bridge2:err] ' + d));
   await new Promise(r => setTimeout(r, 2500));

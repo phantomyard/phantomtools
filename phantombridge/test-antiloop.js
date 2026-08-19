@@ -1,3 +1,4 @@
+process.umask(0o077);
 // Unit tests of the anti-loop (content dedup, pair rate, request_id
 // short-circuit). No relay, no XMPP.
 // Usage: node test-antiloop.js
@@ -39,7 +40,11 @@ fs.writeFileSync(path.join(TEST_DIR, 'config.json'), JSON.stringify({
 }, null, 2));
 
 process.env.PHANTOMBRIDGE_CONFIG = path.join(TEST_DIR, 'config.json');
-const {antiLoopCheck, antiLoopRollback, resolveRid, ANTILOOP, parseEnvelope, stampEnvelope, extractRid} = require('./bridge.js');
+// LOW-9: loadState() distingue ENOENT vs corrupción y aborta si el shape es
+// inesperado. Limpiamos cualquier .bridge-state.json residual de corridas
+// anteriores para que el test no dependa de un artefacto obsoleto.
+fs.rmSync(path.join(TEST_DIR, '.bridge-state.json'), {force: true});
+const {antiLoopCheck, antiLoopRollback, resolveRid, ANTILOOP, parseEnvelope, envelopeMac, stampEnvelope, extractRid} = require('./bridge.js');
 
 let passed = 0, failed = 0;
 function t(name, fn) {
@@ -60,11 +65,23 @@ function reset() {
   ANTILOOP.nextAdmissionId = 1;
 }
 
+// Signs an envelope with the bridge's own MAC key (bridgeSk) so the
+// fail-closed auth model accepts it. Mirrors stampEnvelope()'s signing but
+// preserves the caller-supplied hops/trace/expires/rid exactly. bridgeSk is
+// derived from the config nsec written by this test, so the same key signs
+// and verifies.
+function signEnvelope(env, rest) {
+  const unsigned = {...env};
+  delete unsigned.sig;
+  const sig = envelopeMac(unsigned, rest);
+  return '[env] ' + JSON.stringify({...unsigned, sig}) + '\n' + rest;
+}
+
 console.log('Anti-loop tests:');
 
 t('mensaje nuevo pasa', () => {
   reset();
-  assert.strictEqual(antiLoopCheck('roberto', 'alma', 'REQUEST example-org-20260811-0001: hola').ok, true);
+  assert.strictEqual(antiLoopCheck('roberto', 'alma', 'REQUEST aquaponics-united-20260811-0001: hola').ok, true);
 });
 
 t('identical repeated message is dropped (dedup)', () => {
@@ -92,10 +109,10 @@ t('F2-05: trivial reformatting (spaces/uppercase/punctuation) dropped by canonic
 t('F2-05: different envelope (new rid) with SAME content is dropped', () => {
   reset();
   // Real scenario: bot A publishes WITHOUT envelope (non-cooperative) -> admitted
-  assert.strictEqual(antiLoopCheck('roberto', 'alma', 'REQUEST example-org-20260811-0001: confirma la reunion').ok, true);
+  assert.strictEqual(antiLoopCheck('roberto', 'alma', 'REQUEST aquaponics-united-20260811-0001: confirma la reunion').ok, true);
   // The same bot re-publishes the SAME body with a new rid (regenerates the
   // identifier) -> the rid is metadata, not content: must fall into dedup
-  const r = antiLoopCheck('roberto', 'alma', 'REQUEST example-org-20260811-9999: confirma la reunion');
+  const r = antiLoopCheck('roberto', 'alma', 'REQUEST aquaponics-united-20260811-9999: confirma la reunion');
   assert.ok(r && r.ok === false && r.reason === 'dedup', 'expected canonical dedup (F2-05), got: ' + JSON.stringify(r));
 });
 
@@ -239,7 +256,7 @@ t('F3-01: rollback compensates the hourly mark (same admission)', () => {
 t('request_id: alternating ping-pong cut by EDGE (faster than counting)', () => {
   reset();
   ANTILOOP.pairMax = 1000; // isolate from rate
-  const rid = 'example-org-20260811-0007';
+  const rid = 'aquaponics-united-20260811-0007';
   // A->B (req), B->A (resp): edges (A,B) and (B,A) — legitimate, passes.
   assert.strictEqual(antiLoopCheck('roberto', 'alma', 'REQUEST ' + rid + ' msg 1').ok, true);
   assert.strictEqual(antiLoopCheck('alma', 'roberto', 'INFORM ' + rid + ' respuesta').ok, true);
@@ -252,7 +269,7 @@ t('request_id: alternating ping-pong cut by EDGE (faster than counting)', () => 
 t('request_id: star pattern (different edges) short-circuits by count', () => {
   reset();
   ANTILOOP.pairMax = 1000;
-  const rid = 'example-org-20260811-0008';
+  const rid = 'aquaponics-united-20260811-0008';
   // 4 different edges (A->B, A->C, A->D, B->A): all pass, count grows.
   assert.strictEqual(antiLoopCheck('roberto', 'alma', 'REQUEST ' + rid + ' 1').ok, true);
   assert.strictEqual(antiLoopCheck('roberto', 'paco', 'REQUEST ' + rid + ' 2').ok, true);
@@ -268,7 +285,7 @@ t('different request_id does not short-circuit', () => {
   reset();
   ANTILOOP.pairMax = 1000;
   for (let i = 1; i <= 10; i++) {
-    const rid = 'example-org-20260811-' + String(1000 + i);
+    const rid = 'aquaponics-united-20260811-' + String(1000 + i);
     // DIFFERENT bodies: the rid must not short-circuit on its own. If the
     // body were the same, F2-05 (canonical dedup after stripRids) would
     // correctly drop it as repeated content.
@@ -290,7 +307,7 @@ t('count short-circuit: only alerts ONCE per request_id', () => {
   ANTILOOP.pairMax = 1000;
   ANTILOOP.reqMax = 2; // lowered on purpose
   // Pattern with new edges on each message: the count is what cuts.
-  const rid = 'example-org-20260811-0009';
+  const rid = 'aquaponics-united-20260811-0009';
   const destinos = ['alma', 'paco', 'pepa'];
   let drops = 0;
   for (let i = 1; i <= 12; i++) {
@@ -304,7 +321,7 @@ t('count short-circuit: only alerts ONCE per request_id', () => {
 t('order: the repeated edge cuts BEFORE the pair rate', () => {
   reset();
   ANTILOOP.pairMax = 3;
-  const rid = 'example-org-20260811-0010';
+  const rid = 'aquaponics-united-20260811-0010';
   // 4 messages pass (2 unique edges), the 5th repeats the edge (A,B)
   // -> cycle, BEFORE rate (3) could trip.
   antiLoopCheck('roberto', 'alma', 'REQUEST ' + rid + ' a');
@@ -318,9 +335,9 @@ t('order: the repeated edge cuts BEFORE the pair rate', () => {
 // --- Protocol envelope (norma v1.3) ---
 
 t('envelope: parseEnvelope extracts JSON and rest', () => {
-  const p = parseEnvelope('[env] {"rid":"example-org-20260811-0001","hops":1,"trace":["roberto","alma"],"expires":1755000000000}\nREQUEST hola');
+  const p = parseEnvelope('[env] {"rid":"aquaponics-united-20260811-0001","hops":1,"trace":["roberto","alma"],"expires":1755000000000}\nREQUEST hola');
   assert.ok(p, 'should parse');
-  assert.strictEqual(p.env.rid, 'example-org-20260811-0001');
+  assert.strictEqual(p.env.rid, 'aquaponics-united-20260811-0001');
   assert.strictEqual(p.env.hops, 1);
   assert.deepStrictEqual(p.env.trace, ['roberto', 'alma']);
   assert.strictEqual(p.rest, 'REQUEST hola');
@@ -332,18 +349,18 @@ t('envelope: message without [env] line is not parsed', () => {
 });
 
 t('envelope: stampEnvelope creates new envelope (hops=1, trace, expires, rid)', () => {
-  const stamped = stampEnvelope('REQUEST example-org-20260811-0002: ¿puedes revisar?', 'roberto', 'alma');
+  const stamped = stampEnvelope('REQUEST aquaponics-united-20260811-0002: ¿puedes revisar?', 'roberto', 'alma');
   const p = parseEnvelope(stamped);
   assert.ok(p, 'stamp must create envelope: ' + stamped);
   assert.strictEqual(p.env.hops, 1);
   assert.deepStrictEqual(p.env.trace, ['roberto', 'alma']);
   assert.ok(p.env.expires > Date.now(), 'expires future');
-  assert.strictEqual(p.env.rid, 'example-org-20260811-0002');
-  assert.strictEqual(p.rest, 'REQUEST example-org-20260811-0002: ¿puedes revisar?');
+  assert.strictEqual(p.env.rid, 'aquaponics-united-20260811-0002');
+  assert.strictEqual(p.rest, 'REQUEST aquaponics-united-20260811-0002: ¿puedes revisar?');
 });
 
 t('envelope: stampEnvelope updates existing envelope (hops++, trace++)', () => {
-  const envText = '[env] {"rid":"example-org-20260811-0003","hops":1,"trace":["roberto","alma"],"expires":1755000000000}\nINFORM respuesta';
+  const envText = signEnvelope({rid: 'aquaponics-united-20260811-0003', hops: 1, trace: ['roberto', 'alma'], expires: 1755000000000}, 'INFORM respuesta');
   const stamped = stampEnvelope(envText, 'alma', 'roberto');
   const p = parseEnvelope(stamped);
   assert.ok(p);
@@ -355,7 +372,7 @@ t('envelope: stampEnvelope updates existing envelope (hops++, trace++)', () => {
 
 t('envelope: expired envelope is dropped', () => {
   reset();
-  const text = '[env] {"rid":"example-org-20260811-0004","hops":1,"trace":["roberto","alma"],"expires":' + (Date.now() - 1000) + '}\nREQUEST caducado';
+  const text = signEnvelope({rid: 'aquaponics-united-20260811-0004', hops: 1, trace: ['roberto', 'alma'], expires: Date.now() - 1000}, 'REQUEST caducado');
   const r = antiLoopCheck('roberto', 'alma', text);
   assert.ok(r && r.ok === false && r.reason === 'expired', 'expected expired, got: ' + JSON.stringify(r));
   assert.strictEqual(ANTILOOP.dropped.expired, 1);
@@ -363,7 +380,7 @@ t('envelope: expired envelope is dropped', () => {
 
 t('envelope: hops >= maxHops is dropped', () => {
   reset();
-  const text = '[env] {"rid":"example-org-20260811-0005","hops":3,"trace":["a","b","c"],"expires":' + (Date.now() + 3600000) + '}\nREQUEST';
+  const text = signEnvelope({rid: 'aquaponics-united-20260811-0005', hops: 3, trace: ['a', 'b', 'c'], expires: Date.now() + 3600000}, 'REQUEST');
   const r = antiLoopCheck('c', 'd', text);
   assert.ok(r && r.ok === false && r.reason === 'hops', 'expected hops, got: ' + JSON.stringify(r));
   assert.strictEqual(ANTILOOP.dropped.hops, 1);
@@ -372,13 +389,13 @@ t('envelope: hops >= maxHops is dropped', () => {
 t('envelope: creative loop (NEW rid, NEW text) cut by trace edge', () => {
   reset();
   // A->B (REQUEST rid1): stamp -> trace [roberto,alma], hops 1.
-  antiLoopCheck('roberto', 'alma', '[env] {"rid":"example-org-20260811-0101","hops":1,"trace":["roberto"],"expires":' + (Date.now() + 3600000) + '}\nREQUEST uno');
+  antiLoopCheck('roberto', 'alma', signEnvelope({rid: 'aquaponics-united-20260811-0101', hops: 1, trace: ['roberto'], expires: Date.now() + 3600000}, 'REQUEST uno'));
   // B->A (INFORM rid2 — NEW rid, NEW text): B keeps the received envelope
   // [roberto,alma] (hops 1). Edge (alma,roberto) is NOT there -> passes.
-  antiLoopCheck('alma', 'roberto', '[env] {"rid":"example-org-20260811-0102","hops":1,"trace":["roberto","alma"],"expires":' + (Date.now() + 3600000) + '}\nINFORM dos');
+  antiLoopCheck('alma', 'roberto', signEnvelope({rid: 'aquaponics-united-20260811-0102', hops: 1, trace: ['roberto', 'alma'], expires: Date.now() + 3600000}, 'INFORM dos'));
   // A->B again (NEW rid): A keeps the envelope [roberto,alma,roberto]
   // (hops 2). Edge (roberto,alma) IS already in the trace -> cycle.
-  const r = antiLoopCheck('roberto', 'alma', '[env] {"rid":"example-org-20260811-0103","hops":2,"trace":["roberto","alma","roberto"],"expires":' + (Date.now() + 3600000) + '}\nREQUEST tres');
+  const r = antiLoopCheck('roberto', 'alma', signEnvelope({rid: 'aquaponics-united-20260811-0103', hops: 2, trace: ['roberto', 'alma', 'roberto'], expires: Date.now() + 3600000}, 'REQUEST tres'));
   assert.ok(r && r.ok === false && r.reason === 'cycle', 'expected cycle, got: ' + JSON.stringify(r));
   assert.strictEqual(ANTILOOP.dropped.cycle, 1);
 });
@@ -386,17 +403,17 @@ t('envelope: creative loop (NEW rid, NEW text) cut by trace edge', () => {
 t('envelope: legitimate A->B->A reply is NOT dropped (distinct edges)', () => {
   reset();
   // REQUEST A->B: the sender envelope only carries its own origin.
-  assert.strictEqual(antiLoopCheck('roberto', 'alma', '[env] {"rid":"example-org-20260811-0201","hops":1,"trace":["roberto"],"expires":' + (Date.now() + 3600000) + '}\nREQUEST').ok, true);
+  assert.strictEqual(antiLoopCheck('roberto', 'alma', '[env] {"rid":"aquaponics-united-20260811-0201","hops":1,"trace":["roberto"],"expires":' + (Date.now() + 3600000) + '}\nREQUEST').ok, true);
   // Reply B->A: B keeps the received envelope [roberto,alma]; the
   // edge (alma,roberto) is not in the trace -> passes.
-  assert.strictEqual(antiLoopCheck('alma', 'roberto', '[env] {"rid":"example-org-20260811-0202","hops":1,"trace":["roberto","alma"],"expires":' + (Date.now() + 3600000) + '}\nINFORM').ok, true);
+  assert.strictEqual(antiLoopCheck('alma', 'roberto', '[env] {"rid":"aquaponics-united-20260811-0202","hops":1,"trace":["roberto","alma"],"expires":' + (Date.now() + 3600000) + '}\nINFORM').ok, true);
   assert.strictEqual(ANTILOOP.dropped.cycle, 0);
 });
 
 t('envelope: envelope rid feeds the short-circuit', () => {
   reset();
   ANTILOOP.pairMax = 1000;
-  const rid = 'example-org-20260811-0301';
+  const rid = 'aquaponics-united-20260811-0301';
   // Same rid inside the envelope, distinct edges (star), trace without
   // prior edges (only the origin) so the count is what cuts.
   antiLoopCheck('roberto', 'alma', '[env] {"rid":"' + rid + '","hops":1,"trace":["roberto"]}\n1');
@@ -436,7 +453,7 @@ t('F2-02: non-string trace elements rejected; missing trace -> default []', () =
 
 t('F2-06: envelope with } inside a JSON string is fully parsed', () => {
   reset();
-  const text = '[env] {"rid":"example-org-20260811-0401","hops":1,"trace":["roberto"],"expires":' + (Date.now() + 3600000) + ',"meta":"texto } con llave"}\nREQUEST llaves';
+  const text = '[env] {"rid":"aquaponics-united-20260811-0401","hops":1,"trace":["roberto"],"expires":' + (Date.now() + 3600000) + ',"meta":"texto } con llave"}\nREQUEST llaves';
   const p = parseEnvelope(text);
   assert.ok(p, 'must parse the full JSON');
   assert.strictEqual(p.env.meta, 'texto } con llave');
@@ -450,7 +467,7 @@ t('F2-06: envelope with } inside a JSON string is fully parsed', () => {
 t('F2-04: envelope rid wins; free text does NOT pollute the counter', () => {
   reset();
   ANTILOOP.pairMax = 1000;
-  const envRid = 'example-org-20260811-0501';
+  const envRid = 'aquaponics-united-20260811-0501';
   // Text mentioning another rid (room-...) but the envelope says envRid:
   // the counter must track envRid, NOT the rid in the text.
   const text = '[env] {"rid":"' + envRid + '","hops":1,"trace":["roberto"]}\nusa room-20260811-0007 por favor';
@@ -470,8 +487,8 @@ t('F2-04: without envelope, free text is used as best-effort fallback', () => {
 
 t('F2-04: extractRid does not touch the envelope rid (env.rid authoritative)', () => {
   reset();
-  const parsed = parseEnvelope('[env] {"rid":"example-org-20260811-0601","hops":1,"trace":["roberto"]}\nREQUEST');
-  assert.strictEqual(resolveRid(parsed, '[env] {"rid":"x-20260811-9999"}\nREQUEST'), 'example-org-20260811-0601', 'env.rid wins over the text');
+  const parsed = parseEnvelope('[env] {"rid":"aquaponics-united-20260811-0601","hops":1,"trace":["roberto"]}\nREQUEST');
+  assert.strictEqual(resolveRid(parsed, '[env] {"rid":"x-20260811-9999"}\nREQUEST'), 'aquaponics-united-20260811-0601', 'env.rid wins over the text');
 });
 
 // ---- F2-08: hard cap on requests map entries ----
@@ -481,13 +498,13 @@ t('F2-08: requestMax evicts the LRU entry (by last)', () => {
   ANTILOOP.pairMax = 1000;
   ANTILOOP.requestMax = 3;
   const t0 = Date.now();
-  antiLoopCheck('roberto', 'alma', '[env] {"rid":"example-org-20260811-0701","hops":1,"trace":["roberto"]}\nA');
-  antiLoopCheck('roberto', 'paco', '[env] {"rid":"example-org-20260811-0702","hops":1,"trace":["roberto"]}\nB');
-  antiLoopCheck('roberto', 'pepa', '[env] {"rid":"example-org-20260811-0703","hops":1,"trace":["roberto"]}\nC');
+  antiLoopCheck('roberto', 'alma', '[env] {"rid":"aquaponics-united-20260811-0701","hops":1,"trace":["roberto"]}\nA');
+  antiLoopCheck('roberto', 'paco', '[env] {"rid":"aquaponics-united-20260811-0702","hops":1,"trace":["roberto"]}\nB');
+  antiLoopCheck('roberto', 'pepa', '[env] {"rid":"aquaponics-united-20260811-0703","hops":1,"trace":["roberto"]}\nC');
   // Fourth distinct entry -> the map must stay at 3 (evicts the oldest).
-  antiLoopCheck('roberto', 'paco', '[env] {"rid":"example-org-20260811-0704","hops":1,"trace":["roberto"]}\nD');
+  antiLoopCheck('roberto', 'paco', '[env] {"rid":"aquaponics-united-20260811-0704","hops":1,"trace":["roberto"]}\nD');
   assert.strictEqual(ANTILOOP.requests.size, 3, 'requestMax must bound the map');
-  assert.ok(!ANTILOOP.requests.has('example-org-20260811-0701'), 'must evict the oldest entry');
+  assert.ok(!ANTILOOP.requests.has('aquaponics-united-20260811-0701'), 'must evict the oldest entry');
   void t0;
 });
 
@@ -499,7 +516,7 @@ t('F2-09: hashMax eviction increments evictedHashes', () => {
   ANTILOOP.hashMax = 5;
   const t0 = Date.now();
   for (let i = 0; i < 6; i++) {
-    antiLoopCheck('roberto', 'alma', '[env] {"rid":"example-org-20260811-080' + i + '","hops":1,"trace":["roberto"]}\nmsg ' + i);
+    antiLoopCheck('roberto', 'alma', '[env] {"rid":"aquaponics-united-20260811-080' + i + '","hops":1,"trace":["roberto"]}\nmsg ' + i);
   }
   assert.strictEqual(ANTILOOP.hashes.size, 5, 'hashMax bounds the map');
   assert.strictEqual(ANTILOOP.evictedHashes, 1, 'one eviction must be counted');
@@ -511,7 +528,7 @@ t('F2-09: hashMax eviction increments evictedHashes', () => {
 t('F2-10: antiLoopRollback compensates consumed hash, pair and rid', () => {
   reset();
   ANTILOOP.pairMax = 3;
-  const rid = 'example-org-20260811-0901';
+  const rid = 'aquaponics-united-20260811-0901';
   const text = '[env] {"rid":"' + rid + '","hops":1,"trace":["roberto"]}\nREQUEST rollback';
   const beforeHashes = ANTILOOP.hashes.size;
   const beforePairs = ANTILOOP.pairs.size;
@@ -531,7 +548,7 @@ t('F2-10: antiLoopRollback compensates consumed hash, pair and rid', () => {
 t('F2-10: after rollback, the sender retry does NOT hit a false positive', () => {
   reset();
   ANTILOOP.pairMax = 3;
-  const rid = 'example-org-20260811-0902';
+  const rid = 'aquaponics-united-20260811-0902';
   const text = '[env] {"rid":"' + rid + '","hops":1,"trace":["roberto"]}\nREQUEST reintento';
   const a1 = antiLoopCheck('roberto', 'alma', text);
   assert.strictEqual(a1.ok, true, 'attempt 1 passes');
@@ -578,7 +595,7 @@ t('F2-R02: reverse order — m2 fails first, m1 stays registered', () => {
 t('F2-R02: two concurrent admissions of the same RID (distinct edges) — rolling one back decrements ONLY its own', () => {
   reset();
   ANTILOOP.pairMax = 1000;
-  const rid = 'example-org-20260811-1101';
+  const rid = 'aquaponics-united-20260811-1101';
   const a1 = antiLoopCheck('roberto', 'alma', '[env] {"rid":"' + rid + '","hops":1,"trace":["roberto"]}\nA');
   const a2 = antiLoopCheck('alma', 'paco', '[env] {"rid":"' + rid + '","hops":1,"trace":["alma"]}\nB');
   assert.strictEqual(a1.ok && a2.ok, true, 'both admitted');
@@ -596,7 +613,7 @@ t('F2-R02: two concurrent admissions of the same RID (distinct edges) — rollin
 t('F2-R02: same RID and SAME edge — the check cuts by cycle (the Map case is defense in depth)', () => {
   reset();
   ANTILOOP.pairMax = 1000;
-  const rid = 'example-org-20260811-1102';
+  const rid = 'aquaponics-united-20260811-1102';
   // Two A->B messages with the SAME rid (different text -> dedup does not cut):
   const a1 = antiLoopCheck('roberto', 'alma', '[env] {"rid":"' + rid + '","hops":1,"trace":["roberto"]}\nX');
   assert.strictEqual(a1.ok, true, 'first admission OK');
@@ -615,12 +632,12 @@ t('F2-R02: eviction + re-creation of the same RID — the old admission rollback
   reset();
   ANTILOOP.pairMax = 1000;
   ANTILOOP.requestMax = 2;
-  const rid = 'example-org-20260811-1103';
+  const rid = 'aquaponics-united-20260811-1103';
   // Admission 1 (RID X) + filler to evict:
   const a1 = antiLoopCheck('roberto', 'alma', '[env] {"rid":"' + rid + '","hops":1,"trace":["roberto"]}\nA');
-  antiLoopCheck('roberto', 'paco', '[env] {"rid":"example-org-20260811-1199","hops":1,"trace":["roberto"]}\nB');
+  antiLoopCheck('roberto', 'paco', '[env] {"rid":"aquaponics-united-20260811-1199","hops":1,"trace":["roberto"]}\nB');
   // Third distinct entry evicts the oldest (RID X left the map):
-  antiLoopCheck('roberto', 'pepa', '[env] {"rid":"example-org-20260811-1198","hops":1,"trace":["roberto"]}\nC');
+  antiLoopCheck('roberto', 'pepa', '[env] {"rid":"aquaponics-united-20260811-1198","hops":1,"trace":["roberto"]}\nC');
   assert.ok(!ANTILOOP.requests.has(rid), 'RID X evicted');
   // The same RID reappears (new instance):
   const a2 = antiLoopCheck('roberto', 'alma', '[env] {"rid":"' + rid + '","hops":1,"trace":["roberto"]}\nD');
@@ -728,7 +745,7 @@ t('F2-R01: dedup drop (no rid) neither creates nor consumes request state', () =
 t('F2-R01: message dropped by RATE neither registers an edge nor consumes quota (no false cycle)', () => {
   reset();
   ANTILOOP.pairMax = 2;
-  const rid = 'example-org-20260811-1002';
+  const rid = 'aquaponics-united-20260811-1002';
   // Fills the A->B rate window (no rid):
   assert.strictEqual(antiLoopCheck('roberto', 'alma', 'mensaje normal 1').ok, true);
   assert.strictEqual(antiLoopCheck('roberto', 'alma', 'mensaje normal 2').ok, true);
@@ -750,7 +767,7 @@ t('F2-R01: request drops (already tripped) do NOT keep incrementing the counter'
   reset();
   ANTILOOP.pairMax = 1000;
   ANTILOOP.reqMax = 2;
-  const rid = 'example-org-20260811-1003';
+  const rid = 'aquaponics-united-20260811-1003';
   // m1, m2 admitted (count=2). m3 (new edge) -> request drop (tripped).
   assert.strictEqual(antiLoopCheck('roberto', 'alma', 'REQUEST ' + rid + ' 1').ok, true);
   assert.strictEqual(antiLoopCheck('roberto', 'paco', 'REQUEST ' + rid + ' 2').ok, true);
@@ -762,4 +779,5 @@ t('F2-R01: request drops (already tripped) do NOT keep incrementing the counter'
 });
 
 console.log('\nResult:', passed, 'ok,', failed, 'fail');
+fs.rmSync(TEST_DIR, {recursive: true, force: true});
 process.exit(failed ? 1 : 0);

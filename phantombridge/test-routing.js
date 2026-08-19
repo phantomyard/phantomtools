@@ -1,3 +1,4 @@
+process.umask(0o077);
 // Tests unitarios del routing DM↔DM (modo nostr) — sin relay, sin XMPP.
 // Uso: node test-routing.js
 const assert = require('assert');
@@ -50,9 +51,9 @@ const PERMS = {
 
 console.log('parseRouteTarget:');
 t('"@alma texto" -> {to: alma, text: texto}', () => {
-  const r = parseRouteTarget('@alma REQUEST example-org-20260811-0003');
+  const r = parseRouteTarget('@alma REQUEST aquaponics-united-20260811-0003');
   assert.strictEqual(r.to, 'alma');
-  assert.strictEqual(r.text, 'REQUEST example-org-20260811-0003');
+  assert.strictEqual(r.text, 'REQUEST aquaponics-united-20260811-0003');
 });
 t('"@pepa hola" -> to pepa', () => {
   const r = parseRouteTarget('@pepa hola mundo');
