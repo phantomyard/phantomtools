@@ -4,7 +4,7 @@
   "description": "Optional Jitsi↔Nostr and Nostr↔Nostr bridge for phantombot. Hardened for fail-closed org routing, authenticated local control, private secrets, and untrusted room relaying.",
   "main": "bridge.js",
   "scripts": {
-    "test": "node test-audit-hardening.js && node test-routing.js && node test-org-routing.js && node test-pause.js && node test-pause-persist.js && node test-antiloop.js && node test-giftwrap-adversarial.js && node test-giftwrap-fix.js && node test-backpressure-recovery.js"
+    "test": "node test-audit-hardening.js && node test-routing.js && node test-org-routing.js && node test-pause.js && node test-pause-persist.js && node test-antiloop.js && node test-secrets.js && node test-giftwrap-adversarial.js && node test-giftwrap-fix.js && node test-backpressure-recovery.js"
   },
   "keywords": [
     "nostr",

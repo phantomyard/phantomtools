@@ -35,14 +35,20 @@ const NSEC = nip19.nsecEncode(generateSecretKey());
 // pueda clasificarla como untrusted/relay_npubs. readSecret la exige en
 // JITSI_MODE, así que los probes de jitsi deben inyectarla.
 const RELAY_NSEC = nip19.nsecEncode(generateSecretKey());
+// Secrets are REFERENCES (env:VAR) — never plaintext values in config.json.
+// The bridge resolves them at require() time; subprocess probes inherit these.
+process.env.PHANTOMBRIDGE_TEST_NSEC = NSEC;
+process.env.PHANTOMBRIDGE_TEST_RELAY_NSEC = RELAY_NSEC;
+process.env.PHANTOMBRIDGE_TEST_XMPP_PASSWORD = 'x';
+process.env.PHANTOMBRIDGE_TEST_ADMIN_TOKEN = 'test-admin-token-123456';
 
 function writeCfg(stateFile, pauseFile, mode) {
   const cfg = {
-    mode: mode || 'nostr', nick: 't', httpPort: 18099, httpAdminToken: 'test-admin-token-123456',
+    mode: mode || 'nostr', nick: 't', httpPort: 18099, httpAdminToken: 'env:PHANTOMBRIDGE_TEST_ADMIN_TOKEN',
     // Modo jitsi exige CONFIG.xmpp para inicializar (LOW-10); aportar un
     // valor mínimo dummy para que el require del cliente XMPP no crashee.
-    xmpp: {service: 'xmpps://127.0.0.1:5223', domain: 'auth.test', username: 'bridge', password: 'x', focus: 'focus.test'},
-    nostr: {relay: RELAY, nsec: NSEC, relayNsec: RELAY_NSEC},
+    xmpp: {service: 'xmpps://127.0.0.1:5223', domain: 'auth.test', username: 'bridge', password: 'env:PHANTOMBRIDGE_TEST_XMPP_PASSWORD', focus: 'focus.test'},
+    nostr: {relay: RELAY, nsec: 'env:PHANTOMBRIDGE_TEST_NSEC', relayNsec: 'env:PHANTOMBRIDGE_TEST_RELAY_NSEC'},
     agents: {a: 'pk1', b: 'pk2'},
     routing: {permissions: {a: ['b']}, default: 'deny'},
     stateFile, pauseFile

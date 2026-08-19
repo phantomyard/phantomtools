@@ -9,13 +9,14 @@ const path = require('path');
 // con nsec real para que nip19.decode no falle (modo nostr, sin XMPP).
 const {generateSecretKey, getPublicKey, nip19} = require('nostr-tools');
 const TEST_NSEC = nip19.nsecEncode(generateSecretKey());
+process.env.PHANTOMBRIDGE_TEST_NSEC = TEST_NSEC;
 const TEST_DIR = path.join(__dirname, '.test-tmp');
 fs.mkdirSync(TEST_DIR, {recursive: true});
 fs.writeFileSync(path.join(TEST_DIR, 'config.json'), JSON.stringify({
   mode: 'nostr',
   nick: 'secretario',
   httpPort: 18090,
-  nostr: {relay: 'ws://127.0.0.1:19999', nsec: TEST_NSEC},
+  nostr: {relay: 'ws://127.0.0.1:19999', nsec: 'env:PHANTOMBRIDGE_TEST_NSEC'},
   agents: {
     roberto: getPublicKey(generateSecretKey()),
     alma: getPublicKey(generateSecretKey()),

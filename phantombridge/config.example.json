@@ -1,5 +1,5 @@
 {
-  "_comment": "Copia este archivo a config.json y rellena los valores. config.json NO se versiona.",
+  "_comment": "Copy this to config.json and fill it in. config.json is NOT versioned. Secrets are REFERENCES, never values: \"vault:NAME\" (resolved at startup via `phantombot vault get NAME`) or \"env:VAR\" (operator-injected environment). Store them once with `phantombot vault set NAME value`.",
   "mode": "both",
   "paused": {
     "jitsi": false,
@@ -30,12 +30,12 @@
     "domain": "auth.meet.example.com",
     "username": "bridge",
     "focus": "focus.meet.example.com",
-    "passwordFile": "./secrets/xmpp.password"
+    "password": "vault:bridge-xmpp-password"
   },
   "nostr": {
     "relay": "ws://relay.example.com:7777",
-    "nsecFile": "./secrets/bridge.nsec",
-    "relayNsecFile": "./secrets/jitsi-relay.nsec"
+    "nsec": "vault:bridge-nsec",
+    "relayNsec": "vault:bridge-relay-nsec"
   },
   "agents": {
     "pepa": "HEX_PUBKEY_64",
@@ -80,5 +80,5 @@
     "mia": 20
   },
   "orgFile": "./org.yaml",
-  "httpAdminTokenFile": "./secrets/http-admin.token"
+  "httpAdminToken": "vault:bridge-admin-token"
 }

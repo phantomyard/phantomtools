@@ -25,6 +25,7 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
+const {execFileSync} = require('child_process');
 const {nip19, finalizeEvent, generateSecretKey, getPublicKey, getEventHash, verifyEvent} = require('nostr-tools');
 const nip44 = require('nostr-tools/nip44');
 const {makeAuthEvent} = require('nostr-tools/nip42');
@@ -44,18 +45,52 @@ function assertPrivateFile(file, label) {
 assertPrivateFile(CONFIG_PATH, 'PhantomBridge config');
 const CONFIG = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 
-function readSecret(configSection, inlineKey, fileKey, label) {
-  const section = configSection || {};
-  if (section[fileKey]) {
-    const file = path.resolve(path.dirname(CONFIG_PATH), section[fileKey]);
-    assertPrivateFile(file, label + ' secret file');
-    const value = fs.readFileSync(file, 'utf8').trim();
-    if (!value) throw new Error(label + ' secret file is empty: ' + file);
+// ---------------------------------------------------------------------------
+// Secret resolution (CONTRIBUTING.md §4.6). A secret is configured as a
+// REFERENCE, never as a plaintext value or a tool-owned plaintext file:
+//   "vault:NAME" -> resolved at startup via `phantombot vault get NAME`
+//                   (the persona's AES-256-GCM vault; fail-closed on error).
+//   "env:VAR"    -> resolved from the operator-injected environment variable.
+// Any other non-empty string is a plaintext inline secret and is REJECTED.
+// Legacy tool-owned plaintext file keys (*File) are REJECTED with a migration
+// hint. The bridge owns no plaintext secret store.
+// ---------------------------------------------------------------------------
+function resolveSecretRef(ref, label) {
+  if (typeof ref !== 'string' || !ref.trim()) {
+    throw new Error(label + ': missing secret reference (use "vault:NAME" or "env:VAR")');
+  }
+  const r = ref.trim();
+  if (r.startsWith('vault:')) {
+    const name = r.slice('vault:'.length).trim();
+    if (!name) throw new Error(label + ': empty vault reference');
+    let out;
+    try {
+      out = execFileSync('phantombot', ['vault', 'get', name], {encoding: 'utf8'});
+    } catch (e) {
+      throw new Error(label + ': cannot resolve vault:' + name + ' (phantombot vault get failed)');
+    }
+    const value = (out || '').trim();
+    if (!value) throw new Error(label + ': vault:' + name + ' resolved to an empty value');
     return value;
   }
-  const value = section[inlineKey];
-  if (typeof value === 'string' && value.trim()) return value.trim();
-  return null;
+  if (r.startsWith('env:')) {
+    const varName = r.slice('env:'.length).trim();
+    if (!varName) throw new Error(label + ': empty env reference');
+    const value = process.env[varName];
+    if (!value || !value.trim()) throw new Error(label + ': env:' + varName + ' is not set');
+    return value.trim();
+  }
+  throw new Error(label + ': plaintext secret not allowed — use "vault:NAME" (phantombot vault) or "env:VAR" (operator-injected environment), never a plaintext value');
+}
+
+function readSecret(configSection, inlineKey, fileKey, label) {
+  const section = configSection || {};
+  if (section[fileKey] !== undefined && section[fileKey] !== null) {
+    throw new Error(label + ': ' + fileKey + ' (tool-owned plaintext secret file) is no longer supported — use "' + inlineKey + '": "vault:NAME" (phantombot vault) or "env:VAR" (operator-injected environment)');
+  }
+  const ref = section[inlineKey];
+  if (ref === undefined || ref === null) return null;
+  return resolveSecretRef(ref, label);
 }
 
 const MODE = (CONFIG.mode || 'jitsi').toLowerCase();
@@ -1894,7 +1929,7 @@ function antiLoopRollback(admission) {
 // Nostr — common layer (publishDM, subscribe, handling)
 // ---------------------------------------------------------------------------
 const bridgeNsec = readSecret(CONFIG.nostr, 'nsec', 'nsecFile', 'Nostr bridge');
-if (!bridgeNsec) throw new Error('Missing nostr.nsec or nostr.nsecFile');
+if (!bridgeNsec) throw new Error('Missing nostr.nsec (use "vault:NAME" or "env:VAR")');
 const {data: bridgeSk} = nip19.decode(bridgeNsec);
 const bridgePk = getPublicKey(bridgeSk);
 
@@ -1903,7 +1938,7 @@ if (JITSI_MODE) {
   const relayNsec = readSecret(CONFIG.nostr, 'relayNsec', 'relayNsecFile', 'Jitsi relay');
   if (!relayNsec) {
     throw new Error(
-      'Jitsi room relaying requires a separate nostr.relayNsecFile (or relayNsec) identity. ' +
+      'Jitsi room relaying requires a separate relayNsec identity ("vault:NAME" or "env:VAR"). ' +
       'Room attendee content must never be signed by the trusted bridge principal.'
     );
   }
@@ -2953,18 +2988,17 @@ async function persistRoomTimeout(room, timeout) {
 // /recordings...) also require auth: localhost is not an authorization
 // boundary on a shared host.
 //
-// The token is taken from CONFIG.httpAdminTokenFile, CONFIG.httpAdminToken or
-// PHANTOMBRIDGE_ADMIN_TOKEN. If the operator does not configure it, a RANDOM
-// one is generated at runtime (fail-closed) and
-// logged ONCE at startup so the operator can retrieve it. We never leave an
-// admin endpoint open without a credential.
+// The token is resolved from CONFIG.httpAdminToken as a secret reference
+// ("vault:NAME" via `phantombot vault get`, or "env:VAR"), or from the
+// operator-injected PHANTOMBRIDGE_ADMIN_TOKEN environment variable. If the
+// operator does not configure it, a RANDOM one is generated at runtime
+// (fail-closed) and logged ONCE at startup so the operator can retrieve it.
+// We never leave an admin endpoint open without a credential.
 let ADMIN_TOKEN;
 if (CONFIG.httpAdminTokenFile) {
-  const tokenFile = path.resolve(path.dirname(CONFIG_PATH), CONFIG.httpAdminTokenFile);
-  assertPrivateFile(tokenFile, 'HTTP admin token');
-  ADMIN_TOKEN = fs.readFileSync(tokenFile, 'utf8').trim();
-} else if (CONFIG.httpAdminToken && typeof CONFIG.httpAdminToken === 'string') {
-  ADMIN_TOKEN = CONFIG.httpAdminToken.trim();
+  throw new Error('HTTP admin token: httpAdminTokenFile (tool-owned plaintext file) is no longer supported — use httpAdminToken: "vault:NAME" (phantombot vault) or "env:VAR", or PHANTOMBRIDGE_ADMIN_TOKEN');
+} else if (CONFIG.httpAdminToken) {
+  ADMIN_TOKEN = resolveSecretRef(CONFIG.httpAdminToken, 'HTTP admin token');
 } else if (process.env.PHANTOMBRIDGE_ADMIN_TOKEN) {
   ADMIN_TOKEN = process.env.PHANTOMBRIDGE_ADMIN_TOKEN.trim();
 } else {
@@ -3234,7 +3268,7 @@ const server = http.createServer((req, res) => {
 if (require.main === module) {
   console.log('[bridge] starting in mode ' + MODE + '...');
   if (!CONFIG.nostr || !CONFIG.nostr.relay || !readSecret(CONFIG.nostr, 'nsec', 'nsecFile', 'Nostr bridge')) {
-    console.error('[bridge] incomplete config: missing nostr.relay / nostr.nsec');
+    console.error('[bridge] incomplete config: missing nostr.relay / nostr.nsec (use "vault:NAME" or "env:VAR")');
     process.exit(1);
   }
   if (JITSI_MODE && (!CONFIG.xmpp || !readSecret(CONFIG.xmpp, 'password', 'passwordFile', 'XMPP'))) {
@@ -3243,7 +3277,7 @@ if (require.main === module) {
   }
 
   if (!CONFIG.httpAdminToken && !CONFIG.httpAdminTokenFile && !process.env.PHANTOMBRIDGE_ADMIN_TOKEN) {
-    console.error('[http] refusing to start: configure httpAdminTokenFile/httpAdminToken or PHANTOMBRIDGE_ADMIN_TOKEN');
+    console.error('[http] refusing to start: configure httpAdminToken ("vault:NAME"/"env:VAR") or PHANTOMBRIDGE_ADMIN_TOKEN');
     process.exit(1);
   }
   server.listen(CONFIG.httpPort || 8090, '127.0.0.1', () => {

@@ -11,11 +11,13 @@ const {parseOrgYaml, deriveAgents} = require('./org-routing.js');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'phantombridge-hardening-'));
 const cfgPath = path.join(dir, 'config.json');
 const bridgeNsec = nip19.nsecEncode(generateSecretKey());
+process.env.PHANTOMBRIDGE_TEST_NSEC = bridgeNsec;
+process.env.PHANTOMBRIDGE_TEST_ADMIN_TOKEN = 'test-admin-token-123456';
 const cfg = {
   mode: 'nostr',
   httpPort: 0,
-  httpAdminToken: 'test-admin-token-123456',
-  nostr: {relay: 'ws://127.0.0.1:19997', nsec: bridgeNsec},
+  httpAdminToken: 'env:PHANTOMBRIDGE_TEST_ADMIN_TOKEN',
+  nostr: {relay: 'ws://127.0.0.1:19997', nsec: 'env:PHANTOMBRIDGE_TEST_NSEC'},
   agents: {alice: getPublicKey(generateSecretKey())},
   permissions: null,
   routing: {permissions: {}, default: 'deny'},
@@ -86,7 +88,7 @@ function request(port, pathName, headers = {}) {
   });
 
   await t('Jitsi room relaying uses a separate relay identity', () => {
-    assert.ok(source.includes('nostr.relayNsecFile'));
+    assert.ok(source.includes('relayNsec'));
     assert.ok(source.includes('publishDMWithKey(relaySk'));
     assert.ok(source.includes('phantombridge-relay:v1'));
   });

@@ -89,17 +89,25 @@ esac
 # --- config seed (optional) ----------------------------- #
 # Create config.json from the example on first install so the bridge can boot
 # after the operator fills in XMPP/Nostr credentials. Never overwrite.
+# Secrets are REFERENCES (vault:NAME / env:VAR), never values: the bridge
+# owns no plaintext secret files. Store each secret once with
+#   phantombot vault set bridge-nsec <nsec>   (and bridge-relay-nsec,
+#                                              bridge-xmpp-password,
+#                                              bridge-admin-token)
 if [[ ! -e "$here/config.json" && -e "$here/config.example.json" ]]; then
     cp "$here/config.example.json" "$here/config.json"
     chmod 600 "$here/config.json"
-    mkdir -p "$here/secrets"
-    chmod 700 "$here/secrets"
-    echo "created $here/config.json (0600) — populate the 0600 secret files under $here/secrets/"
+    echo "created $here/config.json (0600) — secrets are vault:/env: references (no secret files)"
 fi
 
 echo
 echo "next steps:"
-echo "  - keep config.json mode 0600 and create 0600 secret files for XMPP/Nostr/admin credentials"
+echo "  - store each secret once in the phantombot vault:"
+echo "      phantombot vault set bridge-nsec <nsec>"
+echo "      phantombot vault set bridge-relay-nsec <nsec>"
+echo "      phantombot vault set bridge-xmpp-password <password>"
+echo "      phantombot vault set bridge-admin-token <token>"
+echo "    (or inject them as env vars and use \"env:VAR\" references in config.json)"
 echo "  - if you use an org.yaml (norma v1.6), place it next to config.json — the bridge derives agents + DM routing from it"
 echo "  - smoke test:  phantombridge --version"
 echo "  - run the bridge in the foreground:  phantombridge  (or under systemd / your supervisor)"

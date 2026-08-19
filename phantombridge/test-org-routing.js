@@ -227,11 +227,12 @@ function getJson(port, p, token) {
 }
 
 const CFG = path.join(TEST_DIR, 'config-org.json');
+process.env.PHANTOMBRIDGE_TEST_NSEC = nip19.nsecEncode(generateSecretKey());
 fs.writeFileSync(CFG, JSON.stringify({
   mode: 'nostr',
   nick: 'secretario',
   httpPort: 0, // listen(0) lo asigna el test
-  nostr: {relay: 'ws://127.0.0.1:19999', nsec: nip19.nsecEncode(generateSecretKey())},
+  nostr: {relay: 'ws://127.0.0.1:19999', nsec: 'env:PHANTOMBRIDGE_TEST_NSEC'},
   orgFile: ORG_FILE,
   // routing manual presente PERO debe ser ignorado (org.yaml manda)
   agents: {extra: getPublicKey(generateSecretKey())},

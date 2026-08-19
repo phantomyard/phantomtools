@@ -34,7 +34,8 @@ versioned: the `config.json.bak` files contain secrets).
   `leave [room]`, `[room] text` (injects the message into the room),
   `recordings`.
 - **Jitsi → Nostr room relay is untrusted by design.** Room-attendee text is
-  published with a separate `nostr.relayNsecFile` identity and a structured
+  published with a separate relay identity (`nostr.relayNsec`, a
+  `vault:`/`env:` reference — never the bridge principal) and a structured
   `[phantombridge-relay:v1]` payload. The receiving phantombot must classify that
   npub as a relay/untrusted sender (`relay_npubs`) so the threat judge screens
   the content. The bridge refuses to start Jitsi mode without that separate
@@ -90,11 +91,12 @@ PATH; `git` is needed the first time (the script clones the repo).
 npm install          # installs dependencies (see package.json)
 ./install.sh         # symlinks bin/phantombridge into ~/.local/bin
 cp config.example.json config.json
-# create the secret files referenced by config.example.json, all mode 0600:
-#   secrets/bridge.nsec
-#   secrets/jitsi-relay.nsec
-#   secrets/xmpp.password
-#   secrets/http-admin.token
+# Secrets are REFERENCES (vault:NAME / env:VAR), never plaintext values:
+# store each once in the phantombot vault —
+#   phantombot vault set bridge-nsec <nsec>
+#   phantombot vault set bridge-relay-nsec <nsec>
+#   phantombot vault set bridge-xmpp-password <password>
+#   phantombot vault set bridge-admin-token <token>
 phantombridge        # run (or: phantombridge /path/to/config.json)
 ```
 
@@ -369,8 +371,11 @@ Telemetry in `GET /status`:
 ## Configuration
 
 See `config.example.json` (with placeholders). The real `config.json` is
-**not versioned** (.gitignore). The nsec/passwords go only in each
-deployment's `config.json`.
+**not versioned** (.gitignore) and carries **no secrets**: each secret is a
+`vault:NAME` or `env:VAR` reference resolved at startup via `phantombot vault
+get NAME` or the operator's environment (see `docs/SPEC.md` §9 and
+CONTRIBUTING.md §4.6). Plaintext values and legacy `*File` keys are rejected
+(fail-closed).
 
 ### Recovery watermark step (`recoveryWatermarkStepSecs`)
 
