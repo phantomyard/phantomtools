@@ -565,6 +565,86 @@ def test_write_allows_role_owner(tmp_path):
     assert "versioned" in r.output
 
 
+def test_versioning_preserves_existing_category(tmp_path):
+    """Versioning a node must not let an under-cleared owner declassify it.
+
+    elena creates a category-3 node owned by role `cfo`. roberto holds `cfo`
+    (so he is an owner) but only has clearance [1,2]. He must not be able to
+    reclassify the node to category-1 by passing a lower `--category` — and
+    the honest versioning path (no `--category`) is denied too, because he
+    cannot read category-3.
+    """
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+
+    doc = tmp_path / "board.md"
+    doc.write_text("sensitive", encoding="utf-8")
+    r = _run(
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "board.md",
+            "--category",
+            "3",
+            "--owners",
+            "cfo",
+            "--org-yaml",
+            org,
+            "--root",
+            root,
+        ],
+        actor="elena",
+    )
+    assert r.exit_code == 0, r.output
+
+    # Attempted downgrade: version with a lower --category is refused.
+    doc.write_text("rewritten", encoding="utf-8")
+    r = _run(
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "board.md",
+            "--category",
+            "1",
+            "--org-yaml",
+            org,
+            "--root",
+            root,
+        ],
+        actor="roberto",
+    )
+    assert r.exit_code != 0
+    assert "cannot reclassify" in r.output
+
+    # Honest versioning path is denied too (roberto cannot read category-3).
+    r = _run(
+        ["add", str(doc), "--slug", "board.md", "--org-yaml", org, "--root", root],
+        actor="roberto",
+    )
+    assert r.exit_code != 0
+    assert "denied" in r.output
+
+    # The node is still category-3 and there is exactly one version.
+    data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    docs = [n for n in data["nodes"] if n.get("kind") == "doc"]
+    assert len(docs) == 1
+    assert docs[0]["category"] == 3
+
+    # elena (the legitimate owner with category-3 clearance) still can version.
+    r = _run(
+        ["add", str(doc), "--slug", "board.md", "--org-yaml", org, "--root", root],
+        actor="elena",
+    )
+    assert r.exit_code == 0, r.output
+    assert "versioned" in r.output
+    data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    docs = [n for n in data["nodes"] if n.get("kind") == "doc"]
+    assert all(n["category"] == 3 for n in docs)
+
+
 def test_read_denies_unknown_os_account(tmp_path):
     """An OS account that is not an actor in the org model is refused."""
     root = str(tmp_path)

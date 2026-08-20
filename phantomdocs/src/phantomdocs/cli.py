@@ -226,9 +226,9 @@ def mkdir(name, parent, category, owners, org_yaml, root):
 @click.option(
     "--category",
     type=int,
-    default=1,
-    show_default=True,
-    help="Security category (PhantomOrg security_categories).",
+    default=None,
+    help="Security category (PhantomOrg security_categories). Defaults to 1 "
+    "for new nodes; versioning an existing node preserves its category.",
 )
 @click.option("--folder", default=None, help="Parent folder (logical path or slug).")
 @click.option("--owners", multiple=True, help="PhantomOrg role ids allowed to write.")
@@ -275,14 +275,30 @@ def add(path, slug, category, folder, owners, org_yaml, backend, root):
             return
         previous = existing["mac"] if existing is not None else None
 
+        # Category: a new node uses --category (default 1); versioning an
+        # existing node always preserves the existing node's category. A
+        # reclassification must be a separate, explicitly-authorized operation,
+        # never a side effect of `add` — otherwise an under-cleared owner could
+        # downgrade a document by passing a lower --category.
+        if existing is not None:
+            effective_category = existing["category"]
+            if category is not None and category != effective_category:
+                raise click.ClickException(
+                    f"denied: cannot reclassify {urn} from "
+                    f"category-{effective_category} to category-{category} via add "
+                    "(reclassification is a separate operation)"
+                )
+        else:
+            effective_category = 1 if category is None else category
+
         # Write ACL: base category access; when versioning an existing node,
         # the actor must be one of its declared owners.
         effective_owners = (
             list(existing.get("owners", []) or []) if existing else list(owners)
         )
-        if not can_write(org, actor_id, category, effective_owners):
+        if not can_write(org, actor_id, effective_category, effective_owners):
             raise click.ClickException(
-                f"denied: {actor_id} cannot write category-{category} "
+                f"denied: {actor_id} cannot write category-{effective_category} "
                 f"{'(owner required)' if effective_owners else ''}"
             )
 
@@ -296,7 +312,7 @@ def add(path, slug, category, folder, owners, org_yaml, backend, root):
                 "parentMac": parent_mac,
                 "kind": "doc",
                 "slug": slug,
-                "category": category,
+                "category": effective_category,
                 "contentHash": ch,
                 "size": len(content),
                 "owners": (
