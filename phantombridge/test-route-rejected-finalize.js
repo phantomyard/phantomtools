@@ -132,7 +132,7 @@ t('control: ruteo con permiso NO dispara rejected', async () => {
 });
 
 _chain.then(() => {
-  // cleanup — debe correr DESPUÉS de los casos, no antes
+  // cleanup — must run AFTER the cases, not before
   _setBridgeStateForTest(freshLedger());
   try { fs.rmSync(tmpDir, {recursive: true, force: true}); } catch (_) {}
   delete process.env.PHANTOMBRIDGE_CONFIG;

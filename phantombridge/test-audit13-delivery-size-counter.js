@@ -181,7 +181,7 @@ t('caminos calientes usan contador (sin Object.keys delivery repetido)', () => {
 });
 
 _chain.then(() => {
-  // cleanup — debe correr DESPUÉS de los casos, no antes
+  // cleanup — must run AFTER the cases, not before
   _setBridgeStateForTest(freshState());
   try { fs.rmSync(tmpDir, {recursive: true, force: true}); } catch (_) {}
   delete process.env.PHANTOMBRIDGE_CONFIG;
