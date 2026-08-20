@@ -449,16 +449,20 @@ instead of the bridge's `joinRoom is not defined`.
 then verify with `phantombot mcp status bridge`. This writes the entry to the
 persona's `mcp.json` via the native CLI flow.
 
-### Standalone smoke test
+### Standalone verification
 
 ```bash
 node mcp-bridge.mjs                    # start the stdio server
-node mcp-smoke-client.mjs mcp-bridge.mjs bridge_status
-node mcp-smoke-client.mjs mcp-bridge.mjs bridge_pause '{"side":"nostr","paused":true}'
 ```
 
-`mcp-smoke-client.mjs` is a minimal stdio MCP client used to validate the
-wrapper end-to-end against a running bridge (or a stub).
+The admin-token resolution seam (vault:/env: references resolving to the same
+value the bridge uses) is covered by `test-mcp-auth.js`. End-to-end integration
+is verified with phantombot's built-in MCP tools:
+
+```bash
+phantombot mcp add bridge --stdio --command node --args /abs/path/mcp-bridge.mjs
+phantombot mcp status bridge
+```
 
 Requires the extra dependency `@modelcontextprotocol/sdk` (added to
 `package.json`).
@@ -589,8 +593,9 @@ Test: `node test-org-routing.js` (15 tests: unit + bridge integration).
   `@modelcontextprotocol/sdk` (same SDK phantombot uses). Exposes 4 tools:
   `bridge_status`, `bridge_pause`, `bridge_join`, `bridge_leave`. Reads
   `httpPort` from `config.json`; authenticates the local API with the admin token; logs to stderr (clean MCP wire).
-  New dependency: `@modelcontextprotocol/sdk`. Test client:
-  `mcp-smoke-client.mjs` (validated end-to-end against a running bridge stub).
+  New dependency: `@modelcontextprotocol/sdk`. Admin-token resolution is
+  shared with the bridge via `secrets.js` (same vault:/env: reference
+  semantics), verified by `test-mcp-auth.js`.
 
 - **v1.6.0** — org.yaml as source of truth (norma v1.6). New
   `org-routing.js` module: derives agents (npub→hex) and DM↔DM routing

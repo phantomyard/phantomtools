@@ -33,6 +33,7 @@ jobs:
         run: |
           node --check bridge.js
           node --check org-routing.js
+          node --check secrets.js
           node --check mcp-bridge.mjs
           for f in test-*.js; do node --check "$f"; done
 

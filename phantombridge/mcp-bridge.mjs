@@ -34,17 +34,24 @@
  *   - Register: phantombot mcp add bridge --stdio --command node
  *       --args /path/to/mcp-bridge.mjs
  *
- * Smoke (needs a running bridge or stub):
- *   node mcp-smoke-client.mjs mcp-bridge.mjs tools/list
- *   node mcp-smoke-client.mjs mcp-bridge.mjs bridge_status
+ * Register: phantombot mcp add bridge --stdio --command node
+ *       --args /path/to/mcp-bridge.mjs
+ *
+ * Testing: the admin-token resolution seam is covered by test-mcp-auth.js
+ * (unit + MCP-to-HTTP round trip using both vault: and env: reference types).
+ * End-to-end integration is verified with phantombot's built-in MCP tools.
  */
 
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+
+const require = createRequire(import.meta.url);
+const { resolveSecretRef } = require("./secrets.js");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -71,19 +78,20 @@ function bridgeBase(cfg) {
 }
 
 async function loadAdminToken(cfg) {
-  const configPath = cfg._configPath;
-  if (cfg.httpAdminTokenFile && configPath) {
-    const file = path.resolve(path.dirname(configPath), cfg.httpAdminTokenFile);
-    const st = await stat(file);
-    if (!st.isFile() || (st.mode & 0o077) !== 0) throw new Error(`admin token file must be a private regular file: ${file}`);
-    const token = (await readFile(file, "utf8")).trim();
-    if (token.length < 16) throw new Error("admin token is too short");
-    return token;
+  // Mirror the bridge's own resolution (bridge.js): the admin token is a
+  // secret REFERENCE. Reject the legacy tool-owned plaintext file key, resolve
+  // vault:/env: through the SAME resolver the bridge uses (secrets.js), and
+  // fall back to the operator-injected PHANTOMBRIDGE_ADMIN_TOKEN. Never send
+  // a literal "vault:NAME"/"env:VAR" string as the bearer token.
+  if (cfg.httpAdminTokenFile !== undefined && cfg.httpAdminTokenFile !== null) {
+    throw new Error('HTTP admin token: httpAdminTokenFile (tool-owned plaintext file) is no longer supported — use httpAdminToken: "vault:NAME" (phantombot vault) or "env:VAR", or PHANTOMBRIDGE_ADMIN_TOKEN');
+  }
+  if (typeof cfg.httpAdminToken === 'string' && cfg.httpAdminToken.trim()) {
+    return resolveSecretRef(cfg.httpAdminToken, 'HTTP admin token');
   }
   const env = process.env.PHANTOMBRIDGE_ADMIN_TOKEN?.trim();
   if (env) return env;
-  if (typeof cfg.httpAdminToken === "string" && cfg.httpAdminToken.trim()) return cfg.httpAdminToken.trim();
-  throw new Error("PhantomBridge admin token is not configured");
+  throw new Error('PhantomBridge admin token is not configured (use httpAdminToken: "vault:NAME" or "env:VAR", or PHANTOMBRIDGE_ADMIN_TOKEN)');
 }
 
 /** Authenticated HTTP helper for the local bridge API. */
@@ -246,7 +254,16 @@ async function main() {
   process.stderr.write("[mcp-bridge] PhantomBridge MCP stdio server ready (line-aware)\n");
 }
 
-main().catch((err) => {
-  process.stderr.write(`[mcp-bridge] fatal: ${err && err.stack ? err.stack : err}\n`);
-  process.exit(1);
-});
+// Only connect the stdio transport when run directly (`node mcp-bridge.mjs`),
+// so tests can import loadAdminToken without spawning a server.
+const isMain = process.argv[1] &&
+  pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+
+if (isMain) {
+  main().catch((err) => {
+    process.stderr.write(`[mcp-bridge] fatal: ${err && err.stack ? err.stack : err}\n`);
+    process.exit(1);
+  });
+}
+
+export { loadAdminToken, resolveSecretRef };
