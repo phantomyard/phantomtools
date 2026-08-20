@@ -1,0 +1,179 @@
+version: 1
+
+organization:
+  id: verdant-aquaponics
+  name: "Verdant Aquaponics Co-op"
+  sector: ngo
+  languages: [es, en]
+  default_language: es
+
+departments:
+  - { id: direccion,   name: "Dirección",   parent: null,      access_policy: level-3 }
+  - { id: operaciones, name: "Operaciones", parent: direccion, access_policy: level-2 }
+  - { id: formacion,   name: "Formación",   parent: direccion, access_policy: level-2 }
+  - { id: finanzas,    name: "Finanzas",    parent: direccion, access_policy: level-2 }
+
+roles:
+  - id: ceo
+    name: "CEO"
+    department: direccion
+    reports_to: null
+    reports_to_human: "Board President"
+    functions: [vision, liderazgo, wikipedia_au, tools]
+    access_level: level-3
+    security_exceptions: []
+    description: "Dirección general, estrategia, decisiones que afectan a toda la organización, relaciones con la presidencia (Board President). Contactar ante dudas sobre prioridades, conflictos entre departamentos, autorización de nuevas líneas de trabajo o cualquier cosa que nadie más pueda decidir."
+
+  - id: chief_of_staff
+    name: "Chief of Staff"
+    department: direccion
+    reports_to: ceo
+    functions: [coordinacion, escalado, seguimiento]
+    access_level: level-2
+    security_exceptions: []
+    description: "Coordinación de proyectos, comunicación, educación, alianzas, volunteers. Supervisa a Nora, Vera, Elias, Leda y Volunteers. Contactar ante problemas operativos en un departamento gestionado, necesidad de coordinación entre equipos o escalado de un issue."
+
+  - id: cfo
+    name: "CFO"
+    department: finanzas
+    reports_to: ceo
+    functions: [finanzas, reporting]
+    access_level: level-2
+    security_exceptions: []
+    description: "Presupuestos, facturación, tesorería, cash flow, informes financieros, viabilidad económica. Contactar para saber si hay presupuesto, aprobar un gasto, revisar liquidez o preparar un informe financiero."
+
+  - id: project_lead
+    name: "Project Lead"
+    department: operaciones
+    reports_to: chief_of_staff
+    functions: [proyectos, seguimiento_campo]
+    access_level: level-2
+    security_exceptions: []
+    description: "Proyecto Greenroot (GO Project). Coordinación del piloto, documentación, ejecución. Contactar para cualquier cosa relacionada con Greenroot."
+
+  - id: training_lead
+    name: "Training Lead"
+    department: formacion
+    reports_to: chief_of_staff
+    functions: [formacion, documentacion]
+    access_level: level-2
+    security_exceptions: [category-3]
+    description: "Talleres, cursos, material formativo, educación en acuaponía. Contactar para contenido formativo, organizar un taller o revisar material didáctico."
+
+actors:
+  - id: marco
+    role: ceo
+    npub: npub16fg8f93njtj7nervk94w6kgtdp4vtze8dzfer2qjc394mx6luzgqavqwgg
+    telegram_bot: "@marco_bot"
+    tools: [email, drive, calendar, notebooklm, printing]
+    tools_excluded: []
+    actor_exceptions: [category-0]
+    tone: formal-cercano
+
+  - id: lucia
+    role: chief_of_staff
+    npub: npub1lq22ue4wzezjy4v06xa925r0ed73h35chm38qme82jerzshtd2wsaujvls
+    telegram_bot: "@lucia_bot"
+    tools: [email, drive, calendar]
+    tools_excluded: [send]
+    actor_exceptions: []
+
+  - id: diego
+    role: cfo
+    npub: npub1fcmtmz4ftp6tmdnhxeu0gt5nqqr7lxf9vxlm8qu6s2vmuah5presk0agh9
+    telegram_bot: "@diego_bot"
+    tools: [email, drive, calendar, sheets]
+    tools_excluded: []
+    actor_exceptions: []
+
+  - id: dana
+    role: project_lead
+    npub: npub1ax0ysc0rz74p3j3mreylczfc658setut8g4thqv80qk0y6td3ursy8jhvm
+    telegram_bot: "@dana_bot"
+    tools: [email, drive, calendar, notebooklm]
+    tools_excluded: []
+    actor_exceptions: []
+
+  - id: elias
+    role: training_lead
+    npub: npub195framkkdk6fx0qqeyqlpmpwynl02kvrwa4u6qulkt9hyz3q6s8qq6flel
+    telegram_bot: "@elias_bot"
+    tools: [email, drive, notebooklm]
+    tools_excluded: []
+    actor_exceptions: []
+
+humans:
+  # Registry de humanos de la organización de ejemplo. Los IDs telegram/npub
+  # son placeholders; actualizar con los reales al desplegar (y compilar con pf).
+  - id: mar
+    name: "Presidente de la organización"
+    role: "Board President"
+    telegram_user_id: 1000000001
+    npub: null
+  - id: julia
+    name: "Secretaria de la organización"
+    role: "Secretary"
+    telegram_user_id: 1000000002
+    npub: null
+  - id: leo
+    name: "Tesorero de la organización"
+    role: "Treasurer"
+    telegram_user_id: null
+    npub: null
+  - id: mirta
+    name: "Coordinadora del proyecto piloto"
+    role: "Greenroot Coordinator member"
+    telegram_user_id: 1000000003
+    npub: null
+
+policies:
+  access_levels:
+    level-3: { label: "Ejecutivo", categories: [1, 2, 3] }
+    level-2: { label: "Operativo", categories: [1, 2] }
+    level-1: { label: "Restringido", categories: [1] }
+  security_categories:
+    category-0: { label: "Excepción absoluta", scope: actor, owner: "Board President" }
+    category-1: { label: "Público / interno bajo" }
+    category-2: { label: "Confidencial" }
+    category-3: { label: "Credenciales / financiero sensible" }
+
+escalation_matrix:
+  - { from: project_lead,   to: chief_of_staff, condition: "bloqueo operativo o desacuerdo de campo",       cross_department: false }
+  - { from: training_lead,  to: chief_of_staff, condition: "contenido fuera de alcance de formación",       cross_department: false }
+  - { from: cfo,            to: ceo,            condition: "gasto por encima del umbral de política financiera", cross_department: false }
+  - { from: chief_of_staff, to: ceo,            condition: "bloqueo no resuelto en su nivel",               cross_department: false }
+  - { from: "*",            to: ceo,            condition: "excepción Category 0 solicitada",               cross_department: true }
+
+communication:
+  request_id_format: "{org_id}-{yyyymmdd}-{seq4}"
+  message_types: [REQUEST, INFORM, ESCALATE, CONFIRM, REJECT]
+  max_hops: 3
+  norm_version: "1.5"
+  envelope:
+    marker: "[env]"
+    ttl_hours: 6
+  channels:
+    human:
+      platform: telegram
+      group: "Coordinación"
+      chat_id: "-1000000000001"
+    agent:
+      platform: phantomchat
+      relay: "ws://relay.example.invalid:7777"
+      # Puente PhantomBridge (v1.2.0): identidad nostr del puente y relays.
+      bridge_npub: "npub1w6huqqg6v56jpzu757j8d6gywxndmfl2fa28neqqzwnjzxete7psswsyx9"
+      # Identidad nostr compartida del grupo humano (nora/vera/leda/volunteers).
+      # Es un endpoint de ENTREGA, no un principal: los mensajes de estas claves
+      # pasan por el threat judge, nunca por la lista de confianza.
+      human_npubs:
+        - "npub1nn8csdm4tpjvveutqjavgxqdsndqw6w0ua2u0rd4050lyzzstq7s5usgk5"
+      # PRINCIPALES: solo estas claves reciben confianza de principal (saltan el
+      # judge). Vacío por defecto (fail-closed): el operador aprueba explícitamente.
+      principal_npubs: []
+      # Relays públicos adicionales (el privado del org va siempre primero).
+      public_relays:
+        - "wss://relay.damus.io"
+        - "wss://nos.lol"
+        - "wss://relay.primal.net"
+        - "wss://nostr.mom"
+        - "wss://nostr.data.haus"
