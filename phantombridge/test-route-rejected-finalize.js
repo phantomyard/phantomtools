@@ -131,12 +131,11 @@ t('control: ruteo con permiso NO dispara rejected', async () => {
   assert.ok(st === 'pending', 'con permiso el pending se conserva (retry legítimo)');
 });
 
-// cleanup
-_setBridgeStateForTest(freshLedger());
-try { fs.rmSync(tmpDir, {recursive: true, force: true}); } catch (_) {}
-delete process.env.PHANTOMBRIDGE_CONFIG;
-
 _chain.then(() => {
+  // cleanup — debe correr DESPUÉS de los casos, no antes
+  _setBridgeStateForTest(freshLedger());
+  try { fs.rmSync(tmpDir, {recursive: true, force: true}); } catch (_) {}
+  delete process.env.PHANTOMBRIDGE_CONFIG;
   console.log('');
   console.log(`Result: ${passed} ok, ${failed} fail`);
   process.exit(failed ? 1 : 0);

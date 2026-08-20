@@ -82,7 +82,7 @@ curl -fsSL https://raw.githubusercontent.com/phantomyard/phantomtools/main/phant
 ```
 
 This fetches the repo, symlinks `phantombridge` into `~/.local/bin` and runs
-`npm install` for the bridge deps. Requires **Node.js 18+** and `npm` in
+`npm install` for the bridge deps. Requires **Node.js 20.19+** and `npm` in
 PATH; `git` is needed the first time (the script clones the repo).
 
 ### From a checkout
