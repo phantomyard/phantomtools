@@ -269,16 +269,39 @@ security classification, referencing PhantomOrg's `security_categories`.
 
 **Enforcement (fail-closed):**
 
-- The **actor identity** is the authenticated OS credential of the calling
-  process (the real user id resolved via `pwd.getpwuid(os.getuid())`, not
-  `$USER` / `$USERNAME`). It is **never** taken from an environment variable or
-  a `--actor` flag — both are caller-controlled and forgeable by a capable turn
-  (CONTRIBUTING.md §4.2/§4.3). PhantomOrg deploys each persona under its own
-  OS account, so the OS username IS the persona identity; PhantomDocs requires
-  that username to be a declared actor `id` in `org.yaml`. A caller whose OS
-  account is not an actor is refused. Without `--org-yaml` (the authoritative
-  org model) and a resolvable OS actor, read and write are denied — never
-  fail-open.
+- The **actor identity** is resolved with layered precedence
+  (issue #29): an explicit `--actor` flag → the `PHANTOMDOCS_ACTOR` environment
+  variable → the OS username (`pwd.getpwuid(os.getuid())`). In the
+  PhantomOrg/phantombot deployment model N personas live as directories under
+  ONE OS account and phantombot gives focus to one persona at a time, so the OS
+  username is **not** the persona identity; the harness (which knows which
+  persona has focus) supplies the actor via `--actor` / `PHANTOMDOCS_ACTOR`.
+  The OS username is kept only as a fallback for deployments that genuinely run
+  one persona per OS account (e.g. the VPS Virtualmin model). The resolved id
+  must be a declared actor `id` in `org.yaml`; an unmapped actor is refused.
+  Without `--org-yaml` (the authoritative org model) and a resolvable actor,
+  read and write are denied — never fail-open.
+
+**Threat model (issue #30):** integrity and authorization are two different
+guarantees, and only one of them is cryptographically enforced.
+
+- **Integrity is guaranteed by the MAC chain.** Every node's identity is a
+  chained hash (`H(parent_MAC ∥ component)`) and every document binds
+  `H(content)`; `pd verify` recomputes the chain and detects any tampering,
+  regardless of who did it.
+- **Authorization is a guardrail, not a cryptographic boundary.** The ACL
+  (category + owners) is resolved from PhantomOrg and enforced at the CLI
+  layer. The manifest is a plain file: a process with filesystem write access
+  can add nodes with valid MACs directly, bypassing both the ACL and the
+  append-only audit log. In the phantombot threat model the personas are
+  trusted processes sharing one account, and the ACL exists to constrain what
+  the model's tool use may touch — not to stop a malicious process that can
+  already write the filesystem.
+
+  Binding authorship cryptographically (signing each mutation with the actor's
+  Nostr key, recorded in the node/audit so `pd verify` can also detect
+  unauthorized writes) is the v2 path to a real authorization boundary and is
+  tracked in issue #30.
 - **Read** — allowed iff the actor's resolved access (`merge_access`) covers
   the node's `category` (i.e. the category number is in the actor's resolved
   category set, or the actor holds a category exception). `category-0` is

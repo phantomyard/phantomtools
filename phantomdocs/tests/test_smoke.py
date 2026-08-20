@@ -704,7 +704,7 @@ def test_read_denied_without_os_identity(tmp_path):
     with mock.patch("phantomdocs.cli._os_actor", return_value=None):
         r = runner.invoke(main, ["get", "x.md", "--org-yaml", org, "--root", root])
     assert r.exit_code != 0
-    assert "OS identity" in r.output
+    assert "actor identity" in r.output
 
 
 def test_audit_chain_verifies(tmp_path):
@@ -839,3 +839,115 @@ def test_concurrent_adds_all_survive(tmp_path):
     data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
     nodes = [n for n in data["nodes"] if n.get("kind") == "doc"]
     assert len(nodes) == 6, f"expected 6 docs, got {len(nodes)}"
+
+
+def test_actor_flag_overrides_os_identity(tmp_path):
+    """`--actor` lets the harness act as a declared actor even when the OS
+    account is not one (issue #29)."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+
+    # OS identity resolves to an actor that is NOT in the org model.
+    with mock.patch("phantomdocs.cli._os_actor", return_value="some-os-user"):
+        r = CliRunner().invoke(
+            main,
+            [
+                "mkdir",
+                "--name",
+                "reports",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--actor",
+                "roberto",
+                "--root",
+                root,
+            ],
+        )
+    assert r.exit_code == 0, r.output
+    assert "created reports" in r.output
+
+
+def test_phandomdocs_actor_env_var(tmp_path):
+    """PHANTOMDOCS_ACTOR supplies the actor when neither --actor nor a
+    declared OS account is present (issue #29)."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+
+    with mock.patch("phantomdocs.cli._os_actor", return_value="some-os-user"):
+        r = CliRunner().invoke(
+            main,
+            [
+                "mkdir",
+                "--name",
+                "reports",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ],
+            env={**os.environ, "PHANTOMDOCS_ACTOR": "roberto"},
+        )
+    assert r.exit_code == 0, r.output
+    assert "created reports" in r.output
+
+
+def test_actor_flag_beats_env_var(tmp_path):
+    """Precedence: an explicit --actor wins over PHANTOMDOCS_ACTOR (#29)."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+
+    with mock.patch("phantomdocs.cli._os_actor", return_value=None):
+        r = CliRunner().invoke(
+            main,
+            [
+                "mkdir",
+                "--name",
+                "reports",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--actor",
+                "roberto",
+                "--root",
+                root,
+            ],
+            env={**os.environ, "PHANTOMDOCS_ACTOR": "intruder"},
+        )
+    assert r.exit_code == 0, r.output
+    assert "created reports" in r.output
+
+
+def test_actor_flag_denies_unknown_actor(tmp_path):
+    """An explicit --actor that is not a declared org actor is denied
+    (fail-closed), even with a valid OS fallback available (#29)."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+
+    with mock.patch("phantomdocs.cli._os_actor", return_value="roberto"):
+        r = CliRunner().invoke(
+            main,
+            [
+                "mkdir",
+                "--name",
+                "reports",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--actor",
+                "intruder",
+                "--root",
+                root,
+            ],
+        )
+    assert r.exit_code != 0
+    assert "not an actor" in r.output

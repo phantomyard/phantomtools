@@ -66,15 +66,19 @@ def _load_or_die(root: str):
         raise click.ClickException(str(exc))
 
 
-def _os_actor() -> str | None:
-    """The authenticated OS identity of the calling process (spec §9).
+PHANTOMDOCS_ACTOR_ENV = "PHANTOMDOCS_ACTOR"
 
-    Derived from the real user id — NOT from environment variables or CLI
-    flags, which a caller (including a capable turn) can set to impersonate
-    another actor (CONTRIBUTING.md §4.2/§4.3). In PhantomOrg's deploy model
-    each persona runs under its own OS account, so the OS username IS the
-    persona identity; PhantomDocs requires that username to be a declared
-    actor id in org.yaml. Returns None when it cannot be resolved (fail-closed).
+_ACTOR_HELP = (
+    "Actor id. Precedence: --actor → $PHANTOMDOCS_ACTOR → OS username (SPEC §9)."
+)
+
+
+def _os_actor() -> str | None:
+    """The OS username of the calling process (last-resort identity source).
+
+    Used only as a fallback for deployments that really do run one persona
+    per OS account (e.g. the VPS Virtualmin model). Returns None when it
+    cannot be resolved.
     """
     try:
         import pwd
@@ -84,33 +88,60 @@ def _os_actor() -> str | None:
         return None
 
 
-def _require_acl(org_yaml: str | None):
+def _resolve_actor(explicit: str | None) -> str | None:
+    """Resolve the actor id with layered precedence (issue #29).
+
+    In the PhantomOrg/phantombot deployment model, N personas live as
+    directories under ONE OS account and phantombot gives focus to one
+    persona at a time, so the OS username is NOT the persona identity.
+    The actor is resolved from, in order:
+
+      1. an explicit ``--actor`` flag (harness/caller override);
+      2. the ``PHANTOMDOCS_ACTOR`` environment variable, set by the harness
+         (phantombot knows which persona has focus);
+      3. the OS username (fallback for one-account-per-persona deployments).
+
+    Returns None when nothing resolves (fail-closed). The candidate is
+    validated against org.yaml by ``_require_acl`` — this function only
+    proposes, it does not authenticate. The resolved actor is a guardrail
+    for the model's tool use (which persona's remit applies), not a
+    cryptographic boundary against a malicious process (SPEC §9, issue #30).
+    """
+    if explicit:
+        return explicit
+    env = os.environ.get(PHANTOMDOCS_ACTOR_ENV, "").strip()
+    if env:
+        return env
+    return _os_actor()
+
+
+def _require_acl(org_yaml: str | None, actor: str | None = None):
     """Return ``(actor, org)`` for an ACL-gated command, or raise a
     ClickException (fail-closed) when the org model or actor is absent.
 
-    ``--org-yaml`` must be supplied; the actor is the authenticated OS
-    credential (``_os_actor``), never caller-controlled input. The OS account
-    must also be a declared actor in the org model. Without all of these,
-    access is denied — never fail-open.
+    ``--org-yaml`` must be supplied. The actor is resolved by layered
+    precedence (``--actor`` → ``PHANTOMDOCS_ACTOR`` → OS username) and must
+    be a declared actor in the org model; an unmapped actor is denied
+    (fail-closed). Without all of these, access is denied — never fail-open.
     """
     if not org_yaml:
         raise click.ClickException(
             "access control requires --org-yaml (the authoritative PhantomOrg "
             "org model); refusing to serve/mutate content without it"
         )
-    actor = _os_actor()
+    actor = _resolve_actor(actor)
     if not actor:
         raise click.ClickException(
-            "access control requires an authenticated OS identity; could not "
-            "resolve the calling OS account, refusing to serve/mutate content"
+            "access control requires an actor identity; could not resolve "
+            "one (pass --actor, set PHANTOMDOCS_ACTOR, or run under a "
+            "declared OS account), refusing to serve/mutate content"
         )
     org = load_org(org_yaml)
     known_actors = {a.get("id") for a in org.get("actors", [])}
     if actor not in known_actors:
         raise click.ClickException(
-            f"denied: OS account {actor!r} is not an actor in the org model; "
-            "PhantomDocs derives identity from the OS credential and refuses "
-            "unmapped accounts (fail-closed)"
+            f"denied: {actor!r} is not an actor in the org model; "
+            "PhantomDocs refuses unmapped actors (fail-closed)"
         )
     return actor, org
 
@@ -141,7 +172,7 @@ def init(org: str, namespace: str, org_pubkey: str, root: str) -> None:
     save(path, empty_manifest(org, namespace, mac))
     _audit(
         root,
-        _os_actor() or "phantom",
+        _resolve_actor(None) or "phantom",
         "init",
         f"urn:{org}:namespace:{namespace}",
         mac,
@@ -166,14 +197,15 @@ def init(org: str, namespace: str, org_pubkey: str, root: str) -> None:
 @click.option(
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
+@click.option("--actor", default=None, help=_ACTOR_HELP)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def mkdir(name, parent, category, owners, org_yaml, root):
+def mkdir(name, parent, category, owners, org_yaml, actor, root):
     """Create a folder node (a link in the chained MAC hierarchy).
 
     Access-controlled: requires --org-yaml + an authenticated OS identity; the
     actor must be able to write the folder's category (fail-closed).
     """
-    actor_id, org = _require_acl(org_yaml)
+    actor_id, org = _require_acl(org_yaml, actor)
     if not can_write(org, actor_id, category, list(owners)):
         raise click.ClickException(
             f"denied: {actor_id} cannot write category-{category}"
@@ -238,8 +270,9 @@ def mkdir(name, parent, category, owners, org_yaml, root):
 @click.option(
     "--backend", default=None, help="Backend URI (local:// ssh:// gdrive://)."
 )
+@click.option("--actor", default=None, help=_ACTOR_HELP)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def add(path, slug, category, folder, owners, org_yaml, backend, root):
+def add(path, slug, category, folder, owners, org_yaml, actor, backend, root):
     """Ingest a document: compute MAC chain, store blob, register node.
 
     Access-controlled: requires --org-yaml + an authenticated OS identity; the
@@ -249,7 +282,7 @@ def add(path, slug, category, folder, owners, org_yaml, backend, root):
     with open(path, "rb") as f:
         content = f.read()
 
-    actor_id, org = _require_acl(org_yaml)
+    actor_id, org = _require_acl(org_yaml, actor)
 
     # Load-modify-save under the inter-process lock (see mkdir).
     with manifest_lock(_manifest_path(root)):
@@ -344,8 +377,9 @@ def add(path, slug, category, folder, owners, org_yaml, backend, root):
 @click.option(
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
+@click.option("--actor", default=None, help=_ACTOR_HELP)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def get(ref, mac, cat, backend, org_yaml, root):
+def get(ref, mac, cat, backend, org_yaml, actor, root):
     """Resolve a document by urn, path, slug, ref name, or version MAC.
 
     Access-controlled: requires --org-yaml + an authenticated OS identity;
@@ -361,7 +395,7 @@ def get(ref, mac, cat, backend, org_yaml, root):
         if node is None:
             raise click.ClickException(f"not found: {ref}")
 
-    actor_id, org = _require_acl(org_yaml)
+    actor_id, org = _require_acl(org_yaml, actor)
     if not can_read(org, actor_id, node.get("category", 0)):
         raise click.ClickException(
             f"denied: {actor_id} cannot read category-{node.get('category')} "
@@ -379,14 +413,15 @@ def get(ref, mac, cat, backend, org_yaml, root):
 @click.option(
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
+@click.option("--actor", default=None, help=_ACTOR_HELP)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def versions(ref, org_yaml, root):
+def versions(ref, org_yaml, actor, root):
     """List the version history (MAC chain) of a document."""
     manifest = _load_or_die(root)
     node = resolve_node(manifest, ref)
     if node is None:
         raise click.ClickException(f"not found: {ref}")
-    actor_id, org = _require_acl(org_yaml)
+    actor_id, org = _require_acl(org_yaml, actor)
     if not can_read(org, actor_id, node.get("category", 0)):
         raise click.ClickException(
             f"denied: {actor_id} cannot read category-{node.get('category')} "
@@ -408,14 +443,15 @@ def versions(ref, org_yaml, root):
 @click.option(
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
+@click.option("--actor", default=None, help=_ACTOR_HELP)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def search(query, org_yaml, root):
+def search(query, org_yaml, actor, root):
     """Search the manifest index (urn, slug, meta).
 
     Access-controlled: only nodes the actor may read are returned (fail-closed).
     """
     manifest = _load_or_die(root)
-    actor_id, org = _require_acl(org_yaml)
+    actor_id, org = _require_acl(org_yaml, actor)
     needle = query.lower()
     hits = []
     for node in manifest.get("nodes", []):
@@ -512,14 +548,15 @@ def verify(backend, root):
 @click.option(
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
+@click.option("--actor", default=None, help=_ACTOR_HELP)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def tag(name, ref, org_yaml, root):
+def tag(name, ref, org_yaml, actor, root):
     """Point a mutable ref (e.g. `latest`, `approved-<date>`) at a version MAC.
 
     Access-controlled: the actor must be able to write the target node's
     category (fail-closed).
     """
-    actor_id, org = _require_acl(org_yaml)
+    actor_id, org = _require_acl(org_yaml, actor)
     with manifest_lock(_manifest_path(root)):
         manifest = _load_or_die(root)
         node = resolve_node(manifest, ref)
