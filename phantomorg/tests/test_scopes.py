@@ -27,6 +27,7 @@ from phantomorg.compiler.scopes import (
     SCOPES_FILENAME,
     ScopeError,
     derive_scopes,
+    merge_scopes_json,
     serialize_scopes,
 )
 from phantomorg.deploy.target import DeployCollisionError, deploy
@@ -88,6 +89,46 @@ class TestDeriveScopes(unittest.TestCase):
         self.assertEqual(payload["org"], "verdant-aquaponics")
         self.assertEqual(payload["rule"], "chain")
         self.assertEqual(payload["scopes"], scopes)
+
+    def test_merge_scopes_json_unions_orgs(self):
+        """Multi-org deploy-all: the second org's scopes.json must be
+        UNIONed into the data-dir file, not overwrite the first org."""
+        a = {
+            "format_version": 1,
+            "org": "org-a",
+            "rule": "chain",
+            "scopes": {"alice": ["alice"], "bob": ["bob", "alice"]},
+        }
+        b = {
+            "format_version": 1,
+            "org": "org-b",
+            "rule": "chain",
+            "scopes": {"carol": ["carol"]},
+        }
+        merged = json.loads(merge_scopes_json(json.dumps(a), json.dumps(b)))
+        self.assertEqual(merged["orgs"], ["org-a", "org-b"])
+        self.assertEqual(merged["rule"], "chain")
+        self.assertEqual(
+            merged["scopes"],
+            {
+                "alice": ["alice"],
+                "bob": ["bob", "alice"],
+                "carol": ["carol"],
+            },
+        )
+
+    def test_merge_scopes_json_idempotent(self):
+        """Merging an org's scopes twice must not duplicate or reorder."""
+        a = {
+            "format_version": 1,
+            "org": "org-a",
+            "rule": "chain",
+            "scopes": {"alice": ["alice"]},
+        }
+        once = merge_scopes_json(json.dumps(a), json.dumps(a))
+        merged = json.loads(once)
+        self.assertEqual(merged["orgs"], ["org-a"])
+        self.assertEqual(merged["scopes"], {"alice": ["alice"]})
 
 
 class TestBuildWritesScopes(unittest.TestCase):

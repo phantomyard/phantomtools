@@ -68,6 +68,23 @@ class TestCompilerAU(unittest.TestCase):
             self.assertIn("1000000001", content)
             self.assertIn("1000000002", content)
 
+    def test_merge_humans_markdown_upserts_by_org(self):
+        """Multi-org deploy-all: the second org's registry is UPSERTED into
+        the data-dir HUMANS.md (keyed by its `Organization:` line), not
+        clobbered — and re-merging the same org is idempotent."""
+        from phantomorg.compiler.humans import merge_humans_markdown
+
+        a = "# Human Registry — Org A\n\nOrganization: `org-a`\n\n| id |\n|---|\n| alice |\n"
+        b = "# Human Registry — Org B\n\nOrganization: `org-b`\n\n| id |\n|---|\n| bob |\n"
+        merged = merge_humans_markdown(a, b)
+        self.assertIn("org-a", merged)
+        self.assertIn("org-b", merged)
+        self.assertIn("alice", merged)
+        self.assertIn("bob", merged)
+        # Re-merging org B must not duplicate its section.
+        merged_again = merge_humans_markdown(merged, b)
+        self.assertEqual(merged_again.count("org-b"), 1)
+
     def test_build_without_humans_writes_no_registry(self):
         """An org without a humans block builds no HUMANS.md."""
 

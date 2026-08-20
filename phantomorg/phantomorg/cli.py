@@ -1183,7 +1183,11 @@ def deploy_all_cmd(base_dir, dist_base, target, force, prune, assume_yes):
                 continue
             try:
                 result = deploy_target(
-                    compiled_dir, effective_target, force=force, prune=prune
+                    compiled_dir,
+                    effective_target,
+                    force=force,
+                    prune=prune,
+                    merge_data_files=True,
                 )
             except DeployCollisionError as e:
                 # Preflight rejects the org BEFORE it mutates anything, so

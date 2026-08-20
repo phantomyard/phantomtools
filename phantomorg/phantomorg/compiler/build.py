@@ -129,11 +129,13 @@ _SEED_FILES: dict[str, str] = {
     "memory/norms.md": (
         "# Norms\n\nRoutine communication patterns used by the operator. "
         "Channels, expected cadence, request-id conventions, and known "
-        "counterparties belong here. This drawer is owned by the "
-        "capture/heartbeat/nightly pipeline (it is seeded once and never "
-        "overwritten by the compiler).\n\n"
-        "The org communication norm lives in the KB: see "
-        "[[procedures/comunicacion-agentes]].\n"
+        'counterparties belong here. The ORG:BEGIN/END "norms" block below '
+        "is compiled from org.yaml on every build; everything OUTSIDE that "
+        "block is owned by the capture/heartbeat/nightly pipeline and is "
+        "preserved.\n\n"
+        "The full protocol page lives in the KB: see "
+        "[[procedures/comunicacion-agentes]].\n\n"
+        "<!-- ORG:BEGIN norms -->\n<!-- ORG:END norms -->\n"
     ),
     "kb/Home.md": (
         "---\ntype: index\ntitle: Home\ndescription: Persona knowledge-base index.\naliases: [home]\ntags: [navigation]\ncreated: {today}\nupdated: {today}\n---\n\n"
@@ -621,12 +623,16 @@ def build_actor(
 
     ensure_scaffold(actor_dir)
 
-    # Operational communication norms belong in the KB (an OKF-linked
-    # procedure), NOT in memory/norms.md: that drawer is owned by the
-    # capture/heartbeat/nightly pipeline. The compiler seeds memory/norms.md
-    # once (a pointer to this page) and never overwrites runtime drawer
-    # content; the concise norm is emitted at runtime via
-    # `phantombot memory capture --tag norm --persona <actor>`.
+    # The communication norm is written in TWO places:
+    #   1. kb/procedures/comunicacion-agentes.md — the full, human-readable
+    #      protocol page (OKF frontmatter so it ranks on recall).
+    #   2. memory/norms.md — a CONCISE operational summary, block-merged as
+    #      an `<!-- ORG:BEGIN norms -->` block. That drawer is read in full
+    #      by the threat judge, so it must be briefed on what routine
+    #      agent-to-agent traffic looks like — otherwise the org's own
+    #      coordination gets scored as anomalous. The block is rendered on
+    #      every build (empty when the org declares no channels, so a
+    #      channel drop empties it instead of leaving a stale block).
     if spec.communication.human_channel or spec.communication.agent_channel:
         norma_md = env.get_template("norma.j2").render(t=t, **_norma_context(spec))
         # Human-readable protocol page in the canonical KB category, with
@@ -637,6 +643,15 @@ def build_actor(
         procedure_body = _render_norm_protocol(norma_md, spec, t)
         if write_plain_if_changed(procedure_path, procedure_body):
             written.append(procedure_path)
+
+        drawer_md = env.get_template("norma_drawer.j2").render(
+            t=t, **_norma_context(spec)
+        )
+    else:
+        drawer_md = "<!-- ORG:BEGIN norms -->\n<!-- ORG:END norms -->\n"
+    p = actor_dir / "memory" / "norms.md"
+    if write_if_changed(p, drawer_md):
+        written.append(p)
 
     # Phantomchat config (phantomchat.json): compiled from org.yaml when the
     # org declares an agent channel AND the actor declares an npub. Same

@@ -15,6 +15,7 @@ next to the runtime data dir by `po deploy`.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from ..spec.model import OrgSpec
@@ -47,6 +48,40 @@ def render_humans(spec: OrgSpec) -> str:
             f"| `{h.id}` | {h.name or '—'} | {h.role or '—'} | {tg} | `{npub}` |"
         )
     return "\n".join(lines) + "\n"
+
+
+_HUMANS_SECTION_SEP = "\n\n---\n\n"
+_ORG_ID_RE = re.compile(r"^Organization:\s*`([^`]+)`\s*$", re.MULTILINE)
+
+
+def _extract_org_id(text: str) -> str | None:
+    m = _ORG_ID_RE.search(text)
+    return m.group(1) if m else None
+
+
+def merge_humans_markdown(existing: str, incoming: str) -> str:
+    """Merge two HUMANS.md registries for a shared data dir (deploy-all).
+
+    deploy-all may compile several orgs into one data dir, so the last org
+    must not overwrite the earlier orgs' registry. Each registry is keyed
+    by its ``Organization: `<id>``` line and the merge is an UPSERT: a
+    re-run replaces the same org's section rather than duplicating it, so
+    the result is idempotent across repeated deploy-all runs and keeps each
+    org's section fresh.
+    """
+    incoming_id = _extract_org_id(incoming)
+    sections: dict[str, str] = {}
+    for block in existing.split(_HUMANS_SECTION_SEP):
+        oid = _extract_org_id(block)
+        if oid:
+            sections[oid] = block
+    if incoming_id:
+        sections[incoming_id] = incoming
+        return (
+            _HUMANS_SECTION_SEP.join(sections[oid] for oid in sorted(sections)) + "\n"
+        )
+    # No org id in the incoming registry (malformed/legacy): preserve both.
+    return existing.rstrip() + _HUMANS_SECTION_SEP + incoming.lstrip("\n")
 
 
 def write_humans(spec: OrgSpec, out_dir: Path) -> Path | None:

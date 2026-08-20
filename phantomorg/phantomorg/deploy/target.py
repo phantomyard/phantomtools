@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -50,8 +51,8 @@ from uuid import uuid4
 import yaml
 
 from ..compiler.blocks import has_blocks, merge_content, strip_blocks
-from ..compiler.humans import HUMANS_FILENAME
-from ..compiler.scopes import SCOPES_FILENAME
+from ..compiler.humans import HUMANS_FILENAME, merge_humans_markdown
+from ..compiler.scopes import SCOPES_FILENAME, merge_scopes_json
 
 # Default target when neither --target nor PHANTOMORG_TARGET_DIR is set.
 # Phantombot's personas directory is used as the practical default, but
@@ -254,6 +255,7 @@ def _write_data_file(
     compiled_dir: Path,
     target: Path,
     staging: Path,
+    merge_fn: Callable[[str, str], str] | None = None,
 ) -> tuple[bool, str | None, bool]:
     """Transport a compiled data-dir artifact (scopes.json / HUMANS.md)
     into the data dir (``target.parent / filename``), returning
@@ -278,14 +280,13 @@ def _write_data_file(
     following it); the copy goes through staging (same filesystem as
     the destination) so the final os.replace is atomic.
 
-    Multi-org note: deploy-all calls this once per org, so the LAST org
-    deployed wins at the data dir. The backup records the pre-overwrite
-    state of each write; the deploy-all merge keeps the FIRST org's
-    backup (the true pre-session state), matching the archive-dedup
-    semantics. The deferred phantombot issue will define the full
-    multi-org contract (e.g. per-org files); for the single-org
-    deployments (the norm, e.g. verdant-aquaponics) this is exactly
-    right.
+    Multi-org note: deploy-all calls this once per org. With ``merge_fn``
+    set (scopes.json unions the per-org ``scopes`` maps; HUMANS.md upserts
+    the org's registry), the LAST org no longer clobbers the earlier orgs'
+    global artifacts — the data dir accumulates every org instead. The
+    backup records the pre-overwrite state of each write; the deploy-all
+    merge keeps the FIRST org's backup (the true pre-session state),
+    matching the archive-dedup semantics.
     """
     src = compiled_dir / filename
     if not src.exists():
@@ -323,34 +324,62 @@ def _write_data_file(
         backup = str(backup_path.resolve())
 
     staging_copy = staging / filename
-    shutil.copy2(src, staging_copy)
+    if merge_fn is not None and dest_pre_existed:
+        # Multi-org deploy-all: merge the incoming artifact into what is
+        # already in the data dir instead of overwriting it (last-wins).
+        existing = dest.read_text(encoding="utf-8")
+        incoming = src.read_text(encoding="utf-8")
+        staging_copy.write_text(merge_fn(existing, incoming), encoding="utf-8")
+    else:
+        shutil.copy2(src, staging_copy)
     os.replace(staging_copy, dest)
     return True, backup, not dest_pre_existed
 
 
 def _write_scopes_file(
-    compiled_dir: Path, target: Path, staging: Path
+    compiled_dir: Path,
+    target: Path,
+    staging: Path,
+    merge: bool = False,
 ) -> tuple[bool, str | None, bool]:
     """Transport compiled scopes.json (if any) into the data dir.
 
     Returns ``(written, backup, created)`` — see ``_write_data_file``.
+    ``merge`` (multi-org deploy-all) unions the incoming scopes map into
+    an existing data-dir scopes.json instead of overwriting it.
     """
     return _write_data_file(
-        SCOPES_FILENAME, "scopes.json", compiled_dir, target, staging
+        SCOPES_FILENAME,
+        "scopes.json",
+        compiled_dir,
+        target,
+        staging,
+        merge_fn=merge_scopes_json if merge else None,
     )
 
 
 def _write_humans_file(
-    compiled_dir: Path, target: Path, staging: Path
+    compiled_dir: Path,
+    target: Path,
+    staging: Path,
+    merge: bool = False,
 ) -> tuple[bool, str | None, bool]:
     """Transport compiled HUMANS.md (if any) into the data dir.
 
     Same semantics as ``_write_scopes_file``: destination is
     ``target.parent / HUMANS.md`` (the data dir), NOT the target tree.
     An org without a ``humans:`` block builds no HUMANS.md and deploys
-    exactly as before (returns (False, None, False)).
+    exactly as before (returns (False, None, False)). ``merge`` upserts
+    the org's registry into an existing data-dir HUMANS.md.
     """
-    return _write_data_file(HUMANS_FILENAME, "HUMANS.md", compiled_dir, target, staging)
+    return _write_data_file(
+        HUMANS_FILENAME,
+        "HUMANS.md",
+        compiled_dir,
+        target,
+        staging,
+        merge_fn=merge_humans_markdown if merge else None,
+    )
 
 
 def _read_meta(actor_dir: Path) -> dict | None:
@@ -553,7 +582,7 @@ _OWNED_FILES: dict[str, str] = {
     "memory/decisions.md": "seed",
     "memory/lessons.md": "seed",
     "memory/commitments.md": "seed",
-    "memory/norms.md": "seed",
+    "memory/norms.md": "merge",
     "kb/Home.md": "seed",
     "kb/templates/concept.md": "seed",
     "kb/templates/runbook.md": "seed",
@@ -672,6 +701,7 @@ def deploy(
     target_dir: Path | None = None,
     force: bool = False,
     prune: bool = False,
+    merge_data_files: bool = False,
 ) -> DeployResult:
     """Deploy compiled personas into ``target``.
 
@@ -788,10 +818,14 @@ def deploy(
         staging.mkdir(parents=True, exist_ok=True)
         try:
             result.scopes_written, result.scopes_backup, result.scopes_created = (
-                _write_scopes_file(compiled_dir, target, staging)
+                _write_scopes_file(
+                    compiled_dir, target, staging, merge=merge_data_files
+                )
             )
             result.humans_written, result.humans_backup, result.humans_created = (
-                _write_humans_file(compiled_dir, target, staging)
+                _write_humans_file(
+                    compiled_dir, target, staging, merge=merge_data_files
+                )
             )
         finally:
             shutil.rmtree(staging, ignore_errors=True)

@@ -166,3 +166,43 @@ def serialize_scopes(spec: OrgSpec, scopes: dict[str, list[str]], rule: str) -> 
         "scopes": scopes,
     }
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
+
+
+def merge_scopes_payloads(existing: dict, incoming: dict) -> dict:
+    """Union two scopes.json payloads (multi-org deploy-all).
+
+    The data dir holds a single scopes.json; deploying a second org must
+    UNION the ``scopes`` maps rather than let the last org overwrite the
+    first. Actor ids are globally unique across organizations (``deploy``
+    rejects a cross-org collision on any shared actor id), so the union is
+    lossless. ``orgs`` becomes the sorted list of contributing org ids;
+    ``rule`` is taken from the incoming build (``build-all`` compiles every
+    org with the same default rule, so they agree).
+    """
+    scopes: dict[str, list[str]] = dict(existing.get("scopes") or {})
+    scopes.update(incoming.get("scopes") or {})
+
+    orgs: set[str] = set()
+    for payload in (existing, incoming):
+        org_id = payload.get("org")
+        if org_id:
+            orgs.add(str(org_id))
+        for o in payload.get("orgs") or []:
+            orgs.add(str(o))
+
+    return {
+        "format_version": incoming.get("format_version", SCOPES_FORMAT_VERSION),
+        "orgs": sorted(orgs),
+        "rule": incoming.get("rule") or existing.get("rule"),
+        "scopes": scopes,
+    }
+
+
+def merge_scopes_json(existing_text: str, incoming_text: str) -> str:
+    """Merge two serialized scopes.json documents (deploy-all across orgs)."""
+    existing = json.loads(existing_text)
+    incoming = json.loads(incoming_text)
+    return (
+        json.dumps(merge_scopes_payloads(existing, incoming), indent=2, sort_keys=True)
+        + "\n"
+    )

@@ -114,6 +114,29 @@ class TestNormaCompiled(unittest.TestCase):
             self.assertIn(norma_path, written["dana"])
             self.assertIn("1.6", norma_path.read_text(encoding="utf-8"))
 
+    def test_build_writes_concise_norm_into_judge_drawer(self):
+        """memory/norms.md is one of the drawers the threat judge reads in
+        full. The compiler must block-merge a CONCISE operational norm into
+        it (an ORG:BEGIN/END block), not just a pointer to the KB — so the
+        judge is briefed on routine traffic. The full protocol page stays in
+        the KB; the drawer block is the short summary."""
+        spec, _ = validate_org(AU_ORG)
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            build(spec, out_dir, only="dana")
+            drawer = (out_dir / "dana" / "memory" / "norms.md").read_text(
+                encoding="utf-8"
+            )
+            # The drawer carries an owned ORG block with the concise rules.
+            self.assertIn("ORG:BEGIN norms", drawer)
+            self.assertIn("ORG:END norms", drawer)
+            # The concise block names the channels / request-id format the
+            # judge needs to recognize routine traffic.
+            self.assertIn("telegram", drawer.lower())
+            self.assertIn("phantomchat", drawer.lower())
+            # The full protocol page is referenced for the human-readable copy.
+            self.assertIn("[[procedures/comunicacion-agentes]]", drawer)
+
     def test_build_skips_norma_without_channels(self):
         """Backward compatible: orgs without channels get no norm file."""
         with tempfile.TemporaryDirectory() as tmp:
