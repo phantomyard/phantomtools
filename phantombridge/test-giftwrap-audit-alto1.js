@@ -14,12 +14,13 @@ const assert = require('assert');
 const {generateSecretKey, getPublicKey, finalizeEvent, getEventHash, nip19} = require('nostr-tools');
 const nip44 = require('nostr-tools/nip44');
 
+require('./testlib.js').setup();
 const bridge = require('./bridge.js');
-const {unwrapAndVerifyGiftWrap, CONFIG} = bridge;
+const {unwrapAndVerifyGiftWrap} = bridge;
 
 // bridgeSk used by unwrapAndVerifyGiftWrap comes from the module's closure.
 // Derive the bridge's pubkey from the same nsec so we can encrypt toward it.
-const {data: bridgeSkHex} = nip19.decode(CONFIG.nostr.nsec);
+const {data: bridgeSkHex} = nip19.decode(process.env.PHANTOMBRIDGE_TEST_NSEC);
 const bridgePk = getPublicKey(bridgeSkHex);
 
 let passed = 0, failed = 0;

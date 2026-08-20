@@ -361,8 +361,8 @@ Telemetry in `GET /status`:
 "antiloop": {
   "routed": 42,
   "dropped": {"hash": 1, "pair": 0, "request": 2, "cycle": 3, "hops": 1, "expired": 0},
-  "activePairs": ["roberto|alma"],
-  "activeRequests": [{"id": "aquaponics-united-20260811-0007", "count": 5, "agents": ["roberto", "alma"], "edges": ["roberto|alma", "alma|roberto"]}],
+  "activePairs": ["carol|dave"],
+  "activeRequests": [{"id": "example-org-20250101-0007", "count": 5, "agents": ["carol", "dave"], "edges": ["carol|dave", "dave|carol"]}],
   "config": {"maxHops": 3, "expireMs": 21600000, "reqMax": 8, "requestMax": 500, "hashMax": 200, "pairMax": 10, "marker": "[env]"},
   "evictedHashes": 0
 }
@@ -635,7 +635,7 @@ Test: `node test-org-routing.js` (15 tests: unit + bridge integration).
 - **v1.5.1** — Phase 2 audit (12 GPT findings cross-checked, all real):
   - **F2-01** — the envelope is ALWAYS the first line of the delivered
     message; `[from]` (sender) goes as metadata on the next line.
-    Previously the delivery was `[roberto] [env] {...}` and parseEnvelope
+    Previously the delivery was `[carol] [env] {...}` and parseEnvelope
     required `^\[env\]`, breaking the "copy the line as-is" norm with
     LLM bots.
   - **F2-02** — strict type/range validation of the envelope
@@ -694,7 +694,7 @@ Test: `node test-org-routing.js` (15 tests: unit + bridge integration).
     `subscribeIncoming`: an invalid relay frame could kill the process.
     Now it is ignored with a log.
   - **Configurable focus**: `allocateConference` used
-    `focus.meet.aquaponicsunited.com` hardcoded. Now
+    `focus.meet.example.com` hardcoded. Now
     `CONFIG.xmpp.focus` (default `focus.<meet-domain>`).
   - **/join with real state**: `joinRoom` returns `{ok, allocError?}`;
     the handler answers 502 on failure (previously ok:true always).

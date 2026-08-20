@@ -15,8 +15,7 @@ const path = require('path');
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'route-rej-'));
 const tmpState = path.join(tmpDir, 'state.json');
-const realConfigPath = path.join(__dirname, 'config.json');
-const baseConfig = JSON.parse(fs.readFileSync(realConfigPath, 'utf8'));
+const baseConfig = require('./testlib.js').baseConfig();
 baseConfig.stateFile = tmpState;
 const tmpConfigPath = path.join(tmpDir, 'config.json');
 fs.writeFileSync(tmpConfigPath, JSON.stringify(baseConfig, null, 2));
@@ -72,7 +71,7 @@ t('sin permiso (routingAllowed false) -> finishDelivery rejected -> pending elim
   assert.ok(markDelivery('gw-2', 'pending'), 'admitido pending');
   const fromPk = 'def'.padEnd(64, '0');
   // Tomamos un @to que SÍ existe pero cuyo from no tiene permiso.
-  const toName = Object.keys(bridge.CONFIG.agents || {})[0] || 'alma';
+  const toName = Object.keys(bridge.CONFIG.agents || {})[0] || 'dave';
   const route = {to: toName, text: 'hola'};
   await handleRoute(UNKNOWN_FROM, fromPk, route, 'gw-2').catch(() => {});
   assert.strictEqual(deliveryStatus('gw-2'), null,
@@ -84,7 +83,7 @@ t('anti-loop bloqueado -> finishDelivery rejected -> pending eliminado', async (
   _setBridgeStateForTest(freshLedger());
   assert.ok(markDelivery('gw-3', 'pending'), 'admitido pending');
   const fromPk = '123'.padEnd(64, '0');
-  const toName = Object.keys(bridge.CONFIG.agents || {})[0] || 'alma';
+  const toName = Object.keys(bridge.CONFIG.agents || {})[0] || 'dave';
   const route = {to: toName, text: '@' + toName + ' duplicado-para-antiloop'};
   // Ejecutar dos veces el mismo texto: la segunda vez antiLoopCheck debe
   // bloquear (content dedup) dentro de la ventana -> rejected.
@@ -105,7 +104,7 @@ t('anti-loop bloqueado -> finishDelivery rejected -> pending eliminado', async (
 //    con un permiso otorgado, handleRoute NO llama finishDelivery(rejected).
 t('control: ruteo con permiso NO dispara rejected', async () => {
   _setBridgeStateForTest(freshLedger());
-  const toName = Object.keys(bridge.CONFIG.agents || {})[0] || 'alma';
+  const toName = Object.keys(bridge.CONFIG.agents || {})[0] || 'dave';
   // Asumimos que el primer agente permisivo puede escribir a si mismo no —
   // mejor: usamos un from que SÍ tenga permiso (si existe en routing.perms).
   const perms = (bridge.CONFIG.routing && bridge.CONFIG.routing.permissions) || {};

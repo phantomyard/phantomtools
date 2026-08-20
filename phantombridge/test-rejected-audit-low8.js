@@ -9,6 +9,7 @@
 // Este test ejercita las funciones REALES exportadas del bridge
 // (markRejected / isRejected / rejectedIds), sin bootear relay.
 const assert = require('assert');
+require('./testlib.js').setup();
 const bridge = require('./bridge.js');
 const {markRejected, isRejected, rejectedIds, markSeen, isSeen, getBridgeState, _setBridgeStateForTest} = bridge;
 

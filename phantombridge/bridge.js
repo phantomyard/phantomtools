@@ -1218,13 +1218,13 @@ if (NOSTR_MODE) {
 }
 
 const NICK = CONFIG.nick || 'secretario';
-const ROOM_SUFFIX = CONFIG.roomSuffix || '@conference.meet.aquaponicsunited.com';
+const ROOM_SUFFIX = CONFIG.roomSuffix || '@conference.meet.example.com';
 
 // ---------------------------------------------------------------------------
 // Recordings (jitsi mode only; shared by the HTTP API if applicable)
 // ---------------------------------------------------------------------------
 const RECORDINGS_DIR = CONFIG.recordingsDir || '/var/recordings';
-const DL_BASE = CONFIG.downloadBase || 'https://meet.aquaponicsunited.com';
+const DL_BASE = CONFIG.downloadBase || 'https://meet.example.com';
 const DL_SECRET_FILE = CONFIG.downloadSecretFile || '/opt/recordings-serve/.secret';
 const DL_EXPIRY_HOURS = CONFIG.downloadExpiryHours || 24;
 function readDlSecret() {
@@ -1304,7 +1304,7 @@ if (DERIVED) {
   // MEDIO-5 (audit 462e62b): org.yaml is the ONLY source of truth for
   // identity when it exists and is valid. Previously it did
   //   CONFIG.agents = Object.assign({}, DERIVED.agents, CONFIG.agents || {})
-  // which allowed an 'alma' (or a non-existent 'superadmin') from the
+  // which allowed an 'dave' (or a non-existent 'superadmin') from the
   // config.json to OVERWRITE the npub derived from org.yaml, escalating
   // privileges or violating the source of truth. Now: no merge. Manual agents
   // are ONLY used if org.yaml does not exist (legacy fallback below).
@@ -1334,7 +1334,7 @@ for (const [name, pk] of Object.entries(CONFIG.agents || {})) {
 // DM↔DM routing (nostr/both mode) — inter-department coordination
 // ---------------------------------------------------------------------------
 // CONFIG.routing: {
-//   "permissions": { "roberto": ["alma", "paco", "pepa"], "alma": ["roberto"], ... },
+//   "permissions": { "carol": ["dave", "alice", "bob"], "dave": ["carol"], ... },
 //   "default": "deny"  // what happens to a pair without an explicit rule
 // }
 // DM format: "@agent text" → forwards to that agent (prefixed "[from] text").
@@ -2449,8 +2449,8 @@ for (const [room, agents] of Object.entries(CONFIG.roomAgents || {})) {
 //
 // Config shape:
 //   "permissions": {
-//     "full":            ["pepa", "paco"],        // agents that may control ANY room
-//     "restricted": { "room-a": ["alma"], ... }  // room -> agents allowed in that room
+//     "full":            ["bob", "alice"],        // agents that may control ANY room
+//     "restricted": { "room-a": ["dave"], ... }  // room -> agents allowed in that room
 //   }
 //
 // Resolution (fail closed):
@@ -2566,7 +2566,7 @@ if (JITSI_MODE) {
 
   xmpp = client({
     service: CONFIG.xmpp.service || 'xmpps://127.0.0.1:5223',
-    domain: CONFIG.xmpp.domain || 'auth.meet.aquaponicsunited.com',
+    domain: CONFIG.xmpp.domain || 'auth.meet.example.com',
     username: CONFIG.xmpp.username || 'bridge',
     password: xmppPassword,
     ...(CONFIG.xmpp.caFile ? {ca: fs.readFileSync(path.resolve(path.dirname(CONFIG_PATH), CONFIG.xmpp.caFile))} : {}),
@@ -2703,7 +2703,7 @@ if (JITSI_MODE) {
         reject(new Error(`allocation timeout for ${roomJid} (jicofo did not respond in 15s)`));
       }, 15000);
       pendingIQs.set(id, { resolve, reject, timer });
-      const iq = xml('iq', { to: CONFIG.xmpp.focus || 'focus.' + (CONFIG.xmpp.focusDomain || 'meet.aquaponicsunited.com'), type: 'set', id },
+      const iq = xml('iq', { to: CONFIG.xmpp.focus || 'focus.' + (CONFIG.xmpp.focusDomain || 'meet.example.com'), type: 'set', id },
         xml('conference', { xmlns: 'http://jitsi.org/protocol/focus', room: roomJid }));
       console.log('[focus] IQ allocation ->', roomJid, `(id=${id})`);
       xmpp.send(iq).catch(err => {

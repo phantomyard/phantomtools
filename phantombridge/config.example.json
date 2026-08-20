@@ -38,32 +38,32 @@
     "relayNsec": "vault:bridge-relay-nsec"
   },
   "agents": {
-    "pepa": "HEX_PUBKEY_64",
-    "paco": "HEX_PUBKEY_64",
-    "roberto": "HEX_PUBKEY_64",
-    "alma": "HEX_PUBKEY_64"
+    "bob": "HEX_PUBKEY_64",
+    "alice": "HEX_PUBKEY_64",
+    "carol": "HEX_PUBKEY_64",
+    "dave": "HEX_PUBKEY_64"
   },
   "permissions": {
     "full": [
-      "pepa",
-      "paco",
-      "roberto"
+      "bob",
+      "alice",
+      "carol"
     ],
     "restricted": {
-      "almaponia": [
-        "alma"
+      "example-room": [
+        "dave"
       ]
     }
   },
   "routing": {
     "permissions": {
-      "roberto": [
-        "alma",
-        "paco",
-        "pepa"
+      "carol": [
+        "dave",
+        "alice",
+        "bob"
       ],
-      "alma": [
-        "roberto"
+      "dave": [
+        "carol"
       ]
     },
     "default": "deny"
@@ -73,7 +73,7 @@
   "downloadExpiryHours": 24,
   "roomAgents": {
     "mia": [
-      "paco"
+      "alice"
     ]
   },
   "roomTimeouts": {

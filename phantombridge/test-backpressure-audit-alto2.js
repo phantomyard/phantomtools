@@ -12,6 +12,7 @@
 // module — not a copied computeSince() math helper.
 const assert = require('assert');
 
+require('./testlib.js').setup();
 const bridge = require('./bridge.js');
 const {
   enqueueGiftWrap, pumpNostrQueue, recordDropped,

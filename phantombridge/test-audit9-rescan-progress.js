@@ -14,8 +14,7 @@ const path = require('path');
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit9-'));
 const tmpState = path.join(tmpDir, 'state.json');
-const realConfigPath = path.join(__dirname, 'config.json');
-const baseConfig = JSON.parse(fs.readFileSync(realConfigPath, 'utf8'));
+const baseConfig = require('./testlib.js').baseConfig();
 baseConfig.stateFile = tmpState;
 // Reducir umbrales para un test rápido: 1 rescan sin progreso -> BACKPRESSURE.
 baseConfig.rescanMaxStalled = 1;

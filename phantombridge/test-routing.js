@@ -18,16 +18,16 @@ fs.writeFileSync(path.join(TEST_DIR, 'config.json'), JSON.stringify({
   httpPort: 18090,
   nostr: {relay: 'ws://127.0.0.1:19999', nsec: 'env:PHANTOMBRIDGE_TEST_NSEC'},
   agents: {
-    roberto: getPublicKey(generateSecretKey()),
-    alma: getPublicKey(generateSecretKey()),
-    paco: getPublicKey(generateSecretKey()),
-    pepa: getPublicKey(generateSecretKey()),
+    carol: getPublicKey(generateSecretKey()),
+    dave: getPublicKey(generateSecretKey()),
+    alice: getPublicKey(generateSecretKey()),
+    bob: getPublicKey(generateSecretKey()),
   },
   routing: {
     permissions: {
-      roberto: ['alma', 'paco', 'pepa'],
-      alma: ['roberto'],
-      paco: ['*'],
+      carol: ['dave', 'alice', 'bob'],
+      dave: ['carol'],
+      alice: ['*'],
     },
     default: 'deny',
   },
@@ -43,64 +43,64 @@ function t(name, fn) {
   catch (e) { failed++; console.error('  FAIL:', name, '-', e.message); }
 }
 
-// Permisos de prueba: roberto puede hablar con alma/paco/pepa; alma solo con roberto
+// Permisos de prueba: carol puede hablar con dave/alice/bob; dave solo con carol
 const PERMS = {
-  roberto: ['alma', 'paco', 'pepa'],
-  alma: ['roberto'],
-  paco: ['*'],
+  carol: ['dave', 'alice', 'bob'],
+  dave: ['carol'],
+  alice: ['*'],
 };
 
 console.log('parseRouteTarget:');
-t('"@alma texto" -> {to: alma, text: texto}', () => {
-  const r = parseRouteTarget('@alma REQUEST aquaponics-united-20260811-0003');
-  assert.strictEqual(r.to, 'alma');
-  assert.strictEqual(r.text, 'REQUEST aquaponics-united-20260811-0003');
+t('"@dave texto" -> {to: dave, text: texto}', () => {
+  const r = parseRouteTarget('@dave REQUEST example-org-20250101-0003');
+  assert.strictEqual(r.to, 'dave');
+  assert.strictEqual(r.text, 'REQUEST example-org-20250101-0003');
 });
-t('"@pepa hola" -> to pepa', () => {
-  const r = parseRouteTarget('@pepa hola mundo');
-  assert.strictEqual(r.to, 'pepa');
+t('"@bob hola" -> to bob', () => {
+  const r = parseRouteTarget('@bob hola mundo');
+  assert.strictEqual(r.to, 'bob');
   assert.strictEqual(r.text, 'hola mundo');
 });
 t('"texto sin @ no es ruta"', () => {
   assert.strictEqual(parseRouteTarget('hola mundo'), null);
 });
-t('"@alma" sin texto no es ruta', () => {
-  assert.strictEqual(parseRouteTarget('@alma'), null);
+t('"@dave" sin texto no es ruta', () => {
+  assert.strictEqual(parseRouteTarget('@dave'), null);
 });
-t('"@ALMA texto" case-insensitive', () => {
-  const r = parseRouteTarget('@ALMA texto');
-  assert.strictEqual(r.to, 'alma');
+t('"@DAVE texto" case-insensitive', () => {
+  const r = parseRouteTarget('@DAVE texto');
+  assert.strictEqual(r.to, 'dave');
 });
-t('"@alma texto con [sala] dentro"', () => {
-  const r = parseRouteTarget('@alma [sala] hola');
-  assert.strictEqual(r.to, 'alma');
+t('"@dave texto con [sala] dentro"', () => {
+  const r = parseRouteTarget('@dave [sala] hola');
+  assert.strictEqual(r.to, 'dave');
   assert.strictEqual(r.text, '[sala] hola');
 });
 
 console.log('routingAllowed:');
-t('roberto -> alma permitido', () => {
-  assert.strictEqual(routingAllowed('roberto', 'alma', PERMS, 'deny'), true);
+t('carol -> dave permitido', () => {
+  assert.strictEqual(routingAllowed('carol', 'dave', PERMS, 'deny'), true);
 });
-t('roberto -> elena NO permitido (sin regla, default deny)', () => {
-  assert.strictEqual(routingAllowed('roberto', 'elena', PERMS, 'deny'), false);
+t('carol -> erin NO permitido (sin regla, default deny)', () => {
+  assert.strictEqual(routingAllowed('carol', 'erin', PERMS, 'deny'), false);
 });
-t('alma -> roberto permitido', () => {
-  assert.strictEqual(routingAllowed('alma', 'roberto', PERMS, 'deny'), true);
+t('dave -> carol permitido', () => {
+  assert.strictEqual(routingAllowed('dave', 'carol', PERMS, 'deny'), true);
 });
-t('alma -> paco NO permitido', () => {
-  assert.strictEqual(routingAllowed('alma', 'paco', PERMS, 'deny'), false);
+t('dave -> alice NO permitido', () => {
+  assert.strictEqual(routingAllowed('dave', 'alice', PERMS, 'deny'), false);
 });
-t('paco -> cualquiera permitido (wildcard *)', () => {
-  assert.strictEqual(routingAllowed('paco', 'elena', PERMS, 'deny'), true);
+t('alice -> cualquiera permitido (wildcard *)', () => {
+  assert.strictEqual(routingAllowed('alice', 'erin', PERMS, 'deny'), true);
 });
 t('self -> self siempre denegado', () => {
-  assert.strictEqual(routingAllowed('roberto', 'roberto', PERMS, 'allow'), false);
+  assert.strictEqual(routingAllowed('carol', 'carol', PERMS, 'allow'), false);
 });
 t('sin regla + default allow -> permitido', () => {
-  assert.strictEqual(routingAllowed('elena', 'alma', PERMS, 'allow'), true);
+  assert.strictEqual(routingAllowed('erin', 'dave', PERMS, 'allow'), true);
 });
 t('empty permissions + default deny -> denied', () => {
-  assert.strictEqual(routingAllowed('roberto', 'alma', {}, 'deny'), false);
+  assert.strictEqual(routingAllowed('carol', 'dave', {}, 'deny'), false);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

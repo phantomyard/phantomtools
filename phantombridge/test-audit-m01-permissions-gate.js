@@ -44,6 +44,7 @@ function evalP(permConfig, sender, room) {
 }
 // Cargamos una vez el módulo (basta para la lógica pura exportada; el config
 // base del repo se usa por compatibilidad con la carga, no para la matriz).
+require('./testlib.js').setup();
 const bridgeModule = require('./bridge.js');
 
 t('legacy: sin bloque permissions -> open (compat despliegues existentes)', () => {

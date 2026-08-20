@@ -22,8 +22,7 @@ const path = require('path');
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crash-e2e-'));
 const tmpState = path.join(tmpDir, 'state.json');
-const realConfigPath = path.join(__dirname, 'config.json');
-const baseConfig = JSON.parse(fs.readFileSync(realConfigPath, 'utf8'));
+const baseConfig = require('./testlib.js').baseConfig();
 baseConfig.stateFile = tmpState;
 const tmpConfigPath = path.join(tmpDir, 'config.json');
 fs.writeFileSync(tmpConfigPath, JSON.stringify(baseConfig, null, 2));

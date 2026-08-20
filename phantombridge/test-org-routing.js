@@ -10,24 +10,24 @@ const os = require('os');
 const {generateSecretKey, getPublicKey, nip19} = require('nostr-tools');
 
 // ---------------------------------------------------------------------------
-// Fixture: estructura de Aquaponics United (flow-maps YAML como org.yaml real)
+// Fixture: estructura de Example Org (flow-maps YAML como org.yaml real)
 // ---------------------------------------------------------------------------
 const HEX = {
-  paco: '1111111111111111111111111111111111111111111111111111111111111111',
-  pepa: '2222222222222222222222222222222222222222222222222222222222222222',
-  roberto: '3333333333333333333333333333333333333333333333333333333333333333',
-  alma: '4444444444444444444444444444444444444444444444444444444444444444',
-  elena: '5555555555555555555555555555555555555555555555555555555555555555',
+  alice: '1111111111111111111111111111111111111111111111111111111111111111',
+  bob: '2222222222222222222222222222222222222222222222222222222222222222',
+  carol: '3333333333333333333333333333333333333333333333333333333333333333',
+  dave: '4444444444444444444444444444444444444444444444444444444444444444',
+  erin: '5555555555555555555555555555555555555555555555555555555555555555',
 };
 const FIXTURE_NPUBS = [
-  HEX.paco, HEX.pepa, HEX.roberto, HEX.alma, HEX.elena
+  HEX.alice, HEX.bob, HEX.carol, HEX.dave, HEX.erin
 ].map(pk => nip19.npubEncode(pk));
 
 
 const ORG_AU = `
 version: 1
 organization:
-  id: aquaponics-united
+  id: example-org
 departments:
   - { id: direccion, name: "Dirección", parent: null }
   - { id: operaciones, name: "Operaciones", parent: direccion }
@@ -40,11 +40,11 @@ roles:
   - { id: project_lead, name: "Project Lead", department: operaciones, reports_to: chief_of_staff }
   - { id: training_lead, name: "Training Lead", department: formacion, reports_to: chief_of_staff }
 actors:
-  - { id: paco, role: ceo, npub: ${FIXTURE_NPUBS[0]} }
-  - { id: pepa, role: chief_of_staff, npub: ${FIXTURE_NPUBS[1]} }
-  - { id: roberto, role: cfo, npub: ${FIXTURE_NPUBS[2]} }
-  - { id: alma, role: project_lead, npub: ${FIXTURE_NPUBS[3]} }
-  - { id: elena, role: training_lead, npub: ${FIXTURE_NPUBS[4]} }
+  - { id: alice, role: ceo, npub: ${FIXTURE_NPUBS[0]} }
+  - { id: bob, role: chief_of_staff, npub: ${FIXTURE_NPUBS[1]} }
+  - { id: carol, role: cfo, npub: ${FIXTURE_NPUBS[2]} }
+  - { id: dave, role: project_lead, npub: ${FIXTURE_NPUBS[3]} }
+  - { id: erin, role: training_lead, npub: ${FIXTURE_NPUBS[4]} }
 escalation_matrix:
   - { from: project_lead, to: chief_of_staff, condition: "bloqueo operativo" }
   - { from: training_lead, to: chief_of_staff, condition: "contenido fuera de alcance" }
@@ -54,14 +54,14 @@ escalation_matrix:
 `;
 
 // Resultado esperado de deriveRouting(ORG_AU):
-//   reports_to bidireccional: paco↔pepa, paco↔roberto, pepa↔alma, pepa↔elena
-//   escalation *→ceo: alma→paco, elena→paco (direccional)
+//   reports_to bidireccional: alice↔bob, alice↔carol, bob↔dave, bob↔erin
+//   escalation *→ceo: dave→alice, erin→alice (direccional)
 const EXPECTED_ROUTING = {
-  paco: ['pepa', 'roberto'],
-  pepa: ['alma', 'elena', 'paco'],
-  roberto: ['paco'],
-  alma: ['paco', 'pepa'],
-  elena: ['paco', 'pepa'],
+  alice: ['bob', 'carol'],
+  bob: ['alice', 'dave', 'erin'],
+  carol: ['alice'],
+  dave: ['alice', 'bob'],
+  erin: ['alice', 'bob'],
 };
 
 const {parseOrgYaml, deriveAgents, deriveRouting, loadOrgRouting} = require('./org-routing.js');
@@ -90,7 +90,7 @@ t('yaml inválido lanza', () => {
 // deriveAgents
 // ---------------------------------------------------------------------------
 console.log('deriveAgents:');
-t('npubs reales de AU → hex exacto', () => {
+t('npubs de la org ficticia → hex exacto', () => {
   const agents = deriveAgents(parseOrgYaml(ORG_AU));
   assert.deepStrictEqual(agents, HEX);
 });
@@ -143,31 +143,31 @@ t('loadOrgRouting ante pubkey duplicado → EINVALID (fail-closed, no fallback)'
 // deriveRouting
 // ---------------------------------------------------------------------------
 console.log('deriveRouting:');
-t('jerarquía AU → routing esperado', () => {
+t('jerarquía org → routing esperado', () => {
   const routing = deriveRouting(parseOrgYaml(ORG_AU));
   assert.deepStrictEqual(routing.permissions, EXPECTED_ROUTING);
   assert.strictEqual(routing.default, 'deny');
 });
-t('reports_to es bidireccional (paco↔roberto)', () => {
+t('reports_to es bidireccional (alice↔carol)', () => {
   const {permissions} = deriveRouting(parseOrgYaml(ORG_AU));
-  assert.ok(permissions.paco.includes('roberto'));
-  assert.ok(permissions.roberto.includes('paco'));
+  assert.ok(permissions.alice.includes('carol'));
+  assert.ok(permissions.carol.includes('alice'));
 });
-t('escalada *→ceo es direccional (alma→paco, no paco→alma)', () => {
+t('escalada *→ceo es direccional (dave→alice, no alice→dave)', () => {
   const {permissions} = deriveRouting(parseOrgYaml(ORG_AU));
-  assert.ok(permissions.alma.includes('paco'));
-  assert.ok(!permissions.paco.includes('alma'));
+  assert.ok(permissions.dave.includes('alice'));
+  assert.ok(!permissions.alice.includes('dave'));
 });
-t('sin regla explícita → no hay arista (roberto→elena)', () => {
+t('sin regla explícita → no hay arista (carol→erin)', () => {
   const {permissions} = deriveRouting(parseOrgYaml(ORG_AU));
-  assert.ok(!permissions.roberto.includes('elena'));
+  assert.ok(!permissions.carol.includes('erin'));
 });
 t('multi-actor por rol: todos los actores del rol reciben la arista', () => {
   const org = parseOrgYaml(ORG_AU);
   org.actors.push({id: 'ayudante', role: 'project_lead', npub: nip19.npubEncode(getPublicKey(generateSecretKey()))});
   const {permissions} = deriveRouting(org);
-  assert.ok(permissions.ayudante.includes('pepa')); // project_lead reporta a chief_of_staff
-  assert.ok(permissions.pepa.includes('ayudante'));
+  assert.ok(permissions.ayudante.includes('bob')); // project_lead reporta a chief_of_staff
+  assert.ok(permissions.bob.includes('ayudante'));
 });
 t('sin roles/actors → vacío con default deny', () => {
   const routing = deriveRouting({roles: [], actors: [], escalation_matrix: []});
@@ -181,7 +181,7 @@ t('sin roles/actors → vacío con default deny', () => {
 console.log('loadOrgRouting:');
 const TEST_DIR = path.join(__dirname, '.test-tmp');
 fs.mkdirSync(TEST_DIR, {recursive: true});
-const ORG_FILE = path.join(TEST_DIR, 'org-au.yaml');
+const ORG_FILE = path.join(TEST_DIR, 'org-example.yaml');
 fs.writeFileSync(ORG_FILE, ORG_AU);
 
 t('archivo válido → {agents, routing}', () => {
@@ -236,7 +236,7 @@ fs.writeFileSync(CFG, JSON.stringify({
   orgFile: ORG_FILE,
   // routing manual presente PERO debe ser ignorado (org.yaml manda)
   agents: {extra: getPublicKey(generateSecretKey())},
-  routing: {permissions: {extra: ['paco']}, default: 'deny'},
+  routing: {permissions: {extra: ['alice']}, default: 'deny'},
 }, null, 2));
 fs.chmodSync(CFG, 0o600);
 
@@ -253,7 +253,7 @@ t('bridge usa routing derivado de org.yaml, no el manual', async () => {
   // MEDIO-5: agents del config NO se complementan — org.yaml es la ÚNICA
   // fuente de verdad de identidad. Un 'extra' del config NO debe aparecer.
   assert.strictEqual(status.agents.extra, undefined, 'agent extra del config IGNORADO (org.yaml manda)');
-  assert.ok(status.agents.paco, 'agent derivado presente');
+  assert.ok(status.agents.alice, 'agent derivado presente');
   await new Promise(resolve => bridge.server.close(resolve));
 });
 

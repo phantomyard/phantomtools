@@ -15,8 +15,8 @@ fs.writeFileSync(path.join(TEST_DIR, 'config.json'), JSON.stringify({
   nick: 'secretario',
   httpPort: 18091,
   nostr: {relay: 'ws://127.0.0.1:19999', nsec: 'env:PHANTOMBRIDGE_TEST_NSEC'},
-  agents: {roberto: getPublicKey(generateSecretKey()), alma: getPublicKey(generateSecretKey())},
-  routing: {permissions: {roberto: ['alma']}, default: 'deny'},
+  agents: {carol: getPublicKey(generateSecretKey()), dave: getPublicKey(generateSecretKey())},
+  routing: {permissions: {carol: ['dave']}, default: 'deny'},
 }, null, 2));
 
 process.env.PHANTOMBRIDGE_CONFIG = path.join(TEST_DIR, 'config.json');

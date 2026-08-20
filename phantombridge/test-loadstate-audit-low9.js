@@ -25,8 +25,7 @@ function t(name, fn) {
 // Build a temp config snapshot like test-persist-audit-alto3, with an
 // isolated stateFile, so STATE_FILE lands on the temp path.
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'low9-'));
-const realConfigPath = path.join(__dirname, 'config.json');
-const baseConfig = JSON.parse(fs.readFileSync(realConfigPath, 'utf8'));
+const baseConfig = require('./testlib.js').baseConfig();
 // loadState() solo corre en modo nostr/both; forzamos nostr para ejercitarlo.
 baseConfig.mode = 'nostr';
 const tmpConfigPath = path.join(tmpDir, 'config.json');
