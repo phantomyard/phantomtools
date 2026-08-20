@@ -13,8 +13,8 @@ const os = require('os');
 const path = require('path');
 
 let passed = 0, failed = 0;
-function t(n, fn) {
-  try { fn(); console.log('  ok:', n); passed++; }
+async function t(n, fn) {
+  try { await fn(); console.log('  ok:', n); passed++; }
   catch (e) { console.error('  FAIL:', n, '-', e.message); failed++; }
 }
 
@@ -23,14 +23,14 @@ async function main() {
   const { loadAdminToken } = await import('./mcp-bridge.mjs');
 
   // --- env: reference -------------------------------------------------------
-  t('env: admin token resolves to the injected value', async () => {
+  await t('env: admin token resolves to the injected value', async () => {
     process.env.PHANTOMBRIDGE_TEST_ADMIN = 'test-admin-token-123456';
     const tok = await loadAdminToken({ httpAdminToken: 'env:PHANTOMBRIDGE_TEST_ADMIN' });
     assert.strictEqual(tok, 'test-admin-token-123456');
     delete process.env.PHANTOMBRIDGE_TEST_ADMIN;
   });
 
-  t('env: admin token with unset variable fails closed', async () => {
+  await t('env: admin token with unset variable fails closed', async () => {
     delete process.env.PHANTOMBRIDGE_TEST_ADMIN;
     await assert.rejects(
       () => loadAdminToken({ httpAdminToken: 'env:PHANTOMBRIDGE_TEST_ADMIN' }),
@@ -39,7 +39,7 @@ async function main() {
   });
 
   // --- vault: reference (fake `phantombot` on PATH) --------------------------
-  t('vault: admin token resolves via phantombot vault get', async () => {
+  await t('vault: admin token resolves via phantombot vault get', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pb-mcp-vault-'));
     const bin = path.join(tmp, 'phantombot');
     // Minimal shim: `phantombot vault get <name>` echoes a fixed token.
@@ -56,7 +56,7 @@ async function main() {
     }
   });
 
-  t('vault: admin token with unresolvable name fails closed', async () => {
+  await t('vault: admin token with unresolvable name fails closed', async () => {
     await assert.rejects(
       () => loadAdminToken({ httpAdminToken: 'vault:nonexistent-bridge-token' }),
       /cannot resolve vault:/,
@@ -64,21 +64,21 @@ async function main() {
   });
 
   // --- rejection of plaintext / legacy file forms ---------------------------
-  t('plaintext inline admin token is rejected', async () => {
+  await t('plaintext inline admin token is rejected', async () => {
     await assert.rejects(
       () => loadAdminToken({ httpAdminToken: 'test-admin-token-123456' }),
       /plaintext secret not allowed/,
     );
   });
 
-  t('legacy httpAdminTokenFile key is rejected', async () => {
+  await t('legacy httpAdminTokenFile key is rejected', async () => {
     await assert.rejects(
       () => loadAdminToken({ httpAdminTokenFile: './secrets/admin.token' }),
       /no longer supported/,
     );
   });
 
-  t('missing admin token fails closed', async () => {
+  await t('missing admin token fails closed', async () => {
     delete process.env.PHANTOMBRIDGE_ADMIN_TOKEN;
     await assert.rejects(
       () => loadAdminToken({}),
@@ -86,7 +86,7 @@ async function main() {
     );
   });
 
-  t('PHANTOMBRIDGE_ADMIN_TOKEN env fallback still works', async () => {
+  await t('PHANTOMBRIDGE_ADMIN_TOKEN env fallback still works', async () => {
     process.env.PHANTOMBRIDGE_ADMIN_TOKEN = 'env-fallback-token-123456';
     const tok = await loadAdminToken({});
     assert.strictEqual(tok, 'env-fallback-token-123456');

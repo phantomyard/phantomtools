@@ -31,9 +31,12 @@ const {
 // verificamos consistencia tras operaciones.
 
 let passed = 0, failed = 0;
+let _chain = Promise.resolve();
 function t(name, fn) {
-  try { fn(); console.log('  ok:', name); passed++; }
-  catch (e) { console.error('  FAIL:', name, '-', e.message); failed++; }
+  _chain = _chain.then(async () => {
+    try { await fn(); console.log('  ok:', name); passed++; }
+    catch (e) { console.error('  FAIL:', name, '-', e.message); failed++; }
+  });
 }
 
 function freshState() {
@@ -182,6 +185,8 @@ _setBridgeStateForTest(freshState());
 try { fs.rmSync(tmpDir, {recursive: true, force: true}); } catch (_) {}
 delete process.env.PHANTOMBRIDGE_CONFIG;
 
-console.log('');
-console.log(`Result: ${passed} ok, ${failed} fail`);
-process.exit(failed ? 1 : 0);
+_chain.then(() => {
+  console.log('');
+  console.log(`Result: ${passed} ok, ${failed} fail`);
+  process.exit(failed ? 1 : 0);
+}).catch((e) => { console.error('FATAL:', e && e.message); process.exit(1); });

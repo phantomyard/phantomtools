@@ -67,9 +67,12 @@ const EXPECTED_ROUTING = {
 const {parseOrgYaml, deriveAgents, deriveRouting, loadOrgRouting} = require('./org-routing.js');
 
 let passed = 0, failed = 0;
+let _chain = Promise.resolve();
 function t(name, fn) {
-  try { fn(); passed++; console.log('  ok:', name); }
-  catch (e) { failed++; console.error('  FAIL:', name, '-', e.message); }
+  _chain = _chain.then(async () => {
+    try { await fn(); passed++; console.log('  ok:', name); }
+    catch (e) { failed++; console.error('  FAIL:', name, '-', e.message); }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +260,8 @@ t('bridge usa routing derivado de org.yaml, no el manual', async () => {
   await new Promise(resolve => bridge.server.close(resolve));
 });
 
-console.log(`\n${passed} passed, ${failed} failed`);
-fs.rmSync(TEST_DIR, {recursive: true, force: true});
-process.exit(failed ? 1 : 0);
+_chain.then(() => {
+  console.log(`\n${passed} passed, ${failed} failed`);
+  fs.rmSync(TEST_DIR, {recursive: true, force: true});
+  process.exit(failed ? 1 : 0);
+}).catch((e) => { console.error('FATAL:', e && e.message); process.exit(1); });

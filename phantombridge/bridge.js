@@ -3202,7 +3202,7 @@ const server = http.createServer((req, res) => {
       roomOccupants: JITSI_MODE ? Object.fromEntries([...roomOccupants.entries()].map(([r, s]) => [r, [...s]])) : {},
       roomIdleSecs: JITSI_MODE ? Object.fromEntries([...rooms.keys()].map(r => [r, Math.round((Date.now() - (lastActivity.get(r) || Date.now())) / 1000)])) : {},
       agents: Object.fromEntries(agentByName),
-      routing: NOSTR_MODE ? routingPerms : undefined,
+      routing: NOSTR_MODE ? {permissions: routingPerms, default: routingDefault} : undefined,
       antiloop: {
         routed: ANTILOOP.routed,
         dropped: {...ANTILOOP.dropped},

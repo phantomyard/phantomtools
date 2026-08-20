@@ -30,6 +30,10 @@ baseConfig.stateFile = tmpState;
 // Aceleramos los tiempos del rescan para el test (cooldown/rescan cortos).
 baseConfig.rescanStallCooldownMs = 500;
 baseConfig.rescanMinIntervalMs = 20;
+// Una sola petición de rescan suma 2 intentos (1 al emitir + 1 en la medición
+// sin progreso); con el umbral en 2, un único rescan sin progreso ya dispara
+// BACKPRESSURE, que es lo que este test quiere verificar de forma determinista.
+baseConfig.rescanMaxStalled = 2;
 const tmpConfigPath = path.join(tmpDir, 'config.json');
 fs.writeFileSync(tmpConfigPath, JSON.stringify(baseConfig, null, 2));
 process.env.PHANTOMBRIDGE_CONFIG = tmpConfigPath;
@@ -41,9 +45,12 @@ const {
 } = bridge;
 
 let passed = 0, failed = 0;
+let _chain = Promise.resolve();
 function t(name, fn) {
-  try { fn(); console.log('  ok:', name); passed++; }
-  catch (e) { console.error('  FAIL:', name, '-', e.message); failed++; }
+  _chain = _chain.then(async () => {
+    try { await fn(); console.log('  ok:', name); passed++; }
+    catch (e) { console.error('  FAIL:', name, '-', e.message); failed++; }
+  });
 }
 
 function freshState() {
@@ -114,8 +121,9 @@ t('deliveryCount disminuye -> progreso -> rescan no se estanca', async () => {
   requestDeliveryRescan();
   // El rescan libera 2 delivered expirables -> deliveryCount baja de 3 a 1.
   await sleep(30);
-  delete getBridgeState().delivery['X'];
-  delete getBridgeState().delivery['Y'];
+  const st = getBridgeState();
+  st.delivery = {'Z': st.delivery['Z']};   // X e Y expiran; Z (pending) queda
+  _setBridgeStateForTest(st);              // re-sincroniza deliverySize con el ledger
   await sleep(1200);
   assert.strictEqual(bridge.rescanStalled, false,
     'NO estancado: el ledger liberó entradas (deliveryCount bajó)');
@@ -217,6 +225,8 @@ _setBridgeStateForTest(freshState());
 try { fs.rmSync(tmpDir, {recursive: true, force: true}); } catch (_) {}
 delete process.env.PHANTOMBRIDGE_CONFIG;
 
-console.log('');
-console.log(`Result: ${passed} ok, ${failed} fail`);
-process.exit(failed ? 1 : 0);
+_chain.then(() => {
+  console.log('');
+  console.log(`Result: ${passed} ok, ${failed} fail`);
+  process.exit(failed ? 1 : 0);
+}).catch((e) => { console.error('FATAL:', e && e.message); process.exit(1); });
