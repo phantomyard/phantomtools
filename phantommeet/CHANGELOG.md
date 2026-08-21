@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **PR #21 re-review round 6 (atomic manifest persistence)** — closes
+  robertclawson's Major on the manifest-persistence path and Kai's open Major
+  (manifest mutation outside `_commit_writes`):
+  - **Manifest is never truncated in place**: `_persist_invite_roles` /
+    `_persist_invite_card` are replaced by `_render_manifest_invite`, which
+    renders the mutated manifest to a string buffer FIRST (ruamel to an
+    in-memory `io.StringIO`, PyYAML as the fallback) and returns it without
+    touching the file. The caller commits it with `_atomic_write` (temp +
+    `os.replace`), the same durability guarantee as every persona file.
+  - **Fallback re-parses `original`, never a clobbered file**: the PyYAML
+    fallback reads the in-memory `original` text — a failed ruamel dump can no
+    longer truncate the manifest and then persist the fragment.
+  - **Narrowed the except**: only `ImportError` (ruamel absent) triggers the
+    PyYAML fallback; a ruamel representer/parse error surfaces as a preflight
+    error instead of being silently downgraded.
+  - **Folded into the rollback batch**: the manifest write is a `_PendingWrite`
+    in the same `_commit_writes` batch as the persona writes, so a failed
+    manifest render aborts before any write and a failed manifest write rolls
+    back with everything else (no more "personas committed, invite.roles
+    absent" divergence).
+  - **`parse_tool_mode` docstring/code agree**: `chmod` strings are octal —
+    `"0o755"`, `"0755"` and `"755"` now all parse to the same `0o755` (the
+    docstring advertised `"0755"`/`"755"` while `int(mode, 0)` parsed `"755"`
+    as decimal 755 = 0o1363 and rejected `"0755"` outright).
+
 - **PR #21 re-review round 5 (transactional apply + dead-config cleanup +
   durability + content-verified health + full password coverage)** — resolves
   the two remaining CHANGES_REQUESTED threads and robertclawson's residual:

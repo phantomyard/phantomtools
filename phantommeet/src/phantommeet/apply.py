@@ -6,6 +6,7 @@ to report every change without writing anything.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -133,7 +134,8 @@ def _mode_if_exists(path: Path) -> int | None:
 def parse_tool_mode(spec: Any) -> int | None:
     """Parse a tool spec's ``chmod`` into an int permission mask, or None.
 
-    Accepts an int (0o755) or a string ("0o755", "0755", "755"); an
+    Accepts an int (0o755) or an octal string — ``"0o755"``, ``"0755"`` and
+    ``"755"`` all mean the same octal ``0o755`` (chmod semantics). An
     unparseable value yields None (no mode constraint). Shared by
     ``install_tools`` (apply) and ``check_persona_state`` (check-infra) so
     both compare the same expected mode.
@@ -144,8 +146,13 @@ def parse_tool_mode(spec: Any) -> int | None:
     if isinstance(mode, int):
         return mode
     if isinstance(mode, str):
+        text = mode.strip()
+        # chmod strings are octal; strip a leading "0o" prefix if present so
+        # "0o755", "0755" and "755" all parse to the same 0o755.
+        if text.startswith(("0o", "0O")):
+            text = text[2:]
         try:
-            return int(mode, 8) if mode.startswith("0o") else int(mode, 0)
+            return int(text, 8)
         except ValueError:
             return None
     return None
@@ -1138,13 +1145,33 @@ def apply_manifest(
         # so a crash can never leave a patched JSON with no delta to reverse
         # it. The whole batch is transactional: any failure rolls back every
         # already-applied step (no partial deployment).
-        _commit_writes(delta_writes + pending_writes, delta_removals)
-        # Interactive manifest decisions are persisted only now — after the
-        # plan is clean AND the commit succeeded.
-        if pending_roles is not None:
-            _persist_invite_roles(manifest_path, pending_roles)
-        if card_decision_made:
-            _persist_invite_card(manifest_path, pending_card)
+        writes = delta_writes + pending_writes
+
+        # Deferred interactive manifest decisions are rendered to a string
+        # FIRST (no file touched yet) and folded into the SAME rollback batch
+        # as the persona writes, so a failed manifest render aborts before any
+        # write and a failed manifest write rolls back with everything else —
+        # the manifest can never be left truncated, or out of sync with the
+        # personas that were just committed.
+        if pending_roles is not None or card_decision_made:
+            try:
+                rendered = _render_manifest_invite(
+                    manifest_path,
+                    roles=pending_roles,
+                    card=pending_card if card_decision_made else _UNSET,
+                )
+            except Exception as exc:  # noqa: BLE001
+                result.errors.append(f"cannot render manifest update: {exc}")
+                return result
+            writes.append(
+                _PendingWrite(
+                    Path(manifest_path),
+                    rendered,
+                    _mode_if_exists(Path(manifest_path)),
+                )
+            )
+
+        _commit_writes(writes, delta_removals)
 
     return result
 
@@ -1277,72 +1304,57 @@ def unapply_manifest(manifest_path: str | Path, target: str | Path) -> ApplyResu
     return result
 
 
-def _persist_invite_card(manifest_path: str | Path, card: str | None) -> None:
-    """Write the chosen ``invite.card`` back into the manifest file.
+_UNSET = object()
 
-    ``None`` removes the field (built-in format). Preserves comments and
-    formatting via ruamel.yaml when available; falls back to a plain YAML
-    round-trip otherwise.
+
+def _render_manifest_invite(
+    manifest_path: str | Path,
+    roles: list[str] | None = None,
+    card: object = _UNSET,
+) -> str:
+    """Render the manifest with the deferred invite decisions applied.
+
+    Returns the new manifest text **without touching the file**. The caller
+    commits it with ``_atomic_write`` (temp + ``os.replace``) as part of the
+    same rollback batch as the persona writes, so the manifest is never
+    truncated until a complete document exists, and a failed render aborts
+    before the first write.
+
+    ``roles`` (when not None) sets ``invite.roles``. ``card`` is ``_UNSET``
+    to leave ``invite.card`` untouched, a string to set it, or ``None`` to
+    remove it (built-in format). ruamel.yaml (round-trip) is preferred to
+    preserve comments/formatting; PyYAML is the fallback. Both parse the
+    ORIGINAL text in memory — never a file that was just truncated — and the
+    only error that triggers the fallback is ``ImportError`` (ruamel absent).
+    A ruamel representer/parse error surfaces to the caller instead of being
+    silently downgraded to a PyYAML round-trip.
     """
     p = Path(manifest_path)
-    try:
-        from ruamel.yaml import YAML
+    original = p.read_text(encoding="utf-8")
 
-        yaml_obj = YAML()
-        data = yaml_obj.load(p.read_text(encoding="utf-8"))
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
         invite = data.setdefault("invite", {})
-        if card is None:
-            invite.pop("card", None)
-        else:
-            invite["card"] = card
-        with p.open("w", encoding="utf-8") as fh:
-            yaml_obj.dump(data, fh)
-        return
-    except ImportError:
-        pass
-    # ruamel.yaml is optional; on any failure fall back to PyYAML.
-    except Exception:  # noqa: BLE001, S110  # nosec B110
-        pass
+        if roles is not None:
+            invite["roles"] = roles
+        if card is not _UNSET:
+            if card is None:
+                invite.pop("card", None)
+            else:
+                invite["card"] = card
+        return data
 
-    import yaml as pyyaml
-
-    data = pyyaml.safe_load(p.read_text(encoding="utf-8"))
-    invite = data.setdefault("invite", {})
-    if card is None:
-        invite.pop("card", None)
-    else:
-        invite["card"] = card
-    p.write_text(
-        pyyaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8"
-    )
-
-
-def _persist_invite_roles(manifest_path: str | Path, roles: list[str]) -> None:
-    """Write the chosen ``invite.roles`` back into the manifest file.
-
-    Preserves comments and formatting via ruamel.yaml when available;
-    falls back to a plain YAML round-trip otherwise.
-    """
-    p = Path(manifest_path)
     try:
         from ruamel.yaml import YAML
 
         yaml_obj = YAML()
-        data = yaml_obj.load(p.read_text(encoding="utf-8"))
-        data.setdefault("invite", {})["roles"] = roles
-        with p.open("w", encoding="utf-8") as fh:
-            yaml_obj.dump(data, fh)
-        return
+        data = _mutate(yaml_obj.load(original))
+        buf = io.StringIO()
+        yaml_obj.dump(data, buf)  # render first — no file touched yet
+        return buf.getvalue()
     except ImportError:
-        pass
-    # ruamel.yaml is optional; on any failure fall back to PyYAML.
-    except Exception:  # noqa: BLE001, S110  # nosec B110
         pass
 
     import yaml as pyyaml
 
-    data = pyyaml.safe_load(p.read_text(encoding="utf-8"))
-    data.setdefault("invite", {})["roles"] = roles
-    p.write_text(
-        pyyaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8"
-    )
+    data = _mutate(pyyaml.safe_load(original))
+    return pyyaml.safe_dump(data, sort_keys=False, allow_unicode=True)

@@ -1094,3 +1094,107 @@ def test_meeting_invite_shell_quotes_manifest_scalars() -> None:
     assert not marker.exists(), "malicious phantombot_bin value must not execute"
     # The script still ran to completion (the injected value is inert).
     assert proc.returncode == 0, proc.stderr
+
+
+def test_parse_tool_mode_accepts_octal_strings() -> None:
+    """chmod strings are octal: "0o755", "0755" and "755" all mean 0o755.
+    (The docstring used to advertise "0755"/"755" while int(mode, 0) parsed
+    "755" as decimal 755 = 0o1363 and rejected "0755" outright.)"""
+    from phantommeet.apply import parse_tool_mode
+
+    assert parse_tool_mode({"chmod": 0o755}) == 0o755
+    assert parse_tool_mode({"chmod": "0o755"}) == 0o755
+    assert parse_tool_mode({"chmod": "0755"}) == 0o755
+    assert parse_tool_mode({"chmod": "755"}) == 0o755
+    assert parse_tool_mode({"chmod": "0o600"}) == 0o600
+    assert parse_tool_mode({"chmod": "644"}) == 0o644
+    assert parse_tool_mode({"chmod": "not-a-mode"}) is None
+    assert parse_tool_mode({"chmod": ""}) is None
+    assert parse_tool_mode({}) is None
+    assert parse_tool_mode("not-a-dict") is None
+
+
+def test_render_manifest_invite_roundtrips_roles_and_card(tmp_path: Path) -> None:
+    """The manifest render applies invite.roles and invite.card together, in
+    memory, without touching the file (the caller commits atomically)."""
+    from phantommeet.apply import _render_manifest_invite
+
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    manifest["invite"].pop("roles", None)
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8"
+    )
+    before = manifest_path.read_bytes()
+
+    rendered = _render_manifest_invite(
+        str(manifest_path),
+        roles=["pedro", "lucia"],
+        card="new card %TITLE% %DATETIME% %LINK%",
+    )
+    # Render is read-only: the file is never truncated during render.
+    assert manifest_path.read_bytes() == before
+    data = yaml.safe_load(rendered)
+    assert data["invite"]["roles"] == ["pedro", "lucia"]
+    assert data["invite"]["card"] == "new card %TITLE% %DATETIME% %LINK%"
+
+    # card=None removes the field (built-in format).
+    rendered = _render_manifest_invite(str(manifest_path), roles=["pedro"], card=None)
+    data = yaml.safe_load(rendered)
+    assert data["invite"]["roles"] == ["pedro"]
+    assert "card" not in data["invite"]
+
+
+def test_manifest_render_failure_preserves_manifest(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A failed manifest render (ruamel dump raising mid-write) must surface
+    as an error and leave the manifest byte-identical — never truncate it in
+    place and persist the fragment as the new manifest."""
+    import sys
+    import types
+
+    from phantommeet import discovery
+    from phantommeet.apply import apply_manifest
+
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    manifest["invite"].pop("roles", None)
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8"
+    )
+    before = manifest_path.read_bytes()
+
+    personas = tmp_path / "personas"
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        (personas / pid).mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(discovery, "prompt_for_roles", lambda *a, **k: ["pedro"])
+
+    # Inject a fake ruamel.yaml whose dump writes one line then fails, to
+    # reproduce the ENOSPC/EIO mid-dump corruption deterministically (ruamel
+    # is an optional dependency and may be absent from the test env).
+    class _ExplodingYAML:
+        def load(self, text):
+            return yaml.safe_load(text)
+
+        def dump(self, data, stream=None, *args, **kwargs):
+            stream.write("org: acme\n")
+            raise OSError("ENOSPC (simulated)")
+
+    fake_ruamel = types.ModuleType("ruamel")
+    fake_ruamel.__path__ = []
+    fake_ruamel_yaml = types.ModuleType("ruamel.yaml")
+    fake_ruamel_yaml.YAML = _ExplodingYAML
+    monkeypatch.setitem(sys.modules, "ruamel", fake_ruamel)
+    monkeypatch.setitem(sys.modules, "ruamel.yaml", fake_ruamel_yaml)
+
+    result = apply_manifest(str(manifest_path), str(personas), ask_roles=True)
+
+    # (i) the failure surfaces — the render error is recorded, not swallowed.
+    assert result.errors
+    assert "ENOSPC" in result.errors[0]
+    # (ii) the manifest is byte-identical to before.
+    assert manifest_path.read_bytes() == before
+    # Nothing else was committed either: the render aborts before Phase 2.
+    assert not (personas / "maria" / "kb" / "procedures" / "Meetings.md").exists()
