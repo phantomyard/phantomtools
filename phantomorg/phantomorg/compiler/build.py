@@ -327,9 +327,7 @@ def _norm_drawer_bullets(spec: OrgSpec, t: dict) -> list[str]:
     ceo_name = root.name if root else "CEO"
     reports_to_human = root.reports_to_human if root else None
     marker = (
-        spec.communication.envelope.marker
-        if spec.communication.envelope
-        else "[env]"
+        spec.communication.envelope.marker if spec.communication.envelope else "[env]"
     )
     bullets: list[str] = []
     hc = spec.communication.human_channel
@@ -346,9 +344,7 @@ def _norm_drawer_bullets(spec: OrgSpec, t: dict) -> list[str]:
         if ac.relay:
             line += f" — relay `{ac.relay}`"
         bullets.append(line)
-    bullets.append(
-        f"**{t['norm_drawer_rid']}**: `{resolve_request_id_format(spec)}`"
-    )
+    bullets.append(f"**{t['norm_drawer_rid']}**: `{resolve_request_id_format(spec)}`")
     bullets.append(t["norm_drawer_no_private"])
     if reports_to_human:
         bullets.append(

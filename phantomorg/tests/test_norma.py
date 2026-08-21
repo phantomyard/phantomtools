@@ -1,4 +1,3 @@
-import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -144,6 +143,27 @@ class TestNormaCompiled(unittest.TestCase):
             self.assertIn("phantomchat", drawer.lower())
             # The full protocol page is referenced for the human-readable copy.
             self.assertIn("[[procedures/comunicacion-agentes]]", drawer)
+
+    def test_norm_drawer_one_bullet_per_line(self):
+        """The concise drawer must file one bullet per line: phantombot's
+        drawer-ingest parser splits on newlines, and a single line carrying
+        two bullets gets filed as one mangled entry (the regression this
+        template change exists to prevent)."""
+        spec, _ = validate_org(AU_ORG)
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            build(spec, out_dir, only="dana")
+            drawer = (out_dir / "dana" / "memory" / "norms.md").read_text(
+                encoding="utf-8"
+            )
+            block = drawer.split("<!-- ORG:BEGIN norms -->")[1].split(
+                "<!-- ORG:END norms -->"
+            )[0]
+            bullets = [ln for ln in block.splitlines() if ln.lstrip().startswith("- ")]
+            self.assertGreaterEqual(len(bullets), 5)
+            # No line may carry more than one bullet (trim_blocks regression).
+            for ln in bullets:
+                self.assertNotIn("- ", ln[2:], f"two bullets on one line: {ln!r}")
 
     def test_build_skips_norma_without_channels(self):
         """Backward compatible: orgs without channels get no norm file."""
