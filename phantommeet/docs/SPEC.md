@@ -347,20 +347,25 @@ A bash script rendered from `templates/tools/meeting-invite.sh.j2`:
   slogan, separators, emoji, signature). Mandatory tokens `%TITLE%`,
   `%DATETIME%`, `%LINK%` are enforced at load/apply time — a card missing
   any of them is rejected. Optional tokens: `%RECIPIENTS%`, `%ROOM%`,
-  `%PASSWORD_LINE%` (empty if no password). Blank lines are stripped on
-  send. Without `invite.card`, a built-in language-aware format is used
-  (📅 title, 👥 recipients, 🕐 start time, 🔗 room link, optional 🔒
-  password). The card is configured at install time (edit the manifest and
+  `%PASSWORD_LINE%` (a "password shared separately" notice when the room is
+  password-locked — the secret itself is never broadcast). Blank lines are
+  stripped on send. Without `invite.card`, a built-in language-aware format
+  is used (📅 title, 👥 recipients, 🕐 start time, 🔗 room link, optional 🔒
+  password-protected notice). The card is configured at install time (edit
+  the manifest and
   `pm apply`) and can be changed any time afterwards the same way;
 - sends the invitation via `phantombot notify` as a **notification only**
   (delivery mechanism is manifest-driven: `send_via`); `notify` broadcasts to
   every authorized owner on every configured channel — there is no targeted
-  per-chat delivery interface;
+  per-chat delivery interface, so the **room password never travels in the
+  broadcast body**: the script only declares it (`--password-vault` /
+  `--password-file`) and the card shows a "shared separately" notice;
 - never schedules tasks or sends messages on behalf of other personas, and
   never switches personas — each recipient joins from its **own scheduled
   task**, never by parsing the invitation text;
-- `--dry-run` prints everything without side effects (and never reads or
-  prints the room password: it shows a placeholder).
+- `--dry-run` prints everything without side effects. The room password is
+  declared (`--password-vault` / `--password-file`) but **never read and never
+  broadcast** — in dry-run and real run alike.
 
 Applying PhantomMeet must never break the existing installation:
 `--dry-run` reports every change before writing; all operations are

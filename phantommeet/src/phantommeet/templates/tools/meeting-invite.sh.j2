@@ -23,15 +23,18 @@
 #   --recipients LIST     Comma-separated @mentions of the recipients (required)
 #   --topic TEXT          Optional room topic token; when omitted, the {topic}
 #                         slot (and its leading hyphen) is dropped from the name
-#   --password-vault NAME Read the room password from the vault (never argv)
-#   --password-file PATH  Read the room password from a file (never argv)
+#   --password-vault NAME Declare the room is password-locked (secret lives in
+#                         the vault; never read or broadcast here)
+#   --password-file PATH  Declare the room is password-locked (secret lives in
+#                         the file; never read or broadcast here)
 #   --dry-run             Print everything without sending anything
 #
 # Announcement card format: the manifest may define a custom card
 # (invite.card) using the tokens %TITLE%, %RECIPIENTS%, %DATETIME%,
-# %LINK%, %ROOM% and %PASSWORD_LINE% (expands to the password line, or
-# nothing when no password is set). Without invite.card, a built-in
-# language-aware format is used.
+# %LINK%, %ROOM% and %PASSWORD_LINE% (expands to a "password shared
+# separately" notice when the room is password-locked, or nothing when it is
+# not — the secret itself is never read or broadcast). Without invite.card,
+# a built-in language-aware format is used.
 #
 # Every message that leaves this machine goes through phantombot; this
 # script only shells out to the configured binary.
@@ -97,29 +100,20 @@ if [[ ! "$DATETIME" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|
   exit 1
 fi
 
-# --- resolve the room password: vault or file, never argv -----------------
-PASSWORD=""
+# --- room password: declared, never read, never broadcast ------------------
+# `phantombot notify` broadcasts to every authorized owner on every configured
+# channel, so the room password must NOT travel in the invitation body. The
+# --password-vault / --password-file flags only DECLARE that the room is
+# password-locked (and name where the secret lives for the operator). This
+# script never reads the secret and never prints it; recipients receive the
+# password through a separate, targeted channel — not this broadcast.
+PASSWORD_SET=0
 if [[ -n "$PASSWORD_VAULT" && -n "$PASSWORD_FILE" ]]; then
   echo "error: use either --password-vault or --password-file, not both" >&2
   exit 1
 fi
-if [[ "$DRY_RUN" -eq 1 ]]; then
-  # A dry run never reads or prints the real secret: the placeholder stands
-  # in for whatever the source holds, and nothing else leaks to stdout.
-  if [[ -n "$PASSWORD_VAULT" ]]; then
-    PASSWORD="***"
-    echo "[dry-run] password from vault: ${PASSWORD_VAULT}"
-  elif [[ -n "$PASSWORD_FILE" ]]; then
-    PASSWORD="***"
-    echo "[dry-run] password from file: ${PASSWORD_FILE}"
-  fi
-else
-  if [[ -n "$PASSWORD_VAULT" ]]; then
-    PASSWORD="$("${PHANTOMBOT_BIN}" vault get "${PASSWORD_VAULT}" 2>/dev/null || true)"
-    [[ -n "$PASSWORD" ]] || { echo "error: vault entry ${PASSWORD_VAULT} is empty/missing" >&2; exit 1; }
-  elif [[ -n "$PASSWORD_FILE" ]]; then
-    PASSWORD="$(<"${PASSWORD_FILE}")"
-  fi
+if [[ -n "$PASSWORD_VAULT" || -n "$PASSWORD_FILE" ]]; then
+  PASSWORD_SET=1
 fi
 
 # --- resolve the phantombot binary (skipped in --dry-run) ------------------
@@ -188,11 +182,11 @@ if [[ -n "$CARD_TEMPLATE" ]]; then
   card_text="${card_text//%DATETIME%/$DATETIME}"
   card_text="${card_text//%LINK%/$MEET_BASE_URL/$room_name}"
   card_text="${card_text//%ROOM%/$room_name}"
-  if [[ -n "$PASSWORD" ]]; then
+  if [[ "$PASSWORD_SET" -eq 1 ]]; then
     if [[ "$LANGUAGE" == "es" ]]; then
-      card_text="${card_text//%PASSWORD_LINE%/🔒 Contraseña: $PASSWORD}"
+      card_text="${card_text//%PASSWORD_LINE%/🔒 Contraseña: se comparte por separado}"
     else
-      card_text="${card_text//%PASSWORD_LINE%/🔒 Password: $PASSWORD}"
+      card_text="${card_text//%PASSWORD_LINE%/🔒 Password: shared separately}"
     fi
   else
     card_text="${card_text//%PASSWORD_LINE%/}"
@@ -205,16 +199,16 @@ else
     INVITE_RECIPIENTS="👥 Destinatarios: ${RECIPIENTS}"
     INVITE_TIME="🕐 ${DATETIME}"
     INVITE_LINK="🔗 ${MEET_BASE_URL}/${room_name}"
-    if [[ -n "$PASSWORD" ]]; then
-      INVITE_PASSWORD="🔒 Contraseña: ${PASSWORD}"
+    if [[ "$PASSWORD_SET" -eq 1 ]]; then
+      INVITE_PASSWORD="🔒 Contraseña: se comparte por separado"
     fi
   else
     INVITE_HEADER="📅 Meeting: ${TITLE}"
     INVITE_RECIPIENTS="👥 Recipients: ${RECIPIENTS}"
     INVITE_TIME="🕐 ${DATETIME}"
     INVITE_LINK="🔗 ${MEET_BASE_URL}/${room_name}"
-    if [[ -n "$PASSWORD" ]]; then
-      INVITE_PASSWORD="🔒 Password: ${PASSWORD}"
+    if [[ "$PASSWORD_SET" -eq 1 ]]; then
+      INVITE_PASSWORD="🔒 Password: shared separately"
     fi
   fi
 
@@ -240,16 +234,11 @@ else
 fi
 
 # --- summary ----------------------------------------------------------------
-# Redact the password: the real secret never reaches stdout or terminal
-# history. The invitation sent to recipients keeps it; this echo does not.
-if [[ -n "$PASSWORD" && "$PASSWORD" != "***" ]]; then
-  display="${invite_text//${PASSWORD}/***}"
-else
-  display="$invite_text"
-fi
+# The invitation body never contains the room password (it is declared, never
+# read, and never broadcast), so it is safe to echo verbatim.
 echo "---"
 echo "room       : ${room_name}"
 echo "invite     :"
-echo "${display}"
+echo "${invite_text}"
 exit 0
 {% endraw %}

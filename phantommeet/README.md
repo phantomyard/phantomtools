@@ -18,7 +18,9 @@ everything they need to run, join, and follow up on meetings:
   `%PASSWORD_LINE%`), validated at load — `%TITLE%`, `%DATETIME%`, `%LINK%`
   mandatory, the rest optional. Set via `pm apply --ask-card` (interactive)
   or `--card-file FILE` (one-shot); `base` restores the packaged template,
-  `clear` falls back to the built-in ES/EN format.
+  `clear` falls back to the built-in ES/EN format. Room passwords are
+  **declared** (`--password-vault`/`--password-file`) but **never read nor
+  broadcast**: the card shows a "shared separately" notice.
 - **Unified recording naming**: meeting room name == recording file name
   (`{YYYY-MM-DD}-{HH-MM}_{topic}`); recording storage in the org's
   `storage.drive_folder` (e.g. `Grabaciones`).

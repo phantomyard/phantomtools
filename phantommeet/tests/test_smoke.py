@@ -288,8 +288,8 @@ def test_meeting_invite_rejects_invalid_datetime() -> None:
 
 def test_meeting_invite_custom_card_renders_manifest_template(tmp_path: Path) -> None:
     """invite.card overrides the built-in announcement format and its
-    %TOKENS% are substituted with runtime values. The password is read from
-    a file (--password-file), never argv."""
+    %TOKENS% are substituted with runtime values. The password is only
+    declared via --password-file; it is never read nor broadcast."""
     manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
     assert "card" in manifest["invite"], "example manifest should define invite.card"
     ctx = _persona_context("maria", manifest)
@@ -331,11 +331,72 @@ def test_meeting_invite_custom_card_renders_manifest_template(tmp_path: Path) ->
     assert "👥 Destinatarios: @maria,@salvador" in out
     assert "🕐 2026-08-14T18:00:00" in out
     assert "🔗 https://meet.example.invalid/2026-08-14-18-00_asamblea_general" in out
-    # Dry-run redacts the password: the real secret never reaches stdout
-    # (it would otherwise land in logs/terminal history).
-    assert "🔒 Contraseña: ***" in out
+    # The password is declared, never read nor broadcast: the card carries a
+    # "shared separately" notice and the secret never reaches stdout/broadcast.
+    assert "🔒 Contraseña: se comparte por separado" in out
     assert "clave42" not in out
     assert "%TITLE%" not in out
+
+
+def test_meeting_invite_never_broadcasts_password(tmp_path: Path) -> None:
+    """The room password must never travel in the untargeted `phantombot
+    notify` broadcast (it reaches every authorized owner on every channel).
+    The script declares the password but never reads or broadcasts it."""
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    ctx = _persona_context("maria", manifest)
+    rendered = _tool_env("es").get_template("meeting-invite.sh.j2").render(**ctx)
+
+    pw_file = tmp_path / "pw.txt"
+    pw_file.write_text("secreto-supremo", encoding="utf-8")
+
+    # Fake phantombot: records its argv so the test can inspect the broadcast.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "phantombot"
+    fake.write_text(
+        '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" >> "${PHANTOMBOT_ARGS_FILE}"\n',
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    args_file = tmp_path / "phantombot-args.txt"
+
+    script = REPO / "_test_invite_broadcast.sh"
+    script.write_text(rendered)
+    try:
+        proc = subprocess.run(
+            [
+                "bash",
+                str(script),
+                "--title",
+                "Junta Directiva",
+                "--datetime",
+                "2026-08-14T18:00:00",
+                "--recipients",
+                "@maria,@salvador",
+                "--topic",
+                "junta directiva",
+                "--password-file",
+                str(pw_file),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={
+                **os.environ,
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                "PHANTOMBOT_ARGS_FILE": str(args_file),
+            },
+        )
+    finally:
+        script.unlink(missing_ok=True)
+
+    assert proc.returncode == 0, proc.stderr
+    sent = args_file.read_text(encoding="utf-8") if args_file.exists() else ""
+    # The broadcast signals "password-protected" but never carries the secret.
+    assert "notify" in sent
+    assert "se comparte por separado" in sent
+    assert "secreto-supremo" not in sent
+    assert "secreto-supremo" not in proc.stdout
 
 
 def test_meeting_invite_card_password_line_omitted_when_empty() -> None:

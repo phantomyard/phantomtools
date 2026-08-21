@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **PR #21 re-review round 4 (password out of the notify broadcast)** — the
+  room password was still travelling in the body of the untargeted
+  `phantombot notify` (broadcast to every authorized owner on every channel):
+  - **`meeting-invite.sh` never reads nor broadcasts the password**: the
+    `--password-vault` / `--password-file` flags only *declare* that the room
+    is password-locked; the secret is never fetched and never rendered into
+    the card. `%PASSWORD_LINE%` renders a "shared separately" notice instead,
+    and the stdout redaction is gone (no secret to redact).
+  - **Delivery is out-of-band**: docs state the password reaches recipients
+    through a separate, targeted channel — not the broadcast.
+
 - **PR #21 re-review round 3 (relay_npubs path)** — phantombot's untrusted
   relay tier landed (phantomyard/phantombot#400 closed by #423), so PhantomMeet
   now registers the bridge npub there instead of failing closed:

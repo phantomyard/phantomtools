@@ -39,9 +39,20 @@ sigue sin tocar `allowed_npubs`. `check-infra` valida la ruta real: npub en
 relay como el npub añadidos, y `pm unapply` revierte ambos. Docs (README/SPEC)
 alineados con la ruta `relay_npubs`.
 
+## Notify password (2026-08-21)
+
+El password de sala aún viajaba en el body del `phantombot notify` (broadcast
+untargeted a todos los owners autorizados). Fix: `meeting-invite.sh` **declara**
+la contraseña (`--password-vault`/`--password-file`) pero **nunca la lee ni la
+emite**; `%PASSWORD_LINE%` renderiza el aviso "se comparte por separado" /
+"shared separately". El secreto se entrega fuera del broadcast (canal dirigido).
+Test nuevo: `test_meeting_invite_never_broadcasts_password` (phantombot falso
+que captura argv; verifica que el body no contiene el secreto).
+
 ## Tests de regresión añadidos
 
 - `test_bridge_npub_never_in_allowed_npubs` / `test_patch_phantomchat_records_added_relay_delta`
+- `test_meeting_invite_never_broadcasts_password`
 - `test_contained_dest_refuses_path_escape` / `test_apply_refuses_tool_path_escape`
 - `test_upsert_kb_preserves_prefix_and_suffix`
 - `test_apply_preflight_aborts_before_partial_write`
