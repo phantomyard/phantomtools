@@ -1,0 +1,16 @@
+<!-- ORG:BEGIN norms -->
+## {{ t.norm_drawer_header }}
+
+{% if human_channel -%}
+- **{{ t.norm_drawer_human }}**: {{ human_channel.platform }}{% if human_channel.group %} — {{ human_channel.group }}{% endif %}{% if human_channel.chat_id %} (`{{ human_channel.chat_id }}`){% endif %}
+{% endif -%}
+{% if agent_channel -%}
+- **{{ t.norm_drawer_agent }}**: {{ agent_channel.platform }}{% if agent_channel.relay %} — relay `{{ agent_channel.relay }}`{% endif %}
+{% endif -%}
+- **{{ t.norm_drawer_rid }}**: `{{ request_id_format }}`
+- {{ t.norm_drawer_no_private }}
+- {% if reports_to_human %}{{ t.norm_drawer_escalate_full.format(ceo_name=ceo_name, reports_to_human=reports_to_human) }}{% else %}{{ t.norm_drawer_escalate_short.format(ceo_name=ceo_name) }}{% endif %}
+{% if marker -%}
+- {{ t.norm_drawer_envelope.format(marker=marker) }}
+{% endif -%}
+<!-- ORG:END norms -->
