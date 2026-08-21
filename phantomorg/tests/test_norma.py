@@ -1,3 +1,4 @@
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -130,6 +131,13 @@ class TestNormaCompiled(unittest.TestCase):
             # The drawer carries an owned ORG block with the concise rules.
             self.assertIn("ORG:BEGIN norms", drawer)
             self.assertIn("ORG:END norms", drawer)
+            # Interim hardening: the block opens with a deploy-date
+            # `## YYYY-MM-DD` header so phantombot's drawer-ingest
+            # parser files entries with real dates, not file mtime.
+            self.assertRegex(
+                drawer,
+                r"<!-- ORG:BEGIN norms -->\s*\n## \d{4}-\d{2}-\d{2}\n",
+            )
             # The concise block names the channels / request-id format the
             # judge needs to recognize routine traffic.
             self.assertIn("telegram", drawer.lower())
