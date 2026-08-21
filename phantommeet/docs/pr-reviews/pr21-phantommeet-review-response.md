@@ -14,7 +14,7 @@ verdes pero el comportamiento sigue inseguro e internamente inconsistente."
 
 | # | Hallazgo | Archivo | Fix aplicado |
 |---|---|---|---|
-| 1 | bridge npub en `allowed_npubs` = grant de confianza (upstream #400) | apply.py:433 | `_patch_phantomchat` ya NO añade el npub a `allowed_npubs` (fail-closed); solo mueve el relay privado al frente. Documentado `relay_npubs` (#400) |
+| 1 | bridge npub en `allowed_npubs` = grant de confianza (upstream #400) | apply.py:512 | `_patch_phantomchat` registra el npub en `relay_npubs` (#423) y nunca toca `allowed_npubs`; mueve el relay privado al frente |
 | 2 | docs/SPEC enseñan "confía en la línea de destinatarios" + task free-text | meeting-workflow.md:84, SPEC.md, example/base manifests | docs + manifests sanitizados: la invitación es informativa, el join lo impulsa la tarea programada propia |
 | 3 | `_contained_path` solo en legacy; `install_tools` escapa | apply.py:532 | `_contained_dest` (traversal + symlink) en CADA dest de tool, ANTES de leer/renderizar |
 | 4 | shell injection vía `invite.phantombot_bin` + heredoc terminable | meeting-invite.sh.j2:44 | filtro `shquote` (shlex.quote) en todos los escalares del manifest; card shell-quoted en vez de heredoc |
@@ -25,14 +25,19 @@ verdes pero el comportamiento sigue inseguro e internamente inconsistente."
 | 9 | docs `--self-join`/`task add` ya no existen | meeting-workflow.md:66 | docs limpios (workflow mediado por operador) |
 | 10 | `_upsert_kb` descarta prefijo entre frontmatter y marker | apply.py:711 | `_split_frontmatter` preserva prefijo + sufijo |
 | 11 | banner "Superseded" antepuesto al frontmatter OKF | apply.py:651 | `_supersede_legacy_kb` inserta el banner DESPUÉS del frontmatter |
-| 12 | `check_persona_state` no verifica versión/contenido/tools | infra.py:450 | compara el body generado de Meetings.md + presencia de tools + npub del bridge NO en allowed_npubs |
+| 12 | `check_persona_state` no verifica versión/contenido/tools | infra.py:444 | compara el body generado de Meetings.md + presencia de tools + npub del bridge en `relay_npubs` (y NO en `allowed_npubs`) |
 
-## Bloqueante upstream (NO nuestro)
+## Actualización (2026-08-21): `relay_npubs` aterrizó
 
-El tier `relay_npubs` en phantombot (issue #400). Hasta que phantombot lo
-implemente, el bridge no debe estar en `allowed_npubs` (fail-closed): las
-reuniones vía DM del bridge no funcionan hasta entonces, pero el perímetro no
-se debilita. Es el MISMO bloqueante que phantomorg #25.
+El tier untrusted `relay_npubs` ya está en phantombot (#400 cerrado por #423).
+`_patch_phantomchat` ahora registra el npub del bridge en `relay_npubs` (lista
+paralela de menor confianza: el remitente pasa por el threat judge, se trata
+como untrusted, nunca arma TOFU y responde como `shared` incluso en DM 1:1) y
+sigue sin tocar `allowed_npubs`. `check-infra` valida la ruta real: npub en
+`allowed_npubs` = FAIL, npub ausente de `relay_npubs` (para personas con acceso)
+= FAIL. El delta owned (`.phantommeet-phantomchat.delta.json`) registra tanto el
+relay como el npub añadidos, y `pm unapply` revierte ambos. Docs (README/SPEC)
+alineados con la ruta `relay_npubs`.
 
 ## Tests de regresión añadidos
 

@@ -511,17 +511,24 @@ def _upsert_kb(existing: str, frontmatter: str, body: str) -> str:
 
 def _patch_phantomchat(
     data: dict[str, Any], relay: str, bridge_npub: str | None, include_bridge: bool
-) -> tuple[dict[str, Any], str | None]:
-    """Ensure the private relay is first. Returns ``(patched, relay_added)``
-    where ``relay_added`` is the relay string when PhantomMeet *added* it to
-    the list (it was not present before) — that is the owned delta — or None
-    when it was already present (mere reorder) or empty.
+) -> tuple[dict[str, Any], str | None, str | None]:
+    """Ensure the private relay is first and the bridge npub is registered in
+    the untrusted ``relay_npubs`` tier. Returns
+    ``(patched, relay_added, npub_added)``:
 
-    The bridge npub is NOT added to ``allowed_npubs``: that is a trust grant
-    in phantombot (allowlisted senders skip the threat judge), not a delivery
-    ACL. Until phantombot ships the untrusted ``relay_npubs`` tier
-    (phantomyard/phantombot#400), PhantomMeet fails closed and never mutates
-    ``allowed_npubs``.
+    - ``relay_added`` — the relay string when PhantomMeet *added* it to the
+      ``relays`` list (it was not present before) — the owned delta — or None
+      when it was already present (mere reorder) or empty.
+    - ``npub_added`` — the bridge npub when PhantomMeet *added* it to
+      ``relay_npubs`` (it was not present before) — the owned delta — or None.
+
+    The bridge npub is NEVER added to ``allowed_npubs``: that is a trust
+    grant in phantombot (allowlisted senders skip the threat judge), not a
+    delivery ACL. It goes to ``relay_npubs`` instead — phantombot's untrusted
+    relay tier (phantomyard/phantombot#423), where a relay sender is
+    threat-screened, treated as untrusted, never arms TOFU, and replies as
+    ``shared`` even in a 1:1 DM. When ``include_bridge`` is false the
+    ``relay_npubs`` list is left untouched.
     """
     relays = list(data.get("relays", []))
     relay_added: str | None = None
@@ -533,10 +540,15 @@ def _patch_phantomchat(
         relays.insert(0, relay)
     data["relays"] = relays
 
-    # Deliberately unused: named so call sites and the meaning stay explicit.
-    _ = (bridge_npub, include_bridge)
+    npub_added: str | None = None
+    if include_bridge and bridge_npub:
+        relay_npubs = list(data.get("relay_npubs", []))
+        if bridge_npub not in relay_npubs:
+            relay_npubs.append(bridge_npub)
+            npub_added = bridge_npub
+        data["relay_npubs"] = relay_npubs
 
-    return data, relay_added
+    return data, relay_added, npub_added
 
 
 def _personas_in_manifest(manifest: dict[str, Any]) -> list[str]:
@@ -814,7 +826,7 @@ def apply_manifest(
     # (no partial apply).
     # ------------------------------------------------------------------
     pending_writes: list[_PendingWrite] = []
-    phantomchat_deltas: dict[str, str | None] = {}
+    phantomchat_deltas: dict[str, tuple[str | None, str | None]] = {}
 
     for persona_id in _personas_in_manifest(manifest):
         persona_dir = root / persona_id
@@ -911,7 +923,7 @@ def apply_manifest(
                     f"{persona_id}/phantomchat.json: invalid JSON ({exc})"
                 )
                 continue
-            patched, relay_added = _patch_phantomchat(
+            patched, relay_added, npub_added = _patch_phantomchat(
                 pc_data, relay, bridge_npub, include_bridge
             )
             if patched == json.loads(original_text):
@@ -920,7 +932,7 @@ def apply_manifest(
                 )
             else:
                 result.changes.append(Change(persona_id, PHANTOMCHAT_REL, "patch"))
-                phantomchat_deltas[persona_id] = relay_added
+                phantomchat_deltas[persona_id] = (relay_added, npub_added)
                 pending_writes.append(
                     _PendingWrite(
                         pc_dest,
@@ -953,13 +965,15 @@ def apply_manifest(
         # Record the owned phantomchat delta only for personas whose file was
         # actually patched. A delta records ONLY the field we own (the relay we
         # added), never a frozen snapshot of unrelated operator config.
-        for persona_id, relay_added in phantomchat_deltas.items():
+        for persona_id, (relay_added, npub_added) in phantomchat_deltas.items():
             delta_dest = root / persona_id / PHANTOMCHAT_DELTA_REL
+            delta: dict[str, str] = {}
             if relay_added is not None:
-                _atomic_write(
-                    delta_dest,
-                    json.dumps({"relay_added": relay_added}, indent=2) + "\n",
-                )
+                delta["relay_added"] = relay_added
+            if npub_added is not None:
+                delta["npub_added"] = npub_added
+            if delta:
+                _atomic_write(delta_dest, json.dumps(delta, indent=2) + "\n")
             else:
                 # No owned delta (mere reorder of an existing relay): drop any
                 # stale delta so `pm unapply` has nothing stale to reverse.
@@ -974,9 +988,10 @@ def unapply_manifest(manifest_path: str | Path, target: str | Path) -> ApplyResu
     Only PhantomMeet-owned state is touched, and only by reversing recorded
     deltas — never by replacing unrelated current configuration:
 
-    - ``phantomchat.json``: remove the relay recorded in the owned delta
-      (``.phantommeet-phantomchat.delta.json``), leaving every other relay and
-      all other fields exactly as they are.
+    - ``phantomchat.json``: remove the relay and bridge npub recorded in the
+      owned delta (``.phantommeet-phantomchat.delta.json``), leaving every
+      other relay, ``relay_npubs`` entry and all other fields exactly as they
+      are.
     - ``kb/procedures/Meetings.md``: strip the managed marker block, keeping
       the OKF frontmatter and any operator content around it.
     - ``MEMORY.md``: strip the managed marker section, keeping the rest.
@@ -995,16 +1010,18 @@ def unapply_manifest(manifest_path: str | Path, target: str | Path) -> ApplyResu
         if not persona_dir.is_dir():
             continue
 
-        # 1) phantomchat.json — reverse the owned relay delta.
+        # 1) phantomchat.json — reverse the owned relay + relay_npubs deltas.
         pc_dest = persona_dir / PHANTOMCHAT_REL
         delta_dest = persona_dir / PHANTOMCHAT_DELTA_REL
         if delta_dest.exists() and pc_dest.exists():
             try:
                 delta = json.loads(delta_dest.read_text(encoding="utf-8"))
                 relay_added = delta.get("relay_added")
+                npub_added = delta.get("npub_added")
             except (OSError, ValueError):
                 relay_added = None
-            if relay_added:
+                npub_added = None
+            if relay_added or npub_added:
                 try:
                     data = json.loads(pc_dest.read_text(encoding="utf-8"))
                 except ValueError as exc:
@@ -1012,16 +1029,33 @@ def unapply_manifest(manifest_path: str | Path, target: str | Path) -> ApplyResu
                         f"{persona_id}/phantomchat.json: invalid JSON ({exc})"
                     )
                 else:
-                    relays = [r for r in data.get("relays", []) if r != relay_added]
-                    data["relays"] = relays
-                    result.changes.append(
-                        Change(
-                            persona_id,
-                            PHANTOMCHAT_REL,
-                            "patch",
-                            f"removed relay {relay_added!r}",
+                    if relay_added:
+                        relays = [r for r in data.get("relays", []) if r != relay_added]
+                        data["relays"] = relays
+                        result.changes.append(
+                            Change(
+                                persona_id,
+                                PHANTOMCHAT_REL,
+                                "patch",
+                                f"removed relay {relay_added!r}",
+                            )
                         )
-                    )
+                    if npub_added:
+                        relay_npubs = [
+                            n for n in data.get("relay_npubs", []) if n != npub_added
+                        ]
+                        if relay_npubs:
+                            data["relay_npubs"] = relay_npubs
+                        else:
+                            data.pop("relay_npubs", None)
+                        result.changes.append(
+                            Change(
+                                persona_id,
+                                PHANTOMCHAT_REL,
+                                "patch",
+                                f"removed bridge npub {npub_added!r} from relay_npubs",
+                            )
+                        )
                     _atomic_write(
                         pc_dest,
                         json.dumps(data, indent=2, ensure_ascii=False) + "\n",

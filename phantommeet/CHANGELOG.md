@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **PR #21 re-review round 3 (relay_npubs path)** — phantombot's untrusted
+  relay tier landed (phantomyard/phantombot#400 closed by #423), so PhantomMeet
+  now registers the bridge npub there instead of failing closed:
+  - **Bridge npub → `relay_npubs`, never `allowed_npubs`**: `_patch_phantomchat`
+    adds the bridge npub to `relay_npubs` (the untrusted relay tier — a relay
+    sender is threat-screened, treated as untrusted, never arms TOFU, and
+    replies as `shared` even in a 1:1 DM) and never touches `allowed_npubs`
+    (a trust grant that skips the threat judge).
+  - **Reversible delta extended**: `.phantommeet-phantomchat.delta.json` now
+    records both the relay added and the bridge npub added; `pm unapply`
+    removes both.
+  - **`check-infra` validates the real path**: a bridge npub in `allowed_npubs`
+    is still a FAIL, and (for personas with meeting access) a bridge npub
+    missing from `relay_npubs` is also a FAIL.
+  - **Docs aligned**: README + SPEC describe the `relay_npubs` configuration
+    path (not the allowlist) and the corrected delta filename.
+
 - **PR #21 re-review hardening round 2** — see
   `docs/pr-reviews/pr21-phantommeet-review-response.md`:
   - **Bridge npub never in `allowed_npubs`** (fail-closed): `allowed_npubs` is
@@ -38,7 +55,8 @@
     of the managed block survives a re-apply); the superseded banner is
     inserted *after* any leading OKF frontmatter so it keeps parsing.
   - **`check-infra` compares content**, not just presence: a stale Meetings.md
-    body, a missing tool, or a bridge npub still in `allowed_npubs` is a FAIL.
+    body, a missing tool, a bridge npub still in `allowed_npubs`, or a bridge
+    npub missing from `relay_npubs` is a FAIL.
 
 - **PR #21 hardening (security + additive-contract fixes)** — see
   `docs/pr-reviews/pr21-phantommeet-review-response.md` for the full audit map:

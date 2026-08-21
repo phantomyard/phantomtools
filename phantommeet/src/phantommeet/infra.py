@@ -57,6 +57,7 @@ from .apply import (
     _personas_in_manifest,
     _render_template,
 )
+from .manifest import access_for
 
 
 @dataclass
@@ -441,12 +442,13 @@ def check_persona_state(
     else:
         results.append(ProbeResult(f"{prefix} MEMORY", "fail", f"missing {MEMORY_REL}"))
 
-    # 4) phantomchat.json: private relay first; the bridge npub must NOT be a
-    # trusted principal (allowed_npubs is a trust grant, and PhantomMeet fails
-    # closed until phantombot's relay_npubs tier lands).
+    # 4) phantomchat.json: private relay first; the bridge npub must be in the
+    # untrusted relay_npubs tier (phantombot #423), never in allowed_npubs
+    # (a trust grant — allowlisted senders skip the threat judge).
     bridge = manifest.get("bridge", {})
     relay = bridge.get("relay", "")
     bridge_npub = bridge.get("npub", "")
+    include_bridge = access_for(persona_id, manifest)["kind"] != "none"
     pc = persona_dir / PHANTOMCHAT_REL
     if pc.exists():
         import json
@@ -465,8 +467,15 @@ def check_persona_state(
             problems.append(f"relay {relay!r} not first in relays")
         if bridge_npub and bridge_npub in data.get("allowed_npubs", []):
             problems.append(
-                "bridge npub in allowed_npubs (trust grant; must be removed "
-                "until relay_npubs lands)"
+                "bridge npub in allowed_npubs (trust grant; must be removed)"
+            )
+        if (
+            include_bridge
+            and bridge_npub
+            and bridge_npub not in data.get("relay_npubs", [])
+        ):
+            problems.append(
+                "bridge npub missing from relay_npubs (untrusted relay tier)"
             )
         if problems:
             results.append(
