@@ -154,6 +154,7 @@ t('OPCION2: el runtime NO alimenta el watermark con created_at del emisor', () =
 
 // cleanup
 _setBridgeStateForTest(freshState());
+bridge.flushStateNow(); // flush pending state write before rmSync (exit handler)
 try { fs.rmSync(tmpDir, {recursive: true, force: true}); } catch (_) {}
 delete process.env.PHANTOMBRIDGE_CONFIG;
 

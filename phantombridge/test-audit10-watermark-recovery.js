@@ -159,6 +159,7 @@ t('advanceRecoveryWatermark: avance incremental acotado, nunca salto libre a now
 
 // cleanup
 _setBridgeStateForTest(freshState());
+bridge.flushStateNow(); // flush pending state write before rmSync (exit handler)
 try { fs.rmSync(tmpDir, {recursive: true, force: true}); } catch (_) {}
 delete process.env.PHANTOMBRIDGE_CONFIG;
 

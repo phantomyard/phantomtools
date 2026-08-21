@@ -45,7 +45,7 @@ process.env.PHANTOMBRIDGE_CONFIG = path.join(TEST_DIR, 'config.json');
 // inesperado. Limpiamos cualquier .bridge-state.json residual de corridas
 // anteriores para que el test no dependa de un artefacto obsoleto.
 fs.rmSync(path.join(TEST_DIR, '.bridge-state.json'), {force: true});
-const {antiLoopCheck, antiLoopRollback, resolveRid, ANTILOOP, parseEnvelope, envelopeMac, stampEnvelope, extractRid} = require('./bridge.js');
+const {antiLoopCheck, antiLoopRollback, resolveRid, ANTILOOP, parseEnvelope, envelopeMac, stampEnvelope, extractRid, flushStateNow} = require('./bridge.js');
 
 let passed = 0, failed = 0;
 function t(name, fn) {
@@ -780,5 +780,6 @@ t('F2-R01: request drops (already tripped) do NOT keep incrementing the counter'
 });
 
 console.log('\nResult:', passed, 'ok,', failed, 'fail');
+flushStateNow(); // flush pending state write before rmSync (exit handler)
 fs.rmSync(TEST_DIR, {recursive: true, force: true});
 process.exit(failed ? 1 : 0);

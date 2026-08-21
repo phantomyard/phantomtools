@@ -107,6 +107,7 @@ t('pendingSince sticky: no se libera al avanzar lastSeen con un drop pendiente',
 
 // cleanup
 _setBridgeStateForTest(fresh());
+bridge.flushStateNow(); // flush pending state write before rmSync (exit handler)
 try { fs.rmSync(tmpDir, {recursive: true, force: true}); } catch (_) {}
 delete process.env.PHANTOMBRIDGE_CONFIG;
 

@@ -223,6 +223,7 @@ t('pendingSince cambia (valor distinto) sin recuperar -> NO progreso -> BACKPRES
 _chain.then(() => {
   // cleanup — must run AFTER the cases, not before
   _setBridgeStateForTest(freshState());
+  bridge.flushStateNow(); // flush pending state write before rmSync (exit handler)
   try { fs.rmSync(tmpDir, {recursive: true, force: true}); } catch (_) {}
   delete process.env.PHANTOMBRIDGE_CONFIG;
   console.log('');

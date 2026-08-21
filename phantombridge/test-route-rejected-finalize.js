@@ -134,6 +134,7 @@ t('control: ruteo con permiso NO dispara rejected', async () => {
 _chain.then(() => {
   // cleanup — must run AFTER the cases, not before
   _setBridgeStateForTest(freshLedger());
+  bridge.flushStateNow(); // flush pending state write before rmSync (exit handler)
   try { fs.rmSync(tmpDir, {recursive: true, force: true}); } catch (_) {}
   delete process.env.PHANTOMBRIDGE_CONFIG;
   console.log('');

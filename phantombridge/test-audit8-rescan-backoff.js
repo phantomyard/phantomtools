@@ -106,6 +106,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   // cleanup
   _setBridgeStateForTest(fresh());
+  bridge.flushStateNow(); // flush pending state write before rmSync (exit handler)
   try { fs.rmSync(tmpDir, {recursive: true, force: true}); } catch (_) {}
   delete process.env.PHANTOMBRIDGE_CONFIG;
 
