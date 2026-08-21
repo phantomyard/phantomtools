@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **PR #21 re-review round 5 (transactional apply + dead-config cleanup +
+  durability + content-verified health + full password coverage)** — resolves
+  the two remaining CHANGES_REQUESTED threads and robertclawson's residual:
+  - **Banner idempotence**: `_supersede_legacy_kb` / `_has_supersede_banner`
+    now detect the superseded banner *after* any leading OKF frontmatter, so a
+    frontmatter-backed legacy note no longer gets a duplicate banner on re-apply.
+  - **Dead `coordinator_chat` removed**: it was documented in manifest/SPEC/
+    examples/KB templates but never used by delivery (phantombot notify is
+    untargeted). Removed everywhere; KB protocol now says "the org's
+    coordination group" without a phantom field.
+  - **Transactional apply with rollback**: `_commit_writes` snapshots every
+    destination before writing and rolls back on any failure (no partial
+    deployment), and the owned delta is committed *before* the phantomchat.json
+    it describes.
+  - **Relay-delta durability**: the owned delta is now merged with any existing
+    delta instead of being overwritten/deleted, so an operator moving the relay
+    down the list no longer erases the record `pm unapply` relies on.
+  - **`check-infra` compares tool content**: a tool that exists but whose
+    bytes differ from the rendered template is now a FAIL (shared
+    `render_tool_content`), not a presence-only OK.
+  - **Password regression covers all 4 render paths**: the
+    `test_meeting_invite_never_broadcasts_password` test is parametrised over
+    (card | built-in) × (es | en).
+
 - **PR #21 re-review round 4 (password out of the notify broadcast)** — the
   room password was still travelling in the body of the untargeted
   `phantombot notify` (broadcast to every authorized owner on every channel):

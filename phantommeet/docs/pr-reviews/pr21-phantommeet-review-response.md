@@ -49,6 +49,25 @@ emite**; `%PASSWORD_LINE%` renderiza el aviso "se comparte por separado" /
 Test nuevo: `test_meeting_invite_never_broadcasts_password` (phantombot falso
 que captura argv; verifica que el body no contiene el secreto).
 
+## Round 5 (2026-08-21): transactional apply + dead config + durability + content health
+
+Tras la aprobación de robertclawson a `cd8e5f2`, quedaban dos hilos
+CHANGES_REQUESTED (kaieriksen: apply no transaccional + scoped/content en
+check-infra; lenaparkhodges: 6 majors) y el residual del test de password.
+Resueltos:
+
+| # | Hallazgo | Fix |
+|---|---|---|
+| 1 | banner "Superseded" duplicado con frontmatter | `_has_supersede_banner` mira tras el frontmatter; `_supersede_legacy_kb` idempotente |
+| 2 | `coordinator_chat` config muerta | eliminado de manifest/SPEC/ejemplos/KB |
+| 3 | apply no transaccional + delta tras el JSON | `_commit_writes` con rollback; delta antes del JSON |
+| 4 | tool health presence-only | `render_tool_content` compartido + comparación de contenido en check-infra |
+| 5 | relay-delta durability | merge del delta owned (nunca borrar en reorder) |
+| 6 | scoped personas en check-infra | `_personas_in_manifest` ya incluye scoped; test que lo fija |
+| residual | password test 1/4 caminos | parametrizado (card|builtin) × (es|en) |
+
+Suite: **34 passed** + ruff/format/bandit limpios.
+
 ## Tests de regresión añadidos
 
 - `test_bridge_npub_never_in_allowed_npubs` / `test_patch_phantomchat_records_added_relay_delta`

@@ -125,3 +125,71 @@ def test_check_persona_state_skips_relay_npubs_without_access(
     result = _phantomchat_result(results)
     assert result.state == "ok"
     assert result.detail == "patched"
+
+
+def test_check_persona_state_fails_stale_tool_content(tmp_path: Path) -> None:
+    """A tool that exists but whose content differs from the rendered template
+    must FAIL (content comparison, not presence-only)."""
+    manifest = _manifest()
+    manifest["invite"] = {
+        "phantombot_bin": "phantombot",
+        "meet_base_url": "https://meet.example.invalid",
+        "tool": {
+            "template": "tools/meeting-invite.sh.j2",
+            "dest": "tools/meeting-invite.sh",
+            "chmod": "0o755",
+        },
+        "roles": ["maria"],
+    }
+    persona_dir = tmp_path / "maria"
+    tool = persona_dir / "tools" / "meeting-invite.sh"
+    tool.parent.mkdir(parents=True, exist_ok=True)
+    tool.write_text("#!/usr/bin/env bash\necho stale\n", encoding="utf-8")
+    results = check_persona_state("maria", persona_dir, manifest)
+    stale = [r for r in results if r.name.endswith(" tool tools/meeting-invite.sh")]
+    assert stale and stale[0].state == "fail"
+    assert "stale content" in stale[0].detail
+
+
+def test_check_persona_state_ok_fresh_tool_content(tmp_path: Path) -> None:
+    """A tool whose content matches the rendered template reports OK."""
+    from phantommeet.apply import render_tool_content
+
+    manifest = _manifest()
+    manifest["invite"] = {
+        "phantombot_bin": "phantombot",
+        "meet_base_url": "https://meet.example.invalid",
+        "tool": {
+            "template": "tools/meeting-invite.sh.j2",
+            "dest": "tools/meeting-invite.sh",
+            "chmod": "0o755",
+        },
+        "roles": ["maria"],
+    }
+    persona_dir = tmp_path / "maria"
+    tool = persona_dir / "tools" / "meeting-invite.sh"
+    tool.parent.mkdir(parents=True, exist_ok=True)
+    expected = render_tool_content(manifest["invite"]["tool"], "maria", manifest, "en")
+    tool.write_text(expected, encoding="utf-8")
+    results = check_persona_state("maria", persona_dir, manifest)
+    fresh = [r for r in results if r.name.endswith(" tool tools/meeting-invite.sh")]
+    assert fresh and fresh[0].state == "ok"
+
+
+def test_run_checks_covers_scoped_personas(tmp_path: Path) -> None:
+    """check-infra must verify personas granted access via ``permissions.scoped``,
+    not just ``permissions.full`` / ``roles`` personas."""
+    from phantommeet.infra import run_checks
+
+    manifest = _manifest()
+    manifest["roles"] = {"maria": "responsible", "pedro": "lead"}
+    manifest["permissions"] = {
+        "full": ["maria"],
+        "scoped": {"example-project": ["pedro"]},
+        "restricted": {},
+    }
+    target = tmp_path
+    (target / "pedro").mkdir(parents=True, exist_ok=True)
+    results = run_checks(manifest, target=target)
+    names = [r.name for r in results]
+    assert any(n.startswith("pedro:") for n in names)

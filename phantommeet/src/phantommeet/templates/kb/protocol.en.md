@@ -141,8 +141,8 @@ organization's source of truth):
 - Contact each recipient through the channel they have defined (if they have
   an npub, Nostr may be used; otherwise Telegram/email).
 
-If no preference is defined, **default: Telegram** (coordination group
-`{{ invite.coordinator_chat }}` or direct DM).
+If no preference is defined, **default: Telegram** (the org's coordination
+group or a direct DM).
 
 ## Escalating meeting requests
 

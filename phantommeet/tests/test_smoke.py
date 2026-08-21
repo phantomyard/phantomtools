@@ -5,12 +5,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from phantommeet.apply import (
     _contained_dest,
+    _has_supersede_banner,
     _patch_phantomchat,
     _persona_context,
+    _supersede_legacy_kb,
     _tool_env,
     _upsert_kb,
 )
@@ -338,13 +341,21 @@ def test_meeting_invite_custom_card_renders_manifest_template(tmp_path: Path) ->
     assert "%TITLE%" not in out
 
 
-def test_meeting_invite_never_broadcasts_password(tmp_path: Path) -> None:
+@pytest.mark.parametrize("lang", ["es", "en"])
+@pytest.mark.parametrize("has_card", [True, False], ids=["card", "builtin"])
+def test_meeting_invite_never_broadcasts_password(
+    tmp_path: Path, lang: str, has_card: bool
+) -> None:
     """The room password must never travel in the untargeted `phantombot
     notify` broadcast (it reaches every authorized owner on every channel).
-    The script declares the password but never reads or broadcasts it."""
+    The script declares the password but never reads or broadcasts it — across
+    all four render paths: (custom card | built-in) × (es | en)."""
     manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    manifest["language"] = lang
+    if not has_card:
+        manifest["invite"].pop("card", None)
     ctx = _persona_context("maria", manifest)
-    rendered = _tool_env("es").get_template("meeting-invite.sh.j2").render(**ctx)
+    rendered = _tool_env(lang).get_template("meeting-invite.sh.j2").render(**ctx)
 
     pw_file = tmp_path / "pw.txt"
     pw_file.write_text("secreto-supremo", encoding="utf-8")
@@ -393,8 +404,9 @@ def test_meeting_invite_never_broadcasts_password(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr
     sent = args_file.read_text(encoding="utf-8") if args_file.exists() else ""
     # The broadcast signals "password-protected" but never carries the secret.
+    notice = "se comparte por separado" if lang == "es" else "shared separately"
     assert "notify" in sent
-    assert "se comparte por separado" in sent
+    assert notice in sent
     assert "secreto-supremo" not in sent
     assert "secreto-supremo" not in proc.stdout
 
@@ -772,6 +784,92 @@ def test_unapply_reverses_phantomchat_relay(tmp_path: Path) -> None:
     assert "relay_npubs" not in restored
     # delta file consumed
     assert not (maria / ".phantommeet-phantomchat.delta.json").exists()
+
+
+def test_supersede_legacy_kb_idempotent_with_frontmatter() -> None:
+    """A legacy note WITH OKF frontmatter gets the superseded banner exactly
+    once: the banner goes after the frontmatter and re-applying is a no-op."""
+    text = "---\ntype: note\ntitle: Salas Jitsi\n---\n\nContenido antiguo.\n"
+    once = _supersede_legacy_kb(text)
+    # frontmatter stays first, banner sits after it (never duplicated)
+    assert once.startswith("---\n")
+    assert once.count("> Superseded by [[procedures/Meetings]]") == 1
+    assert once.index("> Superseded") > once.index("---\n", 1)
+    # idempotent: re-applying is a no-op even with frontmatter present
+    assert _supersede_legacy_kb(once) == once
+    assert _has_supersede_banner(once)
+
+
+def test_apply_relay_delta_survives_reorder(tmp_path: Path) -> None:
+    """Moving the relay down the list and re-applying must NOT erase the owned
+    delta: `pm unapply` must still be able to remove the relay afterwards."""
+    import json
+
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8"
+    )
+    personas = tmp_path / "personas"
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        (personas / pid).mkdir(parents=True, exist_ok=True)
+    maria = personas / "maria"
+    relay = "ws://relay.example.invalid:7777"
+    bridge_npub = manifest["bridge"]["npub"]
+    (maria / "phantomchat.json").write_text(
+        json.dumps(
+            {"relays": ["wss://public.relay"], "allowed_npubs": ["npub1operator"]}
+        ),
+        encoding="utf-8",
+    )
+
+    # Apply #1: relay is absent → added and recorded in the owned delta.
+    proc = run_cli(
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--target",
+        str(personas),
+        "--invite-roles",
+        "maria",
+    )
+    assert proc.returncode == 0, proc.stderr
+    delta_path = maria / ".phantommeet-phantomchat.delta.json"
+    delta1 = json.loads(delta_path.read_text(encoding="utf-8"))
+    assert delta1["relay_added"] == relay
+    assert delta1["npub_added"] == bridge_npub
+
+    # Operator moves the relay down (still present, just not first).
+    data = json.loads((maria / "phantomchat.json").read_text(encoding="utf-8"))
+    assert data["relays"][0] == relay
+    data["relays"] = [r for r in data["relays"] if r != relay] + [relay]
+    (maria / "phantomchat.json").write_text(json.dumps(data), encoding="utf-8")
+
+    # Apply #2: relay present → reorder only (relay_added None), but the delta
+    # must be PRESERVED so `pm unapply` can still reverse it.
+    proc = run_cli(
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--target",
+        str(personas),
+        "--invite-roles",
+        "maria",
+    )
+    assert proc.returncode == 0, proc.stderr
+    delta2 = json.loads(delta_path.read_text(encoding="utf-8"))
+    assert delta2["relay_added"] == relay
+    assert delta2["npub_added"] == bridge_npub
+
+    # unapply still removes the owned relay + npub.
+    proc = run_cli(
+        "unapply", "--manifest", str(manifest_path), "--target", str(personas)
+    )
+    assert proc.returncode == 0, proc.stderr
+    restored = json.loads((maria / "phantomchat.json").read_text(encoding="utf-8"))
+    assert relay not in restored["relays"]
+    assert bridge_npub not in restored.get("relay_npubs", [])
+    assert not delta_path.exists()
 
 
 def test_meeting_invite_shell_quotes_manifest_scalars() -> None:

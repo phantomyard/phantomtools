@@ -147,7 +147,6 @@ def normalize_invite_section(raw: dict[str, Any]) -> None:
 
        invite:
          phantombot_bin: phantombot       # binary on PATH (or absolute)
-         coordinator_chat: "@coord"       # Telegram chat id / @username
          meet_base_url: https://meet.<domain>
          send_via: phantombot-notify      # mechanism (agnostic)
          tool:                            # tool spec (see apply.install_tools)

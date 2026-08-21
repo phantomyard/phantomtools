@@ -56,6 +56,7 @@ from .apply import (
     _persona_context,
     _personas_in_manifest,
     _render_template,
+    render_tool_content,
 )
 from .manifest import access_for
 
@@ -499,8 +500,34 @@ def check_persona_state(
         tool_dest = persona_dir / dest
         if not tool_dest.exists():
             results.append(ProbeResult(f"{prefix} tool {dest}", "fail", "missing"))
+            continue
+        try:
+            expected = render_tool_content(spec, persona_id, manifest, lang)
+        except Exception as exc:  # noqa: BLE001
+            results.append(
+                ProbeResult(f"{prefix} tool {dest}", "fail", f"render failed: {exc}")
+            )
+            continue
+        if expected is None:
+            results.append(
+                ProbeResult(f"{prefix} tool {dest}", "fail", "static source missing")
+            )
+            continue
+        try:
+            live = tool_dest.read_text(encoding="utf-8")
+        except OSError as exc:
+            results.append(
+                ProbeResult(f"{prefix} tool {dest}", "fail", f"unreadable: {exc}")
+            )
+            continue
+        if live == expected:
+            results.append(
+                ProbeResult(f"{prefix} tool {dest}", "ok", "present and current")
+            )
         else:
-            results.append(ProbeResult(f"{prefix} tool {dest}", "ok", "present"))
+            results.append(
+                ProbeResult(f"{prefix} tool {dest}", "fail", "stale content")
+            )
 
     return results
 

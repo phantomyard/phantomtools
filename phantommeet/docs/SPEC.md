@@ -124,7 +124,6 @@ storage:
   cleanup_after_confirm: true
 invite:                      # optional — meeting-invite tool (§7)
   phantombot_bin: phantombot # phantombot executable on the persona host
-  coordinator_chat: "@coord"  # coordination group chat handle
   meet_base_url: https://meet.<domain>
   send_via: phantombot-notify # how invitations are delivered
   card: |                     # optional — announcement card format (fully

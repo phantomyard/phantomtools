@@ -53,7 +53,6 @@ defaults:
 # back into the manifest; there is nothing to set here).
 invite:
   phantombot_bin: phantombot
-  coordinator_chat: "@coordinacion"
   meet_base_url: https://meet.example.invalid
   send_via: phantombot-notify
   # Telegram bot handle per persona. Used by meeting-invite.sh to resolve a

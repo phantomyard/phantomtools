@@ -165,7 +165,6 @@ infra:
     host: desktop
 invite:
   phantombot_bin: phantombot
-  coordinator_chat: '@coordinacion'
   meet_base_url: https://meet.example.invalid
   send_via: phantombot-notify
   telegram_bots:

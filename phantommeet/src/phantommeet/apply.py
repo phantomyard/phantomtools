@@ -87,14 +87,14 @@ class _PendingWrite:
     mode: int | None = None
 
 
-def _atomic_write(dest: Path, content: str, mode: int | None = None) -> None:
+def _atomic_write_bytes(dest: Path, content: bytes, mode: int | None = None) -> None:
     """Write ``content`` atomically: temp file in the same directory, then
     ``os.replace``. Never writes through a symlink (the preflight already
     refused symlinked destinations)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "wb") as fh:
             fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
@@ -106,6 +106,58 @@ def _atomic_write(dest: Path, content: str, mode: int | None = None) -> None:
             os.unlink(tmp)
         except OSError:
             pass
+        raise
+
+
+def _atomic_write(dest: Path, content: str, mode: int | None = None) -> None:
+    """Write ``content`` (UTF-8) atomically — see ``_atomic_write_bytes``."""
+    _atomic_write_bytes(dest, content.encode("utf-8"), mode)
+
+
+def _read_bytes_if_exists(path: Path) -> bytes | None:
+    """Return the file's bytes, or None when it does not exist."""
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _mode_if_exists(path: Path) -> int | None:
+    """Return the file's permission bits, or None when it does not exist."""
+    try:
+        return path.stat().st_mode & 0o777
+    except FileNotFoundError:
+        return None
+
+
+def _commit_writes(writes: list[_PendingWrite], removals: list[Path]) -> None:
+    """Commit every planned write and removal, rolling back on failure.
+
+    Every destination is snapshotted before any mutation; if a single step
+    raises, the already-applied steps are reverted from those snapshots in
+    reverse order, so a failed apply cannot leave a mixed installation.
+    """
+    snapshots: list[tuple[Path, bytes | None, int | None]] = []
+    for w in writes:
+        snapshots.append(
+            (w.dest, _read_bytes_if_exists(w.dest), _mode_if_exists(w.dest))
+        )
+    for r in removals:
+        snapshots.append((r, _read_bytes_if_exists(r), _mode_if_exists(r)))
+    try:
+        for w in writes:
+            _atomic_write(w.dest, w.content, w.mode)
+        for r in removals:
+            r.unlink(missing_ok=True)
+    except BaseException:
+        for dest, original, mode in reversed(snapshots):
+            try:
+                if original is None:
+                    dest.unlink(missing_ok=True)
+                else:
+                    _atomic_write_bytes(dest, original, mode)
+            except Exception:  # noqa: BLE001, S110  # nosec B110 — best-effort rollback
+                pass
         raise
 
 
@@ -415,14 +467,28 @@ def _render_kb_frontmatter(ctx: dict[str, Any], lang: str) -> str:
     )
 
 
+_SUPERSEDE_BANNER = "> Superseded by [[procedures/Meetings]]"
+
+
+def _has_supersede_banner(text: str) -> bool:
+    """True when the superseded banner is already present, immediately after
+    any leading OKF frontmatter — the exact position ``_supersede_legacy_kb``
+    inserts it at."""
+    rest, _ = _split_frontmatter(text)
+    return rest.lstrip().startswith(_SUPERSEDE_BANNER)
+
+
 def _supersede_legacy_kb(text: str) -> str:
     """Return ``text`` with a superseded banner inserted so the note's OKF
     frontmatter (if any) stays at the very top and keeps parsing as
     frontmatter. The banner goes immediately after any leading YAML
-    frontmatter block; without frontmatter it is simply prepended."""
-    banner = "> Superseded by [[procedures/Meetings]]\n"
-    if text.startswith("> Superseded by [[procedures/Meetings]]"):
+    frontmatter block; without frontmatter it is simply prepended.
+
+    Idempotent: a note already carrying the banner is returned unchanged,
+    whether or not it has frontmatter."""
+    if _has_supersede_banner(text):
         return text
+    banner = _SUPERSEDE_BANNER + "\n"
     rest, frontmatter = _split_frontmatter(text)
     if frontmatter:
         return frontmatter + banner + "\n" + rest.lstrip("\n")
@@ -551,6 +617,27 @@ def _patch_phantomchat(
     return data, relay_added, npub_added
 
 
+def _read_owned_delta(delta_dest: Path) -> dict[str, str]:
+    """Load the existing owned delta, or ``{}`` when absent or corrupt.
+
+    A corrupt/partial delta is treated as absent: re-applying regenerates a
+    clean delta rather than failing on stale state.
+    """
+    if not delta_dest.exists():
+        return {}
+    try:
+        data = json.loads(delta_dest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        k: v
+        for k, v in data.items()
+        if k in ("relay_added", "npub_added") and isinstance(v, str) and v
+    }
+
+
 def _personas_in_manifest(manifest: dict[str, Any]) -> list[str]:
     """Personas that receive an update: those with a role or a permission."""
     perms = manifest["permissions"]
@@ -583,6 +670,33 @@ def _tool_env(lang: str) -> Environment:
     )
     env.filters["shquote"] = _shquote
     return env
+
+
+def render_tool_content(
+    spec: Any, persona_id: str, manifest: dict[str, Any], lang: str
+) -> str | None:
+    """Render the expected content for a manifest tool spec.
+
+    Shared by ``install_tools`` (apply) and ``check_persona_state``
+    (check-infra) so both agree byte-for-byte on what a tool should contain.
+    Returns ``None`` when a static (non-template) source file is missing from
+    the package; template render errors propagate to the caller.
+    """
+    if isinstance(spec, str):
+        dest = Path(spec)
+        template_name = None
+    else:
+        dest = Path(spec["dest"])
+        template_name = spec.get("template")
+    if template_name:
+        template_name = template_name.removeprefix("tools/")
+        return _render_template(
+            _tool_env(lang), template_name, _persona_context(persona_id, manifest)
+        )
+    pkg_tool = TEMPLATES_DIR / "tools" / dest.name
+    if not pkg_tool.exists():
+        return None
+    return pkg_tool.read_text(encoding="utf-8")
 
 
 def install_tools(
@@ -624,7 +738,6 @@ def install_tools(
     if not tool_specs:
         return changes, writes
 
-    tool_env = _tool_env(lang)
     for spec in tool_specs:
         if isinstance(spec, str):
             dest = Path(spec)
@@ -654,9 +767,7 @@ def install_tools(
             # "tools/" prefix so manifest specs can use either form.
             template_name = template_name.removeprefix("tools/")
             try:
-                content = _render_template(
-                    tool_env, template_name, _persona_context(persona_id, manifest)
-                )
+                content = render_tool_content(spec, persona_id, manifest, lang)
             except Exception as exc:  # noqa: BLE001
                 changes.append(
                     Change(
@@ -665,15 +776,17 @@ def install_tools(
                 )
                 continue
         else:
-            pkg_tool = TEMPLATES_DIR / "tools" / dest.name
-            if not pkg_tool.exists():
+            content = render_tool_content(spec, persona_id, manifest, lang)
+            if content is None:
                 changes.append(
                     Change(
-                        persona_id, dest, "error", f"static tool not found: {pkg_tool}"
+                        persona_id,
+                        dest,
+                        "error",
+                        f"static tool not found: {TEMPLATES_DIR / 'tools' / dest.name}",
                     )
                 )
                 continue
-            content = pkg_tool.read_text(encoding="utf-8")
 
         mode = spec.get("chmod") if isinstance(spec, dict) else None
         if isinstance(mode, str):
@@ -826,7 +939,8 @@ def apply_manifest(
     # (no partial apply).
     # ------------------------------------------------------------------
     pending_writes: list[_PendingWrite] = []
-    phantomchat_deltas: dict[str, tuple[str | None, str | None]] = {}
+    delta_writes: list[_PendingWrite] = []
+    delta_removals: list[Path] = []
 
     for persona_id in _personas_in_manifest(manifest):
         persona_dir = root / persona_id
@@ -877,7 +991,7 @@ def apply_manifest(
                 continue
             if legacy_dest.exists():
                 text = legacy_dest.read_text(encoding="utf-8")
-                if text.startswith("> Superseded by [[procedures/Meetings]]"):
+                if _has_supersede_banner(text):
                     result.changes.append(
                         Change(persona_id, Path(legacy), "skip", "(already superseded)")
                     )
@@ -932,7 +1046,21 @@ def apply_manifest(
                 )
             else:
                 result.changes.append(Change(persona_id, PHANTOMCHAT_REL, "patch"))
-                phantomchat_deltas[persona_id] = (relay_added, npub_added)
+                # Merge this run's additions with any prior owned delta so a
+                # mere reorder (relay already present) cannot erase the
+                # ownership record `pm unapply` relies on.
+                delta_dest = persona_dir / PHANTOMCHAT_DELTA_REL
+                owned = _read_owned_delta(delta_dest)
+                if relay_added is not None:
+                    owned["relay_added"] = relay_added
+                if npub_added is not None:
+                    owned["npub_added"] = npub_added
+                if owned:
+                    delta_writes.append(
+                        _PendingWrite(delta_dest, json.dumps(owned, indent=2) + "\n")
+                    )
+                elif delta_dest.exists():
+                    delta_removals.append(delta_dest)
                 pending_writes.append(
                     _PendingWrite(
                         pc_dest,
@@ -960,24 +1088,11 @@ def apply_manifest(
     if result.errors:
         return result
     if not dry_run:
-        for w in pending_writes:
-            _atomic_write(w.dest, w.content, w.mode)
-        # Record the owned phantomchat delta only for personas whose file was
-        # actually patched. A delta records ONLY the field we own (the relay we
-        # added), never a frozen snapshot of unrelated operator config.
-        for persona_id, (relay_added, npub_added) in phantomchat_deltas.items():
-            delta_dest = root / persona_id / PHANTOMCHAT_DELTA_REL
-            delta: dict[str, str] = {}
-            if relay_added is not None:
-                delta["relay_added"] = relay_added
-            if npub_added is not None:
-                delta["npub_added"] = npub_added
-            if delta:
-                _atomic_write(delta_dest, json.dumps(delta, indent=2) + "\n")
-            else:
-                # No owned delta (mere reorder of an existing relay): drop any
-                # stale delta so `pm unapply` has nothing stale to reverse.
-                delta_dest.unlink(missing_ok=True)
+        # Delta files are committed BEFORE the phantomchat.json they describe,
+        # so a crash can never leave a patched JSON with no delta to reverse
+        # it. The whole batch is transactional: any failure rolls back every
+        # already-applied step (no partial deployment).
+        _commit_writes(delta_writes + pending_writes, delta_removals)
 
     return result
 

@@ -142,7 +142,7 @@ Cada destinatario tiene su canal establecido por **phantomorg** (la fuente
   npub, puede ser Nostr; si no, Telegram/email).
 
 Si no hay preferencia definida, **default: Telegram** (grupo de coordinación
-`{{ invite.coordinator_chat }}` o DM directo).
+de la organización o DM directo).
 
 ## Escalado de solicitudes de reunión
 
