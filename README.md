@@ -13,6 +13,7 @@ deps, and license.
 | [`bot-inbox/`](./bot-inbox) | Thin CLI for inter-bot messaging over a shared filesystem inbox — one source of truth for the message schema, atomic delivery, dedup, and the `processed/` audit log. |
 | [`email-triage/`](./email-triage) | Self-driving inbox triage for a phantombot persona — a cheap IMAP poller wakes a full agent turn on new mail and drives the inbox to zero unread. Dependency-free Python; scheduling is a single `phantombot task`. |
 | [`phantombridge/`](./phantombridge) | Node.js bridge between Jitsi (XMPP/MUC) and Nostr — text presence for phantombot personas in meetings: multi-room join, agent DMs (NIP-17), hardened anti-loop envelope, local HTTP API, per-side kill-switches. `bridge.js` CLI + `install.sh` + CI. |
+| [`phantomorg/`](./phantomorg) | Spec-driven organization compiler for phantombot personas — departments, roles, actors, access policies, escalation matrix, communication rules → compiled persona files (SOUL/IDENTITY/tools/memory/kb). `po` CLI (validate / build / deploy / rollback / update). |
 
 ## Keeping installed copies in sync
 
