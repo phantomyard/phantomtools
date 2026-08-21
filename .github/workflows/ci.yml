@@ -118,3 +118,45 @@ jobs:
           po validate --org organizations/smoke/org.yaml
           po build --org organizations/smoke/org.yaml --out /tmp/smoke-dist
           find /tmp/smoke-dist -name SOUL.md | grep -q . && echo "SMOKE OK: SOUL.md generated"
+
+  phantommeet:
+    name: phantommeet
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: phantommeet
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies (editable + dev)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" ruff==0.16.2 bandit==1.9.4
+
+      - name: Ruff check (lint + style)
+        run: ruff check src tests
+
+      - name: Ruff format check
+        run: ruff format --check src tests
+
+      - name: Bandit (security)
+        run: bandit -r src -q
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Smoke test — packaged install must derive + validate a manifest
+        run: |
+          cd /tmp
+          pm derive-manifest \
+            --org "$GITHUB_WORKSPACE/phantommeet/tests/fixtures/org.smoke.yaml" \
+            --base "$GITHUB_WORKSPACE/phantommeet/tests/fixtures/base.smoke.yaml" \
+            --out /tmp/smoke-derived.yaml
+          pm validate --manifest /tmp/smoke-derived.yaml | grep -q "OK" \
+            && echo "SMOKE OK: derive + validate"
