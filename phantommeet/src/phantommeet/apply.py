@@ -130,6 +130,27 @@ def _mode_if_exists(path: Path) -> int | None:
         return None
 
 
+def parse_tool_mode(spec: Any) -> int | None:
+    """Parse a tool spec's ``chmod`` into an int permission mask, or None.
+
+    Accepts an int (0o755) or a string ("0o755", "0755", "755"); an
+    unparseable value yields None (no mode constraint). Shared by
+    ``install_tools`` (apply) and ``check_persona_state`` (check-infra) so
+    both compare the same expected mode.
+    """
+    if not isinstance(spec, dict):
+        return None
+    mode = spec.get("chmod")
+    if isinstance(mode, int):
+        return mode
+    if isinstance(mode, str):
+        try:
+            return int(mode, 8) if mode.startswith("0o") else int(mode, 0)
+        except ValueError:
+            return None
+    return None
+
+
 def _commit_writes(writes: list[_PendingWrite], removals: list[Path]) -> None:
     """Commit every planned write and removal, rolling back on failure.
 
@@ -618,24 +639,39 @@ def _patch_phantomchat(
 
 
 def _read_owned_delta(delta_dest: Path) -> dict[str, str]:
-    """Load the existing owned delta, or ``{}`` when absent or corrupt.
+    """Load the existing owned delta, failing closed on corruption.
 
-    A corrupt/partial delta is treated as absent: re-applying regenerates a
-    clean delta rather than failing on stale state.
+    The delta is the only record of what PhantomMeet owns in phantomchat.json
+    (the relay it prepended and the bridge npub it registered). A delta file
+    that exists but cannot be parsed is corruption, not absence: treating it
+    as absent would let a re-apply delete the delta, after which
+    ``pm unapply`` could no longer reverse the owned relay/npub. So a corrupt
+    or partial delta raises ``ValueError``; the caller records it as a
+    preflight error and aborts the apply.
     """
     if not delta_dest.exists():
         return {}
     try:
-        data = json.loads(delta_dest.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+        raw = delta_dest.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"owned delta is unreadable: {exc}") from exc
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError(f"owned delta is corrupt (invalid JSON): {exc}") from exc
     if not isinstance(data, dict):
-        return {}
-    return {
-        k: v
-        for k, v in data.items()
-        if k in ("relay_added", "npub_added") and isinstance(v, str) and v
-    }
+        raise TypeError("owned delta is corrupt (expected a JSON object)")
+    owned: dict[str, str] = {}
+    for key in ("relay_added", "npub_added"):
+        if key not in data:
+            continue
+        value = data[key]
+        if not isinstance(value, str) or not value:
+            raise ValueError(
+                f"owned delta is corrupt ({key!r} must be a non-empty string)"
+            )
+        owned[key] = value
+    return owned
 
 
 def _personas_in_manifest(manifest: dict[str, Any]) -> list[str]:
@@ -788,13 +824,7 @@ def install_tools(
                 )
                 continue
 
-        mode = spec.get("chmod") if isinstance(spec, dict) else None
-        if isinstance(mode, str):
-            # YAML reads 0o755 as a string; parse octal / decimal / symbolic.
-            try:
-                mode = int(mode, 8) if mode.startswith("0o") else int(mode, 0)
-            except ValueError:
-                mode = None
+        mode = parse_tool_mode(spec)
 
         needs_chmod = False
         if dest_abs.exists():
@@ -842,6 +872,14 @@ def apply_manifest(
         result.errors.append(f"target is not a directory: {root}")
         return result
 
+    # Deferred interactive manifest mutations — persisted only after the whole
+    # plan is clean (no preflight error) and committed, so a failed apply
+    # never mutates the manifest file (the reviewer reproduced --ask-roles
+    # rewriting invite.roles even when a later persona failed preflight).
+    pending_roles: list[str] | None = None
+    pending_card: str | None = None
+    card_decision_made = False
+
     lang = manifest["language"]
     bridge = manifest.get("bridge", {})
     relay = bridge.get("relay", "")
@@ -865,9 +903,9 @@ def apply_manifest(
                     result.errors.append("no invite.roles selected; aborting")
                     return result
                 manifest["invite"]["roles"] = chosen
-                # Persist the decision back into the manifest file.
-                if not dry_run:
-                    _persist_invite_roles(manifest_path, chosen)
+                # Persist the decision back into the manifest file only after
+                # the whole plan is clean (deferred to Phase 2).
+                pending_roles = chosen
                 result.changes.append(
                     Change("*", Path("invite.roles"), "patch", f"{', '.join(chosen)}")
                 )
@@ -923,7 +961,8 @@ def apply_manifest(
                     )
                     return result
             if not dry_run:
-                _persist_invite_card(manifest_path, chosen)
+                card_decision_made = True
+                pending_card = chosen
             result.changes.append(
                 Change(
                     "*",
@@ -1050,7 +1089,14 @@ def apply_manifest(
                 # mere reorder (relay already present) cannot erase the
                 # ownership record `pm unapply` relies on.
                 delta_dest = persona_dir / PHANTOMCHAT_DELTA_REL
-                owned = _read_owned_delta(delta_dest)
+                try:
+                    owned = _read_owned_delta(delta_dest)
+                except (ValueError, TypeError) as exc:
+                    # Fail closed: a corrupt delta must abort the apply, never
+                    # be silently dropped (dropping it would orphan the owned
+                    # relay/npub — pm unapply could no longer reverse them).
+                    result.errors.append(f"{persona_id}: {exc}")
+                    continue
                 if relay_added is not None:
                     owned["relay_added"] = relay_added
                 if npub_added is not None:
@@ -1093,6 +1139,12 @@ def apply_manifest(
         # it. The whole batch is transactional: any failure rolls back every
         # already-applied step (no partial deployment).
         _commit_writes(delta_writes + pending_writes, delta_removals)
+        # Interactive manifest decisions are persisted only now — after the
+        # plan is clean AND the commit succeeded.
+        if pending_roles is not None:
+            _persist_invite_roles(manifest_path, pending_roles)
+        if card_decision_made:
+            _persist_invite_card(manifest_path, pending_card)
 
     return result
 
@@ -1130,12 +1182,15 @@ def unapply_manifest(manifest_path: str | Path, target: str | Path) -> ApplyResu
         delta_dest = persona_dir / PHANTOMCHAT_DELTA_REL
         if delta_dest.exists() and pc_dest.exists():
             try:
-                delta = json.loads(delta_dest.read_text(encoding="utf-8"))
-                relay_added = delta.get("relay_added")
-                npub_added = delta.get("npub_added")
-            except (OSError, ValueError):
-                relay_added = None
-                npub_added = None
+                delta = _read_owned_delta(delta_dest)
+            except (ValueError, TypeError) as exc:
+                # Fail closed: a corrupt delta must abort the unapply rather
+                # than silently skip the reversal (which would leave the
+                # owned relay/npub installed with no record to reverse them).
+                result.errors.append(f"{persona_id}: {exc}")
+                continue
+            relay_added = delta.get("relay_added")
+            npub_added = delta.get("npub_added")
             if relay_added or npub_added:
                 try:
                     data = json.loads(pc_dest.read_text(encoding="utf-8"))

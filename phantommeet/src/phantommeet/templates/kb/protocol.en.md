@@ -141,8 +141,10 @@ organization's source of truth):
 - Contact each recipient through the channel they have defined (if they have
   an npub, Nostr may be used; otherwise Telegram/email).
 
-If no preference is defined, **default: Telegram** (the org's coordination
-group or a direct DM).
+Meeting **invitations** are sent with `phantombot notify`, which
+**broadcasts** the message to every authorized owner on every configured
+channel — there is no targeted per-recipient delivery (no coordination group,
+no individual DM).
 
 ## Escalating meeting requests
 
@@ -169,7 +171,7 @@ missing, and only ask when it is impossible or contradictory.
 | Room | derived from naming | derived from title+date |
 | Sensitivity | detect "confidential/private/finance" | not sensitive (no password) |
 | Destination (folder) | {% if destination_folder %}folder name given | `{{ destination_folder }}` ({{ destination_note }}){% else %}you don't schedule; pass the one in the request{% endif %} |
-| Sending channel | per phantomorg per persona | Telegram (coordination or DM) |
+| Sending channel | — (fixed) | `phantombot notify` (broadcast to authorized owners) |
 | Duration | — | `{{ defaults.duration_min }}` min |
 
 **Golden rule**: if a variable is missing → default. If it is ambiguous or

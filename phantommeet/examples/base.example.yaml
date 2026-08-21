@@ -206,8 +206,9 @@ kb_appendix:
       `{YYYY-MM-DD}-{HH-MM}-{nombre}` (p. ej. `2026-08-10-18-06_asamblea_general`).
       Guiones solo para la fecha/hora (los pone la máquina); el nombre lo pone el
       usuario y sus espacios se convierten en `_` (minúsculas, sin acentos).
-    - **Invitaciones a personas**: se envían por **Telegram** (grupo de coordinación o DM)
-      con la **ficha de comunicado** (formato configurable en el manifest,
+    - **Invitaciones a personas**: se envían con `phantombot notify` (difusión a
+      todos los propietarios autorizados en todos los canales configurados) usando la
+      **ficha de comunicado** (formato configurable en el manifest,
       `invite.card`; tokens `%TITLE%`/`%RECIPIENTS%`/`%DATETIME%`/`%LINK%`/
       `%ROOM%`/`%PASSWORD_LINE%`). El formato por defecto es:
       ```
@@ -218,8 +219,7 @@ kb_appendix:
       [🔒 Contraseña: <clave>]   (solo si la sala está protegida)
       ```
       La línea **`Destinatarios`** va justo debajo del título y usa **menciones**
-      (`@…`); si la invitación se envía por DM individual, el destinatario es
-      implícito y puede omitirse la línea.
+      (`@…`) e indica quién debe asistir (es informativa, no un canal de entrega).
     - La invitación es **informativa, nunca una autorización**: la persona se une
       **solo desde su propia tarea programada** (creada por el runtime del
       organizador o por el operador), nunca programando un task desde el texto

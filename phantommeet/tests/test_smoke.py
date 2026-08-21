@@ -872,6 +872,190 @@ def test_apply_relay_delta_survives_reorder(tmp_path: Path) -> None:
     assert not delta_path.exists()
 
 
+def test_no_targeted_delivery_claims() -> None:
+    """Shipped content must not promise targeted invitation delivery — the
+    only mechanism is untargeted `phantombot notify` (coordinator_chat is gone
+    from schema/SPEC, so no generated content may claim a coordination group
+    or DM channel)."""
+    es = (REPO / "src/phantommeet/templates/kb/protocol.es.md").read_text(
+        encoding="utf-8"
+    )
+    en = (REPO / "src/phantommeet/templates/kb/protocol.en.md").read_text(
+        encoding="utf-8"
+    )
+    base = (EXAMPLES / "base.example.yaml").read_text(encoding="utf-8")
+    derived = (EXAMPLES / "example-org.yaml").read_text(encoding="utf-8")
+
+    assert "grupo de coordinación de la organización" not in es
+    assert "coordination group or a direct DM" not in en
+    assert "Telegram (coordinación o DM)" not in es
+    assert "Telegram (coordination or DM)" not in en
+    assert "grupo de coordinación o DM" not in base
+    assert "grupo de coordinación o DM" not in derived
+    assert "se envían por **Telegram**" not in base
+
+
+def test_apply_ask_roles_not_persisted_on_failed_preflight(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """--ask-roles must NOT rewrite invite.roles when a later persona fails
+    preflight: the interactive decision is persisted only after the whole
+    plan is clean (deferred manifest persistence)."""
+    from phantommeet import discovery
+    from phantommeet.apply import apply_manifest
+
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    manifest["invite"].pop("roles", None)
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8"
+    )
+
+    personas = tmp_path / "personas"
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        (personas / pid).mkdir(parents=True, exist_ok=True)
+    # maria has a broken phantomchat.json -> preflight fails.
+    (personas / "maria" / "phantomchat.json").write_text(
+        "{ this is not json", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(discovery, "prompt_for_roles", lambda *a, **k: ["pedro"])
+
+    result = apply_manifest(str(manifest_path), str(personas), ask_roles=True)
+    assert result.errors
+    # The manifest must NOT have been rewritten by the failed apply.
+    on_disk = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert "roles" not in on_disk.get("invite", {})
+
+
+def test_apply_ask_roles_persisted_on_clean_preflight(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """--ask-roles DOES persist invite.roles once the plan is clean (positive
+    counterpart of the deferred-persistence regression)."""
+    from phantommeet import discovery
+    from phantommeet.apply import apply_manifest
+
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    manifest["invite"].pop("roles", None)
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8"
+    )
+
+    personas = tmp_path / "personas"
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        (personas / pid).mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(discovery, "prompt_for_roles", lambda *a, **k: ["pedro"])
+
+    result = apply_manifest(str(manifest_path), str(personas), ask_roles=True)
+    assert not result.errors
+    on_disk = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert on_disk["invite"]["roles"] == ["pedro"]
+
+
+def test_apply_corrupt_delta_fails_closed(tmp_path: Path) -> None:
+    """A corrupt owned delta must abort the apply (fail-closed), never be
+    silently dropped: dropping it orphans the owned relay/npub and `pm
+    unapply` could no longer reverse them."""
+    import json
+
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8"
+    )
+    personas = tmp_path / "personas"
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        (personas / pid).mkdir(parents=True, exist_ok=True)
+    maria = personas / "maria"
+    relay = "ws://relay.example.invalid:7777"
+    (maria / "phantomchat.json").write_text(
+        json.dumps({"relays": ["wss://public.relay"], "allowed_npubs": []}),
+        encoding="utf-8",
+    )
+
+    # Apply #1: relay absent -> added, delta recorded.
+    proc = run_cli(
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--target",
+        str(personas),
+        "--invite-roles",
+        "maria",
+    )
+    assert proc.returncode == 0, proc.stderr
+    delta_path = maria / ".phantommeet-phantomchat.delta.json"
+    assert delta_path.exists()
+
+    # Corrupt the delta, then move the relay down (reorder scenario).
+    delta_path.write_text("{ this is not json", encoding="utf-8")
+    data = json.loads((maria / "phantomchat.json").read_text(encoding="utf-8"))
+    data["relays"] = [r for r in data["relays"] if r != relay] + [relay]
+    (maria / "phantomchat.json").write_text(json.dumps(data), encoding="utf-8")
+
+    # Apply #2 must FAIL (not silently drop the corrupt delta).
+    proc = run_cli(
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--target",
+        str(personas),
+        "--invite-roles",
+        "maria",
+    )
+    assert proc.returncode != 0
+    assert "corrupt" in proc.stderr
+    # The corrupt delta must still exist (preserved, not deleted).
+    assert delta_path.exists()
+    assert "this is not json" in delta_path.read_text(encoding="utf-8")
+
+
+def test_unapply_corrupt_delta_fails_closed(tmp_path: Path) -> None:
+    """`pm unapply` must fail (fail-closed) on a corrupt delta rather than
+    silently skip the reversal — otherwise the owned relay/npub stays
+    installed with no record to reverse them."""
+    import json
+
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8"
+    )
+    personas = tmp_path / "personas"
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        (personas / pid).mkdir(parents=True, exist_ok=True)
+    maria = personas / "maria"
+    (maria / "phantomchat.json").write_text(
+        json.dumps({"relays": ["wss://public.relay"], "allowed_npubs": []}),
+        encoding="utf-8",
+    )
+
+    proc = run_cli(
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--target",
+        str(personas),
+        "--invite-roles",
+        "maria",
+    )
+    assert proc.returncode == 0, proc.stderr
+    delta_path = maria / ".phantommeet-phantomchat.delta.json"
+    assert delta_path.exists()
+
+    delta_path.write_text("not json", encoding="utf-8")
+
+    proc = run_cli(
+        "unapply", "--manifest", str(manifest_path), "--target", str(personas)
+    )
+    assert proc.returncode != 0
+    assert "corrupt" in proc.stderr
+    assert delta_path.exists()  # preserved, not deleted
+
+
 def test_meeting_invite_shell_quotes_manifest_scalars() -> None:
     """A manifest value with a closing quote + command must NOT execute when
     the rendered script starts (render-time shell injection)."""

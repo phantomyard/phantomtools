@@ -141,8 +141,10 @@ Cada destinatario tiene su canal establecido por **phantomorg** (la fuente
 - Contacta a cada destinatario por el canal que tenga definido (si tiene
   npub, puede ser Nostr; si no, Telegram/email).
 
-Si no hay preferencia definida, **default: Telegram** (grupo de coordinación
-de la organización o DM directo).
+Las **invitaciones a reuniones** se envían con `phantombot notify`, que
+**difunde** el mensaje a todos los propietarios autorizados en todos los
+canales configurados — no hay entrega dirigida por destinatario (ni grupo de
+coordinación ni DM individual).
 
 ## Escalado de solicitudes de reunión
 
@@ -169,7 +171,7 @@ pregunta si es imposible o contradictorio.
 | Sala | derivada del naming | derivada de título+fecha |
 | Sensibilidad | detectar "confidencial/privado/finanzas" | no sensible (sin contraseña) |
 | Destino (carpeta) | {% if destination_folder %}nombre de carpeta dado | `{{ destination_folder }}` ({{ destination_note }}){% else %}no agendas; pasa el indicado en la solicitud{% endif %} |
-| Canal de envío | según phantomorg por persona | Telegram (coordinación o DM) |
+| Canal de envío | — (fijo) | `phantombot notify` (difusión a propietarios autorizados) |
 | Duración | — | `{{ defaults.duration_min }}` min |
 
 **Regla de oro**: si falta una variable → default. Si es ambigua o

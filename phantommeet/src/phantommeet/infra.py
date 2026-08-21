@@ -38,6 +38,7 @@ import base64
 import os
 import socket
 import ssl
+import stat
 import struct
 import subprocess  # nosec B404
 import urllib.error
@@ -56,6 +57,7 @@ from .apply import (
     _persona_context,
     _personas_in_manifest,
     _render_template,
+    parse_tool_mode,
     render_tool_content,
 )
 from .manifest import access_for
@@ -521,6 +523,29 @@ def check_persona_state(
             )
             continue
         if live == expected:
+            # Content matches; also verify the requested permission bits so a
+            # script installed at the wrong mode (e.g. 0600 vs requested 0755)
+            # is not reported healthy.
+            mode = parse_tool_mode(spec)
+            if mode is not None:
+                try:
+                    live_mode = stat.S_IMODE(tool_dest.stat().st_mode)
+                except OSError as exc:
+                    results.append(
+                        ProbeResult(
+                            f"{prefix} tool {dest}", "fail", f"unstatable: {exc}"
+                        )
+                    )
+                    continue
+                if live_mode != mode:
+                    results.append(
+                        ProbeResult(
+                            f"{prefix} tool {dest}",
+                            "fail",
+                            f"wrong mode {oct(live_mode)} (expected {oct(mode)})",
+                        )
+                    )
+                    continue
             results.append(
                 ProbeResult(f"{prefix} tool {dest}", "ok", "present and current")
             )

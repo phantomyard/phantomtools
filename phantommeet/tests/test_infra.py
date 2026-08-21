@@ -171,9 +171,38 @@ def test_check_persona_state_ok_fresh_tool_content(tmp_path: Path) -> None:
     tool.parent.mkdir(parents=True, exist_ok=True)
     expected = render_tool_content(manifest["invite"]["tool"], "maria", manifest, "en")
     tool.write_text(expected, encoding="utf-8")
+    tool.chmod(0o755)  # match the manifest's requested mode
     results = check_persona_state("maria", persona_dir, manifest)
     fresh = [r for r in results if r.name.endswith(" tool tools/meeting-invite.sh")]
     assert fresh and fresh[0].state == "ok"
+
+
+def test_check_persona_state_fails_wrong_tool_mode(tmp_path: Path) -> None:
+    """A tool whose content matches but whose permission bits differ from the
+    manifest ``chmod`` must FAIL (mode comparison, not content-only)."""
+    from phantommeet.apply import render_tool_content
+
+    manifest = _manifest()
+    manifest["invite"] = {
+        "phantombot_bin": "phantombot",
+        "meet_base_url": "https://meet.example.invalid",
+        "tool": {
+            "template": "tools/meeting-invite.sh.j2",
+            "dest": "tools/meeting-invite.sh",
+            "chmod": "0o755",
+        },
+        "roles": ["maria"],
+    }
+    persona_dir = tmp_path / "maria"
+    tool = persona_dir / "tools" / "meeting-invite.sh"
+    tool.parent.mkdir(parents=True, exist_ok=True)
+    expected = render_tool_content(manifest["invite"]["tool"], "maria", manifest, "en")
+    tool.write_text(expected, encoding="utf-8")
+    tool.chmod(0o600)  # wrong mode: manifest requests 0755
+    results = check_persona_state("maria", persona_dir, manifest)
+    wrong = [r for r in results if r.name.endswith(" tool tools/meeting-invite.sh")]
+    assert wrong and wrong[0].state == "fail"
+    assert "wrong mode" in wrong[0].detail
 
 
 def test_run_checks_covers_scoped_personas(tmp_path: Path) -> None:
