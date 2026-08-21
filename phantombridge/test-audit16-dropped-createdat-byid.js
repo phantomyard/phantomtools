@@ -102,12 +102,14 @@ t('markDelivery sin created_at: ancla a la hora local (compatibilidad)', () => {
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now, seenIds: [],
     pendingSince: null, dropped: [], droppedOverflow: false, delivery: entry});
   const admitted = markDelivery('L2', 'pending');
+  const after = Math.floor(Date.now() / 1000);
   assert.strictEqual(admitted, false, 'rechazo fail-closed');
   const st = getBridgeState();
   const drop = st.dropped.find(d => d && d.id === 'L2');
   assert.ok(drop, 'L2 en drops');
   assert.strictEqual(drop.created_at, undefined, 'sin created_at -> no se fija');
-  assert.ok(st.pendingSince != null && st.pendingSince <= now, 'ancla a hora local (default)');
+  assert.ok(st.pendingSince != null && st.pendingSince >= now && st.pendingSince <= after,
+    'ancla a hora local (default)');
 });
 
 // Test 5: la recuperación puntual por id se dispara cuando hay drops y produce
