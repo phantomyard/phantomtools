@@ -80,14 +80,14 @@ t('clone con nuevo created_at + sig arbitraria -> RECHAZADO (firma)', () => {
   // id must be recomputed for the clone to be self-consistent, else even the
   // id check trips; we want to prove the SIG check catches it first.
   cloned.id = getEventHash(cloned);
-  assert.throws(() => unwrapAndVerifyGiftWrap(cloned), /firma inválida/);
+  assert.throws(() => unwrapAndVerifyGiftWrap(cloned), /invalid signature/);
 });
 
 t('clone con id arbitrario -> RECHAZADO (id no canónico)', () => {
   const wrap = makeLegitWrap(senderPriv, bridgePk);
   const cloned = JSON.parse(JSON.stringify(wrap));
   cloned.id = 'ab'.repeat(32); // arbitrary id, keeps created_at + sig
-  assert.throws(() => unwrapAndVerifyGiftWrap(cloned), /id no canónico/);
+  assert.throws(() => unwrapAndVerifyGiftWrap(cloned), /id not canonical/);
 });
 
 t('kind!=1059 -> RECHAZADO', () => {
@@ -132,7 +132,7 @@ t('seal con id no canónico -> RECHAZADO', () => {
     created_at: Math.floor(Date.now() / 1000),
     tags: [['p', bridgePk]],
   }, senderPriv);
-  assert.throws(() => unwrapAndVerifyGiftWrap(wrap), /seal id no canónico/);
+  assert.throws(() => unwrapAndVerifyGiftWrap(wrap), /seal id not canonical/);
 });
 
 t('rumor con pubkey != seal.pubkey -> RECHAZADO (spoofing identidad)', () => {

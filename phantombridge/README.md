@@ -518,46 +518,46 @@ Test: `node test-org-routing.js` (15 tests: unit + bridge integration).
 
 ## Changelog
 
-- **v1.7.3** — AUDIT kaieriksen/ChatGPT OPCION2 FIX (🔴 BLOQUEANTE): el
-  avance del `recoveryWatermark` queda ACOTADO — un único evento tras un
-  downtime ya NO puede saltar hasta `Date.now()` (rompía exactly-once al
-  expirar delivered que el relay no había demostrado recorrer).
-  - `advanceRecoveryWatermark()` avanza INCREMENTALMENTE a
-    `min(prev + recoveryWatermarkStepSecs, now)`: cada evento confirmado
-    concede a lo sumo un paso de backlog (default 300s), nunca un salto
-    libre al reloj local. Tras un downtime de 30 días, un solo evento
-    mueve el cursor un paso, no 30 días; la ráfaga de backlog lo recorre
-    poco a poco.
-  - `processWatermark(ts)` ELIMINADO por completo (función + export):
-    alimentar el cursor desde un timestamp externo (el `created_at` del
-    emisor) reintroduce la superficie de ataque. El único avance legítimo
-    es el paso acotado.
-  - Nueva opción de configuración `recoveryWatermarkStepSecs` (ver
-    sección Configuration).
-  - Tests: `test-audit-m01-blocker2-watermark-gate.js` (caso real
-    "watermark hace 30 días + 1 evento → NO salta a now" + ráfaga de
-    backlog incremental); `test-audit10-watermark-recovery.js`,
-    `test-audit11-processwatermark-fed.js` y
-    `test-audit-m01-permissions-gate.js` adaptados al avance acotado sin
-    `processWatermark`.
+- **v1.7.3** — AUDIT kaieriksen/ChatGPT OPCION2 FIX (🔴 BLOCKING): the
+  `recoveryWatermark` advance is now BOUNDED — a single event after a
+  downtime can NO LONGER jump to `Date.now()` (it broke exactly-once by
+  expiring delivered events the relay had not proven it traversed).
+  - `advanceRecoveryWatermark()` advances INCREMENTALLY to
+    `min(prev + recoveryWatermarkStepSecs, now)`: each confirmed event
+    grants at most one backlog step (default 300s), never a free jump
+    to the local clock. After a 30-day downtime, a single event moves
+    the cursor one step, not 30 days; the backlog burst walks it
+    forward gradually.
+  - `processWatermark(ts)` REMOVED entirely (function + export):
+    feeding the cursor from an external timestamp (the sender's
+    `created_at`) reintroduces the attack surface. The only legitimate
+    advance is the bounded step.
+  - New config option `recoveryWatermarkStepSecs` (see Configuration
+    section).
+  - Tests: `test-audit-m01-blocker2-watermark-gate.js` (real case
+    "watermark 30 days ago + 1 event → does NOT jump to now" + incremental
+    backlog burst); `test-audit10-watermark-recovery.js`,
+    `test-audit11-processwatermark-fed.js` and
+    `test-audit-m01-permissions-gate.js` adapted to the bounded advance
+    without `processWatermark`.
 
-- **v1.7.2** — AUDIT kaieriksen/ChatGPT OPCION2 (🔴 BLOQUEANTE): el
-  `recoveryWatermark` ya NO depende del `created_at` del emisor.
-  - `finishDelivery()` y el routing ya no reciben `wrapTs` (el `created_at`
-    del gift-wrap, input controlado por el remitente). El watermark avanza
-    SOLO por el reloj LOCAL del bridge (`advanceRecoveryWatermark()`) cuando
-    se confirma procesamiento real (markDelivery delivered); el reloj del
-    bridge no es forjable desde un evento Nostr.
-  - Cierra el ataque: un sender AUTORIZADO para una sala ya NO puede empujar
-    un `created_at` fabricado (+~23h) al watermark y evictar delivered
-    recuperables (break exactly-once). Garantía declarada: el cursor refleja
-    progreso confirmado del stream, nunca un timestamp del remitente.
-  - Invariante AUDIT-10 preservado: monotónico, no retrocede, primer salto
-    0->X solo por evidencia real de watermark previo, rechazados no lo mueven.
-  - Tests: `test-audit-m01-blocker2-watermark-gate.js` ampliado (11 casos,
-    incluye "sender autorizado con created_at futuro +23h NO adelanta el
-    watermark"); `test-audit11-processwatermark-fed.js` y
-    `test-audit-m01-permissions-gate.js` actualizados a la nueva fuente.
+- **v1.7.2** — AUDIT kaieriksen/ChatGPT OPCION2 (🔴 BLOCKING): the
+  `recoveryWatermark` no longer depends on the sender's `created_at`.
+  - `finishDelivery()` and routing no longer receive `wrapTs` (the gift-wrap's
+    `created_at`, sender-controlled input). The watermark advances ONLY from
+    the bridge's LOCAL clock (`advanceRecoveryWatermark()`) when real
+    processing is confirmed (markDelivery delivered); the bridge clock
+    cannot be forged from a Nostr event.
+  - Closes the attack: a sender AUTHORIZED for a room can no longer push a
+    fabricated `created_at` (+~23h) into the watermark and evict recoverable
+    delivered events (break exactly-once). Declared guarantee: the cursor
+    reflects confirmed stream progress, never a sender timestamp.
+  - AUDIT-10 invariant preserved: monotonic, never regresses, first jump
+    0->X only on real evidence of prior watermark, rejected events do not move it.
+  - Tests: `test-audit-m01-blocker2-watermark-gate.js` expanded (11 cases,
+    including "authorized sender with future created_at +23h does NOT advance
+    the watermark"); `test-audit11-processwatermark-fed.js` and
+    `test-audit-m01-permissions-gate.js` updated to the new source.
 
 - **v1.7.1** — AUDIT kaieriksen blocking review (M01/M04/M05) follow-ups:
   - **M01 fail-closed `permissions`**: a *present* but empty/malformed block

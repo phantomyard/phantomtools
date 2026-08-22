@@ -58,7 +58,7 @@ t('ENOENT (sin archivo) -> carga normal, sin aborto', () => {
   const noState = path.join(tmpDir, 'missing.json');
   const r = runChild(noState, null);
   assert.ok(/LOADED_OK/.test(r.out), 'child no cargó: ' + r.out.slice(0, 200));
-  assert.ok(/sin archivo de estado previo/.test(r.out), 'debe loguear init limpio: ' + r.out.slice(0, 200));
+  assert.ok(/no previous state file/.test(r.out), 'debe loguear init limpio: ' + r.out.slice(0, 200));
 });
 
 // 2. JSON corrupto → fail-closed: aborta (exit 1) con motivo logueado.
@@ -66,7 +66,7 @@ t('JSON corrupto -> ERROR FATAL + aborto (fail-closed, no backlog silencioso)', 
   const badState = path.join(tmpDir, 'corrupt.json');
   const r = runChild(badState, '{no es json valido');
   assert.ok(/ERROR FATAL loading state/.test(r.out), 'debe loguear ERROR FATAL: ' + r.out.slice(0, 300));
-  assert.ok(/Estado corrupto/.test(r.out), 'debe mencionar corrupción: ' + r.out.slice(0, 300));
+  assert.ok(/Corrupt state/.test(r.out), 'debe mencionar corrupción: ' + r.out.slice(0, 300));
   assert.ok(!/LOADED_OK/.test(r.out), 'NO debe cargar tras estado corrupto (abortó antes): ' + r.out.slice(0, 200));
 });
 

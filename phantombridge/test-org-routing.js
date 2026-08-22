@@ -100,12 +100,12 @@ t('npubs de la org ficticia → hex exacto', () => {
 t('actor sin npub falla cerrado', () => {
   const org = parseOrgYaml(ORG_AU);
   org.actors.push({id: 'fantasma', role: 'ceo'});
-  assert.throws(() => deriveAgents(org), /requiere id, role y npub/);
+  assert.throws(() => deriveAgents(org), /requires id, role and npub/);
 });
 t('npub inválido falla cerrado', () => {
   const org = parseOrgYaml(ORG_AU);
   org.actors.push({id: 'roto', role: 'ceo', npub: 'npub1noesvalido'});
-  assert.throws(() => deriveAgents(org), /npub inválido/);
+  assert.throws(() => deriveAgents(org), /invalid npub/);
 });
 
 // MEDIO-6: FAIL-CLOSED ante identidades ambiguas (pubkey/actor.id duplicados).
@@ -117,7 +117,7 @@ t('actor.id duplicado → FAIL-CLOSED (lanza)', () => {
     {id: 'doble', role: 'ceo', npub: freshNpub()},
     {id: 'doble', role: 'worker', npub: freshNpub()},
   ];
-  assert.throws(() => deriveAgents(org), /duplicado/i);
+  assert.throws(() => deriveAgents(org), /duplicate/i);
 });
 t('pubkey duplicado entre actores → FAIL-CLOSED (lanza)', () => {
   const shared = freshNpub();
@@ -126,7 +126,7 @@ t('pubkey duplicado entre actores → FAIL-CLOSED (lanza)', () => {
     {id: 'ceoX', role: 'ceo', npub: shared},
     {id: 'workerX', role: 'worker', npub: shared},
   ];
-  assert.throws(() => deriveAgents(org), /duplicado/i);
+  assert.throws(() => deriveAgents(org), /duplicate/i);
 });
 t('loadOrgRouting ante pubkey duplicado → EINVALID (fail-closed, no fallback)', () => {
   const shared = freshNpub();

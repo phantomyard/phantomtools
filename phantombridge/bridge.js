@@ -55,7 +55,7 @@ const NOSTR_MODE = MODE === 'nostr' || MODE === 'both';
 // ---------------------------------------------------------------------------
 // Per-side pause (kill-switch) — runtime, via HTTP POST /pause
 // ---------------------------------------------------------------------------
-// CONFIG.paused (opcional): estado inicial al arrancar.
+// CONFIG.paused (optional): initial state at boot.
 //   { "jitsi": false, "nostr": false }
 // Each side pauses INDEPENDENTLY: nostr paused = agent DMs are silently
 // ignored (bots get no replies that would make them burn tokens); jitsi
@@ -87,7 +87,7 @@ const PAUSE_FILE = CONFIG.pauseFile || path.join(path.dirname(CONFIG_PATH), '.br
 // Additionally, after renameSync the parent directory is synced so the
 // rename itself reaches persistent storage (second crash/power-loss window).
 // Without this, the content could be durable but the rename remains unconfirmed.
-// rename no confirmado.
+// rename left unconfirmed.
 function persistPause() {
   let fd = null;
   let tmp = null;
@@ -110,13 +110,13 @@ function persistPause() {
       try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
     } catch (e) {
       // Fail-closed: el contrato de persistPause() es `true = pause
-      // durable`. Si el fsync del directorio no se pudo realizar (FS que no
-      // soporta sincronizar directorios: Windows, ciertos overlay), el rename
+      // durable`. If the directory fsync could not be performed (FS that does
+      // not support syncing directories: Windows, certain overlays), the rename
       // might not be durable on an immediate crash -> we CANNOT claim
       // durability. On Linux/ext4/XFS (normal bridge scenario) this
       // catch never runs.
       if (fd !== null) { try { fs.closeSync(fd); } catch (_) {} fd = null; }
-      console.error('[bridge] fsync de directorio no disponible, pause NO durable:', e.message);
+      console.error('[bridge] directory fsync unavailable, pause NOT durable:', e.message);
       return false;
     }
     return true;
@@ -148,13 +148,13 @@ function loadPause() {
     let s;
     try { s = JSON.parse(fs.readFileSync(PAUSE_FILE, 'utf8')); }
     catch (e) {
-      throw new Error('PAUSE_FILE corrupto: no se puede determinar el estado del kill-switch. ' +
-        'El bridge NO arrancará hasta que se repare/elimine ' + PAUSE_FILE + ' (' + e.message + ')');
+      throw new Error('PAUSE_FILE corrupt: cannot determine kill-switch state. ' +
+        'The bridge will NOT start until ' + PAUSE_FILE + ' is repaired/removed (' + e.message + ')');
     }
     if (!s || typeof s !== 'object' ||
         !(typeof s.jitsi === 'boolean') || !(typeof s.nostr === 'boolean')) {
-      throw new Error('PAUSE_FILE con esquema inválido (' + PAUSE_FILE + '): se esperaba {jitsi:boolean,nostr:boolean}. ' +
-        'El bridge NO arrancará hasta que se repare/elimine el fichero.');
+      throw new Error('PAUSE_FILE with invalid schema (' + PAUSE_FILE + '): expected {jitsi:boolean,nostr:boolean}. ' +
+        'The bridge will NOT start until the file is repaired/removed.');
     }
     PAUSED.jitsi = s.jitsi;
     PAUSED.nostr = s.nostr;
@@ -185,11 +185,11 @@ function loadPause() {
     console.log('[bridge] pause migrado del .bridge-state.json (legacy): jitsi=' + PAUSED.jitsi + ' nostr=' + PAUSED.nostr);
     // The migration must be durable: if we cannot create the new file
     // the migration only lived in RAM and the pause would be lost on the
-    // siguiente reinicio. Esto es un fallo de arranque (FAIL-CLOSED), NO se
-    // traga: el kill-switch no puede quedar solo en RAM.
+    // next reboot. This is a boot failure (FAIL-CLOSED), NOT swallowed: the
+    // kill-switch cannot be left in RAM only.
     if (!persistPause()) {
-      throw new Error('no se pudo migrar el kill-switch legacy de forma durable (' + PAUSE_FILE + '): ' +
-        'arranque abortado para no perder el estado pausado');
+      throw new Error('failed to migrate the legacy kill-switch durably (' + PAUSE_FILE + '): ' +
+        'boot aborted to avoid losing the paused state');
     }
   }
 }
@@ -204,23 +204,23 @@ function isPaused(side) {
 // The emergency behavior of `true` and `false` is intentionally NOT symmetric
 // (fail-closed in both directions):
 //
-//   pause=true  (activar kill-switch) -> mutar RAM primero, luego persistir.
+//   pause=true  (activate kill-switch) -> mutate RAM first, then persist.
 //     If persistence fails, we THROW but RAM stayed paused: the bridge
-//     sigue efectivamente parado (fail-closed) y la persistencia es un problema
+//     stays effectively stopped (fail-closed) and persistence is a problem
 //     which the operator will see fixed after the crash. Never answer ok:true
-//     sin durabilidad.
+//     without durability.
 //
-//   pause=false (reanudar)           -> persistir PRIMERO, y solo publicar el
-//     cambio en RAM si el disco lo confirma. Si la persistencia falla, la RAM
-//     permanece pausada (no se reanuda un kill-switch que no es durable): el
-//     estado en disco (pausado) y en RAM quedan consistentes.
+//   pause=false (resume)             -> persist FIRST, and only publish the
+//     RAM change if the disk confirms it. If persistence fails, RAM
+//     stays paused (a kill-switch that is not durable is not resumed): the
+//     on-disk state (paused) and RAM stay consistent.
 //
 // Con este orden no hay ventana en la que RAM y disco se contradigan:
-// * activar fallido -> RAM pausada + disco (posible) viejo; nunca reanuda
-// * reanudar fallido -> RAM pausada + disco pausado; consistente
+// * activate failed -> RAM paused + disk (possibly) old; never resumes
+// * resume failed -> RAM paused + disk paused; consistent
 //
 // persistPause() is synchronous and atomic (temp + fsync + rename + fsync(dir)),
-// por lo que no hay intercalado entre llamadas HTTP del mismo proceso.
+// so there is no interleaving between HTTP calls from the same process.
 // Documented precondition: one bridge per PAUSE_FILE (multi-instance
 // sharing the file is not supported: the last writer overwrites the other).
 function setPaused(side, val) {
@@ -236,7 +236,7 @@ function setPaused(side, val) {
     if (side === 'both') { PAUSED.jitsi = true; PAUSED.nostr = true; }
     else PAUSED[side] = true;
     if (!persistPause()) {
-      throw new Error('no se pudo persistir el pause de forma durable (kill-switch solo en RAM, pero aplicado)');
+      throw new Error('failed to persist the pause durably (kill-switch only in RAM, but applied)');
     }
   } else {
     // Resuming: persist first; only mutate RAM if the disk confirms it.
@@ -246,7 +246,7 @@ function setPaused(side, val) {
     if (!persistPause()) {
       // Fallback fail-closed: revert to the original persisted state in RAM.
       PAUSED.jitsi = prevJ; PAUSED.nostr = prevN;
-      throw new Error('no se pudo reanudar de forma durable; el kill-switch permanece activo');
+      throw new Error('failed to resume durably; the kill-switch remains active');
     }
   }
   return {jitsi: PAUSED.jitsi, nostr: PAUSED.nostr};
@@ -263,8 +263,8 @@ function setPaused(side, val) {
 const STATE_FILE = CONFIG.stateFile || path.join(path.dirname(CONFIG_PATH), '.bridge-state.json');
 const STATE_OVERLAP_SECS = 120; // margin to avoid losing boundary events
 const STATE_FLUSH_MS = 5000;    // escritura debounced
-const SEEN_IDS_MAX = 200;       // buffer de IDs de gift-wraps ya procesados
-const REJECTED_IDS_MAX = 200;   // LOW-8: cap del caché de frames rechazados (anti-reintento efímero)
+const SEEN_IDS_MAX = 200;       // buffer of already-processed gift-wrap IDs
+const REJECTED_IDS_MAX = 200;   // LOW-8: cap of the rejected-frames cache (ephemeral anti-retry)
 // M-04/M-05: incoming Nostr pipeline limits (before unwrapEvent()).
 // Kind 1059 is a tiny gift-wrap by design ({kind,tags,content,pubkey,…});
 // an oversized frame indicates abuse/anomaly and must not enter the crypto
@@ -293,7 +293,7 @@ const DROPPED_MAX = 5000;                                                // pers
 // Lazy sweep in markDelivery (not on the fsync hot path): the object is swept
 // only when the cap is exceeded OR on insert, avoiding costly scans
 // on normal events.
-const PENDING_TTL_SECS = CONFIG.pendingTtlSecs || (24 * 3600); // wall-clock; pending crash deja retry vía relay
+const PENDING_TTL_SECS = CONFIG.pendingTtlSecs || (24 * 3600); // wall-clock; a pending crash leaves retry via relay
 const DELIVERED_WATERMARK_MARGIN_SECS = 120; // extra margin over STATE_OVERLAP_SECS
 // AUDIT-M01-OPTION2-FIX (🔴 BLOCKING kaieriksen): MAXIMUM step a
 // single processed event may advance recoveryWatermark. The watermark must
@@ -304,7 +304,7 @@ const DELIVERED_WATERMARK_MARGIN_SECS = 120; // extra margin over STATE_OVERLAP_
 // downtime, the watermark advances incrementally as the relay
 // re-delivers the backlog, never all at once. Pick a multiple of the overlap so
 // it stays consistent with the replay overlap (STATE_OVERLAP_SECS).
-const RECOVERY_WATERMARK_STEP_SECS = CONFIG.recoveryWatermarkStepSecs || 300; // 5 min por evento procesado
+const RECOVERY_WATERMARK_STEP_SECS = CONFIG.recoveryWatermarkStepSecs || 300; // 5 min per processed event
 const DELIVERY_MAX = 10000;             // hard cap of the durable delivery ledger
 const DELIVERY_SOFT_LIMIT = Math.floor(DELIVERY_MAX * 0.9); // AUDIT-6: umbral de limpieza agresiva + re-scan
 let backpressureRejected = 0;           // AUDIT-5: rejected-admission counter (fail-closed)
@@ -334,7 +334,7 @@ function enqueueGiftWrap(gw) {
       bridgeState.pendingSince = nowTs;
       markStateDirty();
     }
-    console.warn('[nostr] cola de procesamiento llena (' + NOSTR_MAX_QUEUE + '): gift-wrap descartado (backpressure, recuperable en reconexión)');
+    console.warn('[nostr] processing queue full (' + NOSTR_MAX_QUEUE + '): gift-wrap dropped (backpressure, recoverable on reconnect)');
     return false;
   }
   nostrQueue.push(gw);
@@ -453,7 +453,7 @@ function loadState() {
     } else {
       // LOW-9: valid JSON but UNEXPECTED state shape (no valid relay/lastSeen).
       // We cannot trust what was processed either -> fail-closed.
-      throw new SyntaxError('forma de estado inesperada (falta relay/lastSeen válidos)');
+      throw new SyntaxError('unexpected state shape (missing valid relay/lastSeen)');
     }
   } catch (e) {
     // LOW-9 (audit 462e62b): tell the cases apart. Before, ENOENT / JSON
@@ -462,20 +462,20 @@ function loadState() {
     // but was corrupted or unreadable.
     if (e && e.code === 'ENOENT') {
       // First boot with no state file: full backlog is legitimate.
-      console.log('[nostr] sin archivo de estado previo: subscription de backlog completo.');
+      console.log('[nostr] no previous state file: full backlog subscription.');
       return;
     }
     // Anything else (corrupt JSON, EACCES/EPERM, EIO, invalid shape):
     // we do NOT know what was processed -> fail-closed. Aborting avoids re-delivering or
     // losing DMs; the operator can inspect/remove .bridge-state.json
     // (or the backup) and boot clean with explicit intent.
-    const motivo = e && e.code
+    const reason = e && e.code
       ? e.code + ': ' + e.message
       : (e && e.message ? e.message : String(e));
-    console.error('[nostr] ERROR FATAL loading state file (' + STATE_FILE + '): ' + motivo);
+    console.error('[nostr] ERROR FATAL loading state file (' + STATE_FILE + '): ' + reason);
     console.error('[nostr] ' + (e && e.name === 'SyntaxError'
-      ? 'Estado corrupto (JSON inválido). Mueve/elimina el archivo para arrancar limpio.'
-      : 'No puedo confiar en el estado previo. Abortando para evitar replay/duplicación de DMs (fail-closed).'));
+      ? 'Corrupt state (invalid JSON). Move/remove the file to boot clean.'
+      : 'Cannot trust the previous state. Aborting to avoid DM replay/duplication (fail-closed).'));
     process.exit(1);
   }
 }
@@ -522,9 +522,9 @@ function markSeen(id) {
 // relay keeps re-delivering by RANGE (cursor watermark), not per-id, which
 // covers even the evicted drops. The flag clears once the survivor set has
 // fully drained AND the cursor has safely advanced past the overflow window.
-// `createdAt` (opcional): el created_at REAL del evento descartado, si se
-// conoce en el punto del drop. AUDIT-16 (🔴 ALTO): el cursor de Nostr es
-// temporal y pendingSince no debe anclarse solo a la hora LOCAL de rechazo
+// `createdAt` (optional): the REAL created_at of the dropped event, if
+// known at the drop point. AUDIT-16 (🔴 HIGH): the Nostr cursor is
+// temporal and pendingSince must not anchor only to the LOCAL rejection time
 // (Date.now) but also the event's created_at, which may be earlier
 // (backlog): a late wrap with created_at=1000 rejected at instant
 // t=5000 is only re-reachable if the next subscription's `since` covers
@@ -829,38 +829,38 @@ const RESCAN_MIN_INTERVAL_MS = CONFIG.rescanMinIntervalMs || 5000;
 const RESCAN_MAX_BACKOFF_MS = CONFIG.rescanMaxBackoffMs || 60000;
 const RESCAN_MAX_PER_MINUTE = CONFIG.rescanMaxPerMinute || 6;
 // AUDIT-9 (MEDIO): el rescan debe DEMOSTRAR progreso. Un re-scan ciego que
-// reconecta sin liberar el ledger (lastSeen no avanza / delivery no decrece)
-// insiste indefinidamente sobre algo que no funciona. Tras N rescans
-// consecutivos SIN progreso real, entramos en estado BACKPRESSURE
-// (rescanStalled=true): se suprime TODO rescan hasta que markDelivery / un
-// evento admitido demuestre avance real o expire un respiro de ventana.
+// reconnects without freeing the ledger (lastSeen does not advance / delivery
+// does not shrink) insists indefinitely on something that does not work. After
+// N consecutive rescans WITHOUT real progress, we enter BACKPRESSURE state
+// (rescanStalled=true): ALL rescans are suppressed until markDelivery / an
+// admitted event demonstrates real progress or a window cooldown expires.
 const RESCAN_MAX_STALLED = CONFIG.rescanMaxStalled || 3;   // rescans fallidos consecutivos -> BACKPRESSURE
-const RESCAN_STALL_COOLDOWN_MS = CONFIG.rescanStallCooldownMs || (60 * 1000); // respiro antes de reintentar tras estancarse
-let rescanStalled = false;          // BACKPRESSURE explícito: sin progreso, no más rescans
-let rescanStalledSince = 0;         // ms epoch en que se activó el estancamiento (para el respiro)
+const RESCAN_STALL_COOLDOWN_MS = CONFIG.rescanStallCooldownMs || (60 * 1000); // cooldown before retrying after stall
+let rescanStalled = false;          // explicit BACKPRESSURE: no progress, no more rescans
+let rescanStalledSince = 0;         // ms epoch when the stall was triggered (for the cooldown)
 let deliveryRescanNeeded = false;
 let deliveryRescanScheduled = false;
-let rescanAttempts = 0;             // ráfaga actual (backoff exponencial)
-let rescanWindowStart = 0;          // inicio de la ventana de 60s (ms epoch)
-let rescanWindowCount = 0;          // rescans dentro de la ventana actual
-let lastRescanAt = 0;              // ms epoch del último rescan emitido
+let rescanAttempts = 0;             // current burst (exponential backoff)
+let rescanWindowStart = 0;          // start of the 60s window (ms epoch)
+let rescanWindowCount = 0;          // rescans within the current window
+let lastRescanAt = 0;              // ms epoch of the last emitted rescan
 function rescanBackoffMs() {
-  // Exponencial: min-interval * 2^attempts, capado al techo.
-  const attempts = Math.min(rescanAttempts, 30); // acota 2^attempts
+  // Exponential: min-interval * 2^attempts, capped at the ceiling.
+  const attempts = Math.min(rescanAttempts, 30); // caps 2^attempts
   return Math.min(RESCAN_MIN_INTERVAL_MS * Math.pow(2, attempts), RESCAN_MAX_BACKOFF_MS);
 }
-// Delegado de reconexion de la suscripcion entrante. Lo registra
-// subscribeIncoming() al iniciar (y la reconexion es idempotente: abre un
-// nuevo WebSocket cuyo onclose vuelve a llamar subscribeIncoming). Permite a
-// requestDeliveryRescan() disparar un re-scan sin acoplarse a la closure JITSI.
+// Reconnect delegate for the incoming subscription. Registered by
+// subscribeIncoming() at startup (and reconnection is idempotent: it opens a
+// new WebSocket whose onclose calls subscribeIncoming again). Lets
+// requestDeliveryRescan() trigger a re-scan without coupling to the JITSI closure.
 let reconnectIncoming = null;
 
-// Solicita un re-scan controlado de la suscripcion nostr. Cuando el ledger
-// esta lleno de delivered inmaduros (lastSeen congelado) y no se libera espacio
-// con la limpieza perezosa, forzamos una reconexion con el cursor anclado en
-// pendingSince para que el relay re-entregue los drops y lastSeen avance ->
-// delivered ya inalcanzables se liberan. Se programa una sola vez (guard)
-// para evitar bucles de reconexion; el siguiente ciclo natural la rearma.
+// Requests a controlled re-scan of the nostr subscription. When the ledger
+// is full of immature delivered entries (lastSeen frozen) and space is not
+// freed by lazy cleanup, we force a reconnection with the cursor anchored at
+// pendingSince so the relay re-delivers the drops and lastSeen advances ->
+// already-unreachable delivered entries are freed. Scheduled only once (guard)
+// to avoid reconnection loops; the next natural cycle re-arms it.
 function requestDeliveryRescan() {
   deliveryRescanNeeded = true;
   if (deliveryRescanScheduled) return; // a rescan is already in progress; the
@@ -873,7 +873,7 @@ function requestDeliveryRescan() {
   const nowMs = Date.now();
   if (rescanStalled) {
     if (rescanStalledSince !== 0 && nowMs - rescanStalledSince < RESCAN_STALL_COOLDOWN_MS) {
-      console.warn('[nostr] rescan suprimido por BACKPRESSURE (sin progreso real): reintento en ' +
+      console.warn('[nostr] rescan suppressed by BACKPRESSURE (no real progress): retry in ' +
         Math.ceil((RESCAN_STALL_COOLDOWN_MS - (nowMs - rescanStalledSince)) / 1000) + 's');
       return;
     }
@@ -895,7 +895,7 @@ function requestDeliveryRescan() {
   // `deliveryRescanNeeded = true` but without a loop. The next natural cycle
   // (WS reconnection or an event that admits and frees space) will re-arm it.
   if (rescanWindowCount >= RESCAN_MAX_PER_MINUTE) {
-    console.warn('[nostr] rescan suprimido: techo de ' + RESCAN_MAX_PER_MINUTE + ' rescans/min alcanzado (el ledger sigue lleno), se reintenta en el proximo ciclo');
+    console.warn('[nostr] rescan suppressed: ceiling of ' + RESCAN_MAX_PER_MINUTE + ' rescans/min reached (ledger still full), retrying next cycle');
     return;
   }
 
@@ -911,11 +911,11 @@ function requestDeliveryRescan() {
   rescanAttempts++;
   rescanWindowCount++;
   lastRescanAt = now;
-  // Diferido para no interferir con el handler en curso (evita recursion rara
-  // con markDelivery -> reconnect -> markDelivery). En waitMs se cierra la
-  // conexion de suscripcion; su onclose vuelve a llamar subscribeIncoming(),
-  // que recalcula el cursor (anclado a pendingSince si hay drops) y re-scanea.
-  // AUDIT-9 (MEDIO): registrar el estado ANTES de emitir, para poder medir
+  // Deferred to avoid interfering with the handler in progress (avoids rare
+  // recursion with markDelivery -> reconnect -> markDelivery). At waitMs the
+  // subscription connection is closed; its onclose calls subscribeIncoming(),
+  // which recomputes the cursor (anchored to pendingSince if there are drops) and re-scans.
+  // AUDIT-9 (MEDIUM): record state BEFORE emitting, so we can measure
   // progress after reconnection: recoveryWatermark, ledger size and the
   // conjunto de drops pendientes.
   const beforeWatermark = bridgeState ? (bridgeState.recoveryWatermark || 0) : 0;
@@ -1022,7 +1022,7 @@ function markDelivery(id, status, createdAt) {
     // unreachable delivered; if the relay has nothing more to deliver there
     // will be no promotion, but this prevents a frozen lastSeen from freezing
     deliveryRescanNeeded = true;
-    console.warn('[nostr] delivery ledger lleno; admision rechazada (fail-closed, backpressure) y re-scan programado');
+    console.warn('[nostr] delivery ledger full; admission rejected (fail-closed, backpressure) and re-scan scheduled');
     backpressureRejected++;
     // NEW-AUDIT (HIGH, no-loss): the fail-closed rejection for a full ledger is
     // A DROP the relay will NOT re-deliver unless the `since` of the next
@@ -1244,14 +1244,14 @@ try {
 } catch (e) {
   if (e.code === 'EMISSING') {
     // No org.yaml deployed -> legacy manual routing is the intended fallback.
-    console.warn('[bridge] org.yaml no encontrado (' + ORG_FILE + '); usando routing manual del config.json.');
+    console.warn('[bridge] org.yaml not found (' + ORG_FILE + '); using manual routing from config.json.');
     DERIVED = null;
   } else {
     // M-09 FAIL-CLOSED: org.yaml is present but invalid/unreadable.
     // We do NOT start with a possibly-permissive/outdated manual routing that
     // deviates from the normative source of truth. Aborting is the safe move.
     console.error('[bridge] ERROR FATAL (fail-closed): ' + e.message);
-    console.error('[bridge] Corrige org.yaml o elimínalo si quieres volver al routing manual.');
+    console.error('[bridge] Fix org.yaml or remove it if you want to fall back to manual routing.');
     throw e;
   }
 }
@@ -1264,7 +1264,7 @@ if (DERIVED) {
   // privileges or violating the source of truth. Now: no merge. Manual agents
   // are ONLY used if org.yaml does not exist (legacy fallback below).
   if (CONFIG.agents && Object.keys(CONFIG.agents).length) {
-    console.warn('[bridge] WARNING: agents del config.json IGNORADOS — org.yaml (' + ORG_FILE + ') es la única fuente de verdad de identidad (MEDIO-5).');
+    console.warn('[bridge] WARNING: config.json agents IGNORED — org.yaml (' + ORG_FILE + ') is the single source of truth for identity (MEDIO-5).');
   }
   CONFIG.agents = DERIVED.agents;
   if (CONFIG.routing && CONFIG.routing.permissions && Object.keys(CONFIG.routing.permissions).length) {
@@ -1276,9 +1276,9 @@ if (DERIVED) {
 // ---------------------------------------------------------------------------
 // Estado compartido
 // ---------------------------------------------------------------------------
-const agentByName = new Map();    // nombre -> pubkey hex
-const agentByPubkey = new Map();  // pubkey hex -> nombre
-const lastRoomByAgent = new Map(); // nombre -> sala (respuestas sin sala)
+const agentByName = new Map();    // name -> pubkey hex
+const agentByPubkey = new Map();  // pubkey hex -> name
+const lastRoomByAgent = new Map(); // name -> room (replies without room)
 
 for (const [name, pk] of Object.entries(CONFIG.agents || {})) {
   agentByName.set(name, pk);
@@ -1496,23 +1496,23 @@ function unwrapAndVerifyGiftWrap(giftWrap) {
   if (!giftWrap || typeof giftWrap !== 'object') throw new Error('no event');
   // ── wrap (kind:1059) ──
   if (giftWrap.kind !== 1059) throw new Error('wrap kind != 1059 (' + giftWrap.kind + ')');
-  if (giftWrap.id !== getEventHash(giftWrap)) throw new Error('wrap id no canónico');
-  if (!verifyEvent(giftWrap)) throw new Error('wrap firma inválida');
+  if (giftWrap.id !== getEventHash(giftWrap)) throw new Error('wrap id not canonical');
+  if (!verifyEvent(giftWrap)) throw new Error('wrap invalid signature');
 
   const seal = JSON.parse(nip44.decrypt(giftWrap.content, nip44.getConversationKey(bridgeSk, giftWrap.pubkey)));
   // ── seal (kind:13) ──
-  if (!seal || typeof seal !== 'object') throw new Error('seal no descifrado');
+  if (!seal || typeof seal !== 'object') throw new Error('seal not decrypted');
   if (seal.kind !== 13) throw new Error('seal kind != 13 (' + seal.kind + ')');
-  if (seal.id !== getEventHash(seal)) throw new Error('seal id no canónico');
-  if (!verifyEvent(seal)) throw new Error('seal firma inválida');
+  if (seal.id !== getEventHash(seal)) throw new Error('seal id not canonical');
+  if (!verifyEvent(seal)) throw new Error('seal invalid signature');
 
   const unwrapped = JSON.parse(nip44.decrypt(seal.content, nip44.getConversationKey(bridgeSk, seal.pubkey)));
   // ── rumor (kind:14) ──
-  if (!unwrapped || typeof unwrapped !== 'object') throw new Error('rumor no descifrado');
+  if (!unwrapped || typeof unwrapped !== 'object') throw new Error('rumor not decrypted');
   if (unwrapped.kind !== 14) throw new Error('rumor kind != 14 (' + unwrapped.kind + ')');
-  if (unwrapped.id !== getEventHash(unwrapped)) throw new Error('rumor id no canónico');
+  if (unwrapped.id !== getEventHash(unwrapped)) throw new Error('rumor id not canonical');
   if (unwrapped.pubkey !== seal.pubkey) {
-    throw new Error('rumor.pubkey != seal.pubkey (posible spoofing de identidad)');
+    throw new Error('rumor.pubkey != seal.pubkey (possible identity spoofing)');
   }
   return unwrapped;
 }
@@ -1533,7 +1533,7 @@ function stampEnvelope(text, from, to) {
   return renderEnvelope(env) + rest;
 }
 
-// Aristas (emisor->destino) recorridas por un envelope: pares consecutivos
+// Edges (sender->destination) traversed by an envelope: consecutive pairs
 // of the trace. If the new edge (from->to) is already there -> oscillation.
 function traceHasEdge(trace, from, to) {
   for (let i = 0; i + 1 < trace.length; i++) {
@@ -1599,7 +1599,7 @@ function jaccard(a, b) {
   return inter / (a.size + b.size - inter);
 }
 
-// Hash simple (djb2) de emisor|receptor|texto CANONICO — solo para dedup, no cripto.
+// Simple hash (djb2) of sender|receiver|CANONICAL text — dedup only, not crypto.
 function hashMsg(from, to, canonText) {
   let h = 5381;
   const s = from + '|' + to + '|' + canonText;
@@ -1653,7 +1653,7 @@ function resolveRid(parsed, textStr) {
 // structures while the publish await released the event loop.
 function antiLoopCheck(fromName, toName, text) {
   const now = Date.now();
-  const admissionId = ANTILOOP.nextAdmissionId++;  // identidad ÚNICA (F2-R03/R04)
+  const admissionId = ANTILOOP.nextAdmissionId++;  // UNIQUE identity (F2-R03/R04)
   if (now - ANTILOOP.lastSweep > 30000) { ANTILOOP.lastSweep = now; sweepLoopState(now); }
   const textStr = String(text);
 
@@ -1673,7 +1673,7 @@ function antiLoopCheck(fromName, toName, text) {
     }
     if (traceHasEdge(env.trace, fromName, toName)) {
       ANTILOOP.dropped.cycle++;
-      return {ok: false, reason: 'cycle', detail: 'arista ' + fromName + '->' + toName + ' ya recorrida (trace ' + JSON.stringify(env.trace) + ')'};
+      return {ok: false, reason: 'cycle', detail: 'edge ' + fromName + '->' + toName + ' already traversed (trace ' + JSON.stringify(env.trace) + ')'};
     }
   }
 
@@ -1685,22 +1685,22 @@ function antiLoopCheck(fromName, toName, text) {
   if (rid) {
     reqEntry = ANTILOOP.requests.get(rid) || null;
     if (reqEntry) {
-      // Arista emisor->destino ya recorrida en este hilo = ping-pong
-      // (funciona incluso si los bots no cooperan con el envelope).
+      // Sender->destination edge already traversed in this thread = ping-pong
+      // (works even if the bots do not cooperate with the envelope).
       const edgeKey = fromName + '|' + toName;
       if (reqEntry.edges.has(edgeKey)) {
         ANTILOOP.dropped.cycle++;
-        return {ok: false, reason: 'cycle', detail: 'arista ' + fromName + '->' + toName + ' repetida en el hilo ' + rid};
+        return {ok: false, reason: 'cycle', detail: 'edge ' + fromName + '->' + toName + ' repeated in thread ' + rid};
       }
-      // count = apariciones ADMITIDAS (solo sube en COMMIT): el cortocircuito
-      // salta cuando se alcanza el tope, no cuando se supera por descartados.
+      // count = ADMITTED occurrences (only rises on COMMIT): the short-circuit
+      // trips when the cap is reached, not when exceeded by discarded ones.
       if (reqEntry.count >= ANTILOOP.reqMax) {
         if (!reqEntry.tripped) {
           reqEntry.tripped = true;  // one-time instrumentation (does not consume quota)
           ANTILOOP.dropped.request++;
-          console.warn('[antiloop] ⚠ CORTOCIRCUITO request_id', rid, '-', reqEntry.count, 'apariciones admitidas en', Math.round((now - reqEntry.first) / 1000) + 's por', [...reqEntry.agents].join(', '));
+          console.warn('[antiloop] ⚠ SHORT-CIRCUIT request_id', rid, '-', reqEntry.count, 'admitted occurrences in', Math.round((now - reqEntry.first) / 1000) + 's by', [...reqEntry.agents].join(', '));
         }
-        return {ok: false, reason: 'request', detail: 'request_id ' + rid + ' repetido (' + reqEntry.count + 'x admitidos)'};
+        return {ok: false, reason: 'request', detail: 'request_id ' + rid + ' repeated (' + reqEntry.count + 'x admitted)'};
       }
     }
   }
@@ -1779,9 +1779,9 @@ function antiLoopCheck(fromName, toName, text) {
     edgeKey: null
   };
   if (rid) {
-    // edges es Map<arista, ocurrencias>: dos admisiones concurrentes del
-    // mismo RID y la misma arista se cuentan por separado, y el rollback de
-    // una decrementa sin borrar la arista de la otra (F2-R02).
+    // edges is Map<edge, occurrences>: two concurrent admissions of the
+    // same RID and the same edge are counted separately, and rolling one
+    // back decrements without erasing the other's edge (F2-R02).
     const r = reqEntry || {count: 0, first: now, last: now, agents: new Set(), edges: new Map(), tripped: false};
     r.count++;
     r.last = now;
@@ -1856,7 +1856,7 @@ function antiLoopRollback(admission) {
     if (idx >= 0) arr.splice(idx, 1);
     if (!arr.length) ANTILOOP.pairs.delete(admission.pairKey);
   }
-  // Tasa HORARIA (F3-01): eliminar NUESTRA marca exacta igual que la de minuto.
+  // HOURLY rate (F3-01): remove OUR exact mark, same as the minute one.
   const arrH2 = ANTILOOP.pairHours.get(admission.pairKey);
   if (arrH2) {
     const idxH = arrH2.findIndex(e => e.id === admission.admissionId);
@@ -1969,8 +1969,8 @@ async function publishDM(recipientPk, content, title) {
 // Subscription: listen to gift-wraps addressed to the bridge
 function subscribeIncoming() {
   const ws = new WebSocket(CONFIG.nostr.relay);
-  // AUDIT-6: registrar el delegado para que requestDeliveryRescan() pueda
-  // forzar un re-scan cerrando esta conexion (onclose -> subscribeIncoming).
+  // AUDIT-6: register the delegate so requestDeliveryRescan() can
+  // force a re-scan by closing this connection (onclose -> subscribeIncoming).
   reconnectIncoming = () => { try { ws.close(); } catch (_) {} };
   // `since`: start from the last PROCESSED event (with an overlap margin) so
   // the historical backlog is not reprocessed on every reconnect.
@@ -2096,12 +2096,12 @@ async function handleIncomingGiftWrap(giftWrap) {
     // and does NOT require isSeen(). isSeen stays as a fast shortcut
     // only for the in-window case (though redundant).
     if (deliveryStatus(giftWrap.id) === 'delivered') {
-      console.log('[nostr] duplicate gift-wrap (ya entregado) ignorado:', giftWrap.id.slice(0, 8));
+      console.log('[nostr] duplicate gift-wrap (already delivered) ignored:', giftWrap.id.slice(0, 8));
       return;
     }
     // Record the last seen event (even if paused or from an
-    // pubkey no autorizado): el estado marca lo ya RECIBIDO, no lo
-    // procesado, para no re-entregar DMs viejos tras un reinicio.
+    // unauthorized pubkey): the state marks what was RECEIVED, not what was
+    // processed, to avoid re-delivering old DMs after a reboot.
     // M-NEW-02: the cursor advances on the bridge's own reception clock, NOT
     // the event's created_at (see updateLastSeen). seenIds[] (by event id)
     // is the real duplicate guard; overlap + seenIds absorb the backlog.
@@ -2137,7 +2137,7 @@ async function handleIncomingGiftWrap(giftWrap) {
     try {
       unwrapped = unwrapAndVerifyGiftWrap(giftWrap);
     } catch (e) {
-      console.warn('[nostr] gift-wrap inválido o no autenticado, ignorado:', e.message);
+      console.warn('[nostr] gift-wrap invalid or unauthenticated, ignored:', e.message);
       return;
     }
     const senderPk = unwrapped.pubkey;
@@ -2168,14 +2168,14 @@ async function handleIncomingGiftWrap(giftWrap) {
     // intent -> a subsequent relay replay / crash re-executes it (break
     // exactly-once). So: no admission -> return (relay re-delivers).
     if (giftWrap.id) {
-      // AUDIT-16: propagar el created_at real del wrap al camino fail-closed
-      // para que pendingSince se ancle al MIN(cursor local, created_at) y se
+      // AUDIT-16: propagate the wrap's real created_at to the fail-closed path
+      // so pendingSince anchors to MIN(local cursor, created_at) and stays
       // stays in the drops ledger (point recovery by id). A wrap delayed by
       // backlog has a created_at earlier than the local rejection time;
       // anchoring only to Date.now() would make it unreachable.
       const admitted = markDelivery(giftWrap.id, 'pending', giftWrap.created_at);
       if (!admitted) {
-        console.warn('[nostr] admision durable rechazada; NO se procesa (backpressure fail-closed, relay reintentara)');
+        console.warn('[nostr] durable admission rejected; NOT processed (backpressure fail-closed, relay will retry)');
         return;
       }
     }
@@ -2193,7 +2193,7 @@ async function handleIncomingGiftWrap(giftWrap) {
     }
     if (cmd === 'grabaciones' || cmd === 'recordings' || cmd === 'grabaciones?') {
       if (!JITSI_MODE) {
-        const ok = await publishDM(senderPk, 'Este bridge no gestiona salas Jitsi (modo ' + MODE + ').', 'Bridge').catch(() => false);
+        const ok = await publishDM(senderPk, 'This bridge does not manage Jitsi rooms (mode ' + MODE + ').', 'Bridge').catch(() => false);
         finishDelivery(giftWrap.id, !!ok, false);
         return;
       }
@@ -2201,8 +2201,8 @@ async function handleIncomingGiftWrap(giftWrap) {
       // (reads every recording). Only `full`-permission agents (or agents with
       // at least one restricted room) may list recordings; fail closed.
       if (!agentCanOperateRoom(senderName, null)) {
-        console.log('[nostr] recordings denegado a', senderName, '(no full permission)');
-        const ok = await publishDM(senderPk, 'No tienes permiso para listar grabaciones.', 'Bridge').catch(() => false);
+        console.log('[nostr] recordings denied to', senderName, '(no full permission)');
+        const ok = await publishDM(senderPk, 'You do not have permission to list recordings.', 'Bridge').catch(() => false);
         finishDelivery(giftWrap.id, false, true);
         return;
       }
@@ -2223,7 +2223,7 @@ async function handleIncomingGiftWrap(giftWrap) {
       }
     }
 
-    // --- Modo jitsi: comandos de salas y mensajes a sala ---
+    // --- Jitsi mode: room commands and messages to room ---
     if (JITSI_MODE) {
       if (PAUSED.jitsi) {
         console.log('[nostr] jitsi paused: DM from', senderName, 'ignored (room command)');
@@ -2251,19 +2251,19 @@ async function handleIncomingGiftWrap(giftWrap) {
       if (m) { room = m[1].trim(); text = m[2].trim(); }
       if (!room) room = lastRoomByAgent.get(senderName);
       if (!room || !text) {
-        console.log('[nostr] DM sin sala ni texto, ignorado');
+        console.log('[nostr] DM without room or text, ignored');
         finishDelivery(giftWrap.id, false, true);
         return;
       }
       // AUDIT kaieriksen M01: gate message injection by sender + room scope.
       if (!agentCanOperateRoom(senderName, room)) {
-        console.log('[nostr] inyección en sala', room, 'denegada a', senderName, '(sin permiso para esa sala)');
-        const ok = await publishDM(senderPk, 'No tienes permiso para escribir en la sala ' + room + '.', 'Bridge').catch(() => false);
+        console.log('[nostr] room injection', room, 'denied to', senderName, '(no permission for that room)');
+        const ok = await publishDM(senderPk, 'You do not have permission to write in room ' + room + '.', 'Bridge').catch(() => false);
         finishDelivery(giftWrap.id, false, true);
         return;
       }
       if (!rooms.has(room)) {
-        console.log('[nostr] sala', room, 'no activa en el puente, ignorado');
+        console.log('[nostr] room', room, 'not active in the bridge, ignored');
         finishDelivery(giftWrap.id, false, true);
         return;
       }
@@ -2272,7 +2272,7 @@ async function handleIncomingGiftWrap(giftWrap) {
       return;
     }
 
-    console.log('[nostr] DM no procesado (modo ' + MODE + '):', content.slice(0, 60));
+    console.log('[nostr] DM not processed (mode ' + MODE + '):', content.slice(0, 60));
     finishDelivery(giftWrap.id, false, true);
   } catch (err) {
     console.error('[nostr] error procesando gift-wrap:', err.message);
@@ -2287,20 +2287,20 @@ function buildHelp(senderName) {
     lines.push('  Puedes hablar con: ' + (perms ? perms.join(', ') : (routingDefault === 'allow' ? 'todos' : 'nadie (default deny)')));
   }
   if (JITSI_MODE) {
-    lines.push('  join [sala]          — activar sala');
-    lines.push('  leave [sala]         — desactivar sala');
-    lines.push('  [sala] texto         — enviar texto a sala');
-    lines.push('  grabaciones          — listar grabaciones');
+    lines.push('  join [room]           — activate room');
+    lines.push('  leave [room]          — deactivate room');
+    lines.push('  [room] text           — send text to room');
+    lines.push('  grabaciones          — list recordings');
   }
   lines.push('  status                — este mensaje');
   return lines.join('\n');
 }
 
-// Enruta un DM "@agente texto" al destinatario si los permisos lo permiten.
+// Routes a "@agent text" DM to the recipient if permissions allow it.
 async function handleRoute(fromName, fromPk, route, giftWrapId) {
   const toPk = agentByName.get(route.to);
   if (!toPk) {
-    await publishDM(fromPk, 'Agente desconocido: @' + route.to + '. Agentes: ' + [...agentByName.keys()].join(', '), 'Bridge').catch(err => console.warn('[routing] aviso "agente desconocido" no entregado a', fromPk.slice(0, 8) + ':', err.message));
+    await publishDM(fromPk, 'Unknown agent: @' + route.to + '. Agents: ' + [...agentByName.keys()].join(', '), 'Bridge').catch(err => console.warn('[routing] "unknown agent" notice not delivered to', fromPk.slice(0, 8) + ':', err.message));
     // 🟡 LOW (audit): DETERMINISTIC rejection — the retry will never change
     // the result (the agent does not exist). Finish to not leave a useless
     // `pending` consuming the ledger until PENDING_TTL_SECS.
@@ -2308,8 +2308,8 @@ async function handleRoute(fromName, fromPk, route, giftWrapId) {
     return;
   }
   if (!routingAllowed(fromName, route.to, routingPerms, routingDefault)) {
-    console.log('[routing] bloqueado:', fromName, '->', route.to);
-    await publishDM(fromPk, 'No tienes permiso para escribir a @' + route.to + '.', 'Bridge').catch(err => console.warn('[routing] aviso "sin permiso" no entregado a', fromPk.slice(0, 8) + ':', err.message));
+    console.log('[routing] blocked:', fromName, '->', route.to);
+    await publishDM(fromPk, 'You do not have permission to write to @' + route.to + '.', 'Bridge').catch(err => console.warn('[routing] "no permission" notice not delivered to', fromPk.slice(0, 8) + ':', err.message));
     // 🟡 LOW (audit): DETERMINISTIC rejection — no permission will not change
     // on retry. Finish (rejected) to free the ledger from this pending.
     finishDelivery(giftWrapId, false, true);
@@ -2351,7 +2351,7 @@ async function handleRoute(fromName, fromPk, route, giftWrapId) {
       // stream progress), never with a sender-created created_at.
       advanceRecoveryWatermark();
     }
-    await publishDM(fromPk, `Mensaje entregado a @${route.to}.`, 'Bridge').catch(() => {});
+    await publishDM(fromPk, `Message delivered to @${route.to}.`, 'Bridge').catch(() => {});
   } else {
     // F2-10 + F2-R02: the publication failed — compensate ONLY the
     // anti-loop state consumed by THIS admission (hash/pair/rid), using the
@@ -2362,7 +2362,7 @@ async function handleRoute(fromName, fromPk, route, giftWrapId) {
     ANTILOOP.routed--;
     // MEDIO-4: keep delivery in 'pending' (it stays non-seen-as-delivered), so
     // a retry / reconnect can deliver it; do NOT mark delivered.
-    await publishDM(fromPk, `No pude entregar el mensaje a @${route.to}.`, 'Bridge').catch(err => console.warn('[routing] aviso de fallo de entrega no entregado a', fromPk.slice(0, 8) + ':', err.message));
+    await publishDM(fromPk, `Could not deliver the message to @${route.to}.`, 'Bridge').catch(err => console.warn('[routing] delivery-failure notice not delivered to', fromPk.slice(0, 8) + ':', err.message));
   }
 }
 
@@ -2380,7 +2380,7 @@ function buildUntrustedRoomRelayPayload(room, nick, text) {
 // ---------------------------------------------------------------------------
 // Jitsi (XMPP MUC) — solo si JITSI_MODE
 // ---------------------------------------------------------------------------
-const rooms = new Map();         // sala -> {joinedAt, nick, agents: [nombres]}
+const rooms = new Map();         // room -> {joinedAt, nick, agents: [names]}
 const pendingIQs = new Map();    // id -> {resolve, reject, timer}
 const discoPings = new Map();    // id -> {room, timer}
 const DEFAULT_TIMEOUT_MIN = 15;
@@ -2544,13 +2544,13 @@ if (JITSI_MODE) {
       clearTimeout(p.timer);
       if (stanza.attrs.type === 'error') {
         const errEl = stanza.getChild('error');
-        let cond = 'desconocido';
+        let cond = 'unknown';
         if (errEl) {
           for (const c of ['item-not-found', 'service-unavailable', 'gone', 'not-allowed', 'forbidden']) {
             if (errEl.getChild(c)) { cond = c; break; }
           }
         }
-        console.log(`[xmpp] sonda sala ${p.room}: error ${cond} -> sala destruida, limpiando`);
+        console.log(`[xmpp] room probe ${p.room}: error ${cond} -> room destroyed, cleaning up`);
         leaveRoom(p.room);
       }
       return;
@@ -2572,8 +2572,8 @@ if (JITSI_MODE) {
             if (errEl.getChild(c)) { cond = c; break; }
           }
         }
-        console.error('[focus] IQ error:', cond || 'desconocido');
-        p.reject(new Error('IQ error de focus: ' + (cond || stanza.toString().slice(0, 200))));
+        console.error('[focus] IQ error:', cond || 'unknown');
+        p.reject(new Error('focus IQ error: ' + (cond || stanza.toString().slice(0, 200))));
       }
       return;
     }
@@ -2598,7 +2598,7 @@ if (JITSI_MODE) {
         const errEl = stanza.getChild('error');
         if (errEl) console.error('[xmpp]   condition:', errEl.getChildText && (errEl.getChildText('item-not-found') || errEl.getChildText('not-allowed') || errEl.getChildText('forbidden') || errEl.getChildText('conflict')) || '(see stanza)');
         if (rooms.has(room)) {
-          console.error('[xmpp] presencia error en sala, limpiando estado completo:', room);
+          console.error('[xmpp] presence error in room, clearing full state:', room);
           await leaveRoom(room);
         }
       }
@@ -2733,7 +2733,7 @@ if (JITSI_MODE) {
 
   function scheduleAloneLeave(room) {
     if (aloneTimers.has(room)) return;
-    console.log('[xmpp] sala', room, 'sin ocupantes, cerrando en 30s');
+    console.log('[xmpp] room', room, 'no occupants, closing in 30s');
     const t = setTimeout(async () => {
       aloneTimers.delete(room);
       if (rooms.has(room) && (roomOccupants.get(room) || new Set()).size === 0) {
@@ -2878,7 +2878,7 @@ async function persistRoomTimeout(room, timeout) {
     }
     const rawRoom = (isJoin ? joinM[1] : leaveM[1] || '').trim();
     if (!rawRoom) {
-      await publishDM(senderPk, 'Falta la sala. Uso: join [sala] | join [https://meet.../sala] [--nick X] [--password Y] [--timeout N] | leave [sala]', 'Bridge').catch(() => {});
+      await publishDM(senderPk, 'Missing room. Usage: join [room] | join [https://meet.../room] [--nick X] [--password Y] [--timeout N] | leave [room]', 'Bridge').catch(() => {});
       return;
     }
     let roomName = rawRoom;
@@ -2889,8 +2889,8 @@ async function persistRoomTimeout(room, timeout) {
     // sender + room scope. A bare `join`/`leave` with no explicit room is
     // treated as room-agnostic (only `full` agents). Fail closed.
     if (!agentCanOperateRoom(senderName, roomName)) {
-      console.log('[nostr] join/leave en sala', roomName, 'denegado a', senderName, '(sin permiso para esa sala)');
-      await publishDM(senderPk, 'No tienes permiso para operar la sala ' + roomName + '.', 'Bridge').catch(() => {});
+      console.log('[nostr] join/leave in room', roomName, 'denied to', senderName, '(no permission for that room)');
+      await publishDM(senderPk, 'You do not have permission to operate room ' + roomName + '.', 'Bridge').catch(() => {});
       return;
     }
     const opts = {nick: null, password: null, timeout: null};
@@ -3044,7 +3044,7 @@ const server = http.createServer((req, res) => {
         if (!room) return res.end(JSON.stringify({ok: false, error: 'room required'}));
         // L-02: report an error when the room was never active instead of a fake ok.
         const left = await leaveRoomFn(room);
-        if (!left) return res.end(JSON.stringify({ok: false, error: 'sala no activa en el puente: ' + room}));
+        if (!left) return res.end(JSON.stringify({ok: false, error: 'room not active in the bridge: ' + room}));
         res.end(JSON.stringify({ok: true, room}));
       } catch (e) { res.statusCode = e.statusCode || 500; res.end(JSON.stringify({ok: false, error: e.message})); }
     });
@@ -3126,16 +3126,16 @@ const server = http.createServer((req, res) => {
       let previousConfigAgents = null;
       let previousTimeout = null;
       try {
-        if (!JITSI_MODE) return res.end(JSON.stringify({ok: false, error: 'modo ' + MODE + ': sin salas Jitsi'}));
-        if (PAUSED.jitsi) return res.end(JSON.stringify({ok: false, error: 'jitsi pausado'}));
+        if (!JITSI_MODE) return res.end(JSON.stringify({ok: false, error: 'mode ' + MODE + ': no Jitsi rooms'}));
+        if (PAUSED.jitsi) return res.end(JSON.stringify({ok: false, error: 'jitsi paused'}));
         const parsed = parseBody(body);
         room = parsed.room;
         const agents = parsed.agents;
         const timeout = parsed.timeout;
-        if (!room) return res.end(JSON.stringify({ok: false, error: 'room requerido'}));
-        if (!Array.isArray(agents)) return res.end(JSON.stringify({ok: false, error: 'agents debe ser array'}));
+        if (!room) return res.end(JSON.stringify({ok: false, error: 'room required'}));
+        if (!Array.isArray(agents)) return res.end(JSON.stringify({ok: false, error: 'agents must be an array'}));
         const unknown = agents.filter(a => !agentByName.has(a));
-        if (unknown.length) return res.end(JSON.stringify({ok: false, error: 'agentes desconocidos: ' + unknown.join(', ')}));
+        if (unknown.length) return res.end(JSON.stringify({ok: false, error: 'unknown agents: ' + unknown.join(', ')}));
         previousAgents = roomAgents.has(room) ? [...roomAgents.get(room)] : null;
         previousConfigAgents = CONFIG.roomAgents && Object.prototype.hasOwnProperty.call(CONFIG.roomAgents, room)
           ? [...CONFIG.roomAgents[room]] : null;
@@ -3281,16 +3281,16 @@ module.exports = {
   recordDropped,
   recoverDropped,
   releasePendingSinceIfRecovered,
-  updateLastSeen,   // AUDIT-4/5 🟡: cursor de recepción (lectura para tests del backlog no autorizado)
+  updateLastSeen,   // AUDIT-4/5 🟡: receive cursor (read for unauthorized-backlog tests)
   markSeen,
   isSeen,
   markRejected,
   isRejected,
-  rejectedIds,   // LOW-8: caché efímero de frames rechazados (lectura para tests)
+  rejectedIds,   // LOW-8: ephemeral cache of rejected frames (read for tests)
   markDelivery,
   deliveryStatus,
-  // AUDIT-M01-BLOCKER2: finishDelivery expuesto para probar el invariante de
-  // que un evento rejected (denegado) NO avanza el watermark y que el avance
+  // AUDIT-M01-BLOCKER2: finishDelivery exposed to test the invariant that a
+  // rejected (denied) event does NOT advance the watermark and that the advance
   // occurs only on the success path (ok=true).
   finishDelivery,
   // AUDIT-10 (root): recovery watermark (advances ONLY with processed/admitted
@@ -3330,7 +3330,7 @@ module.exports = {
   // paths (join/leave/inject/recordings). Exposed for tests.
   agentCanOperateRoom,
   buildUntrustedRoomRelayPayload,
-  evalRoomPermission, // lógica pura de la matriz de permisos (test aislado)
+  evalRoomPermission, // pure permission-matrix logic (isolated test)
   // LOW-10: TLS bypass decision (local hosts only) for tests.
   CONFIG,
 };

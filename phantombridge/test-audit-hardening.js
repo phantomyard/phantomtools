@@ -108,7 +108,7 @@ function request(port, pathName, headers = {}) {
       actors: [{id: 'alice', role: 'ceo'}],
       escalation_matrix: [],
     };
-    assert.throws(() => deriveAgents(org), /requiere id, role y npub/);
+    assert.throws(() => deriveAgents(org), /requires id, role and npub/);
   });
 
   await new Promise(resolve => bridge.server.close(resolve));

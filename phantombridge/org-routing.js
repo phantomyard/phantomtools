@@ -30,16 +30,16 @@ const ORG_SCHEMA_VERSION = 1;
 function parseOrgYaml(text) {
   const doc = yaml.load(text);
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
-    throw new Error('org.yaml vacío o no es un mapa');
+    throw new Error('org.yaml empty or not a map');
   }
   if (doc.version !== ORG_SCHEMA_VERSION) {
     throw new Error(
-      'org.yaml version incompatible: se requiere version: ' + ORG_SCHEMA_VERSION +
-      ' y se recibió ' + JSON.stringify(doc.version)
+      'org.yaml version incompatible: requires version: ' + ORG_SCHEMA_VERSION +
+      ' and received ' + JSON.stringify(doc.version)
     );
   }
   if (!Array.isArray(doc.roles) || !Array.isArray(doc.actors) || !Array.isArray(doc.escalation_matrix)) {
-    throw new Error('org.yaml incompleto: roles, actors y escalation_matrix deben ser arrays');
+    throw new Error('org.yaml incomplete: roles, actors and escalation_matrix must be arrays');
   }
   return doc;
 }
@@ -52,27 +52,27 @@ function deriveAgents(org) {
   const seenActor = new Set();
   for (const actor of org.actors) {
     if (!actor || typeof actor !== 'object' || !actor.id || !actor.role || !actor.npub) {
-      throw new Error('actor inválido en org.yaml: cada actor requiere id, role y npub (FAIL-CLOSED)');
+      throw new Error('invalid actor in org.yaml: each actor requires id, role and npub (FAIL-CLOSED)');
     }
     let decoded;
     try {
       decoded = nip19.decode(actor.npub);
     } catch (e) {
-      throw new Error('npub inválido para actor "' + actor.id + '": ' + e.message);
+      throw new Error('invalid npub for actor "' + actor.id + '": ' + e.message);
     }
     if (decoded.type !== 'npub') {
-      throw new Error('"' + actor.npub + '" no es un npub (actor ' + actor.id + ')');
+      throw new Error('"' + actor.npub + '" is not an npub (actor ' + actor.id + ')');
     }
     const hex = typeof decoded.data === 'string' ? decoded.data : Buffer.from(decoded.data).toString('hex');
     if (!/^[0-9a-f]{64}$/i.test(hex)) {
-      throw new Error('pubkey inválido para actor "' + actor.id + '"');
+      throw new Error('invalid pubkey for actor "' + actor.id + '"');
     }
     const pub = hex.toLowerCase();
     if (seenActor.has(actor.id)) {
-      throw new Error('actor.id duplicado en org.yaml: "' + actor.id + '" (identidad ambigua, FAIL-CLOSED)');
+      throw new Error('duplicate actor.id in org.yaml: "' + actor.id + '" (ambiguous identity, FAIL-CLOSED)');
     }
     if (seenPubkey.has(pub)) {
-      throw new Error('pubkey duplicado en org.yaml (hex ' + pub.slice(0, 8) + '...) compartido por más de un actor; identidad ambigua, FAIL-CLOSED');
+      throw new Error('duplicate pubkey in org.yaml (hex ' + pub.slice(0, 8) + '...) shared by more than one actor; ambiguous identity, FAIL-CLOSED');
     }
     seenActor.add(actor.id);
     seenPubkey.add(pub);
@@ -102,33 +102,33 @@ function validateOrgReferences(org) {
   const roleIds = new Set();
   for (const role of org.roles) {
     if (!role || typeof role !== 'object' || !role.id) {
-      throw new Error('role inválido en org.yaml: falta id');
+      throw new Error('invalid role in org.yaml: missing id');
     }
-    if (roleIds.has(role.id)) throw new Error('role.id duplicado en org.yaml: "' + role.id + '"');
+    if (roleIds.has(role.id)) throw new Error('duplicate role.id in org.yaml: "' + role.id + '"');
     roleIds.add(role.id);
   }
 
   for (const actor of org.actors) {
     if (!roleIds.has(actor.role)) {
-      throw new Error('actor "' + actor.id + '" referencia role inexistente "' + actor.role + '"');
+      throw new Error('actor "' + actor.id + '" references nonexistent role "' + actor.role + '"');
     }
   }
 
   for (const role of org.roles) {
     if (role.reports_to !== undefined && role.reports_to !== null && !roleIds.has(role.reports_to)) {
-      throw new Error('role "' + role.id + '" reports_to inexistente "' + role.reports_to + '"');
+      throw new Error('role "' + role.id + '" reports_to nonexistent "' + role.reports_to + '"');
     }
   }
 
   for (const esc of org.escalation_matrix) {
     if (!esc || typeof esc !== 'object' || !esc.from || !esc.to) {
-      throw new Error('entrada inválida en escalation_matrix: se requieren from y to');
+      throw new Error('invalid entry in escalation_matrix: from and to are required');
     }
     if (esc.from !== '*' && !roleIds.has(esc.from)) {
-      throw new Error('escalation_matrix.from referencia role inexistente "' + esc.from + '"');
+      throw new Error('escalation_matrix.from references nonexistent role "' + esc.from + '"');
     }
     if (!roleIds.has(esc.to)) {
-      throw new Error('escalation_matrix.to referencia role inexistente "' + esc.to + '"');
+      throw new Error('escalation_matrix.to references nonexistent role "' + esc.to + '"');
     }
   }
 }
@@ -179,7 +179,7 @@ function deriveRouting(org) {
 // Returns {agents, routing} on success, or throws a descriptive Error:
 //  - org.yaml AUSENTE  -> Error with .code='EMISSING' (legacy fallback to manual
 //    config.json routing is legitimate when the file simply isn't deployed).
-//  - org.yaml PRESENTE pero inválido/roto -> Error with .code='EINVALID'.
+//  - org.yaml PRESENT but invalid/broken -> Error with .code='EINVALID'.
 //    This is FAIL-CLOSED: an invalid source of truth must NOT silently fall
 //    back to the (possibly permissive/obsolete) manual routing, because that
 //    would deviate from the normative org.yaml hierarchy. Callers decide how
@@ -196,8 +196,8 @@ function loadOrgRouting(orgFile) {
     const missing = readErr.code === 'ENOENT';
     const err = new Error(
       missing
-        ? 'org.yaml no encontrado (' + orgFile + ')'
-        : 'org.yaml ilegible (' + orgFile + '): ' + readErr.message
+        ? 'org.yaml not found (' + orgFile + ')'
+        : 'org.yaml unreadable (' + orgFile + '): ' + readErr.message
     );
     err.code = missing ? 'EMISSING' : 'EINVALID';
     throw err;
@@ -212,7 +212,7 @@ function loadOrgRouting(orgFile) {
   } catch (e) {
     // FAIL-CLOSED: the file exists but cannot be parsed/derived. Surface this
     // loudly instead of silently falling back to manual routing.
-    const err = new Error('org.yaml inválido (' + orgFile + '): ' + e.message);
+    const err = new Error('invalid org.yaml (' + orgFile + '): ' + e.message);
     err.code = 'EINVALID';
     throw err;
   }

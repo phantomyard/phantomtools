@@ -251,7 +251,7 @@ t('[BLOQUEANTE] PAUSE_FILE corrupto (JSON inválido) -> loadPause() lanza, el br
     runProbe(cfg, 'corrupt', "console.log('CORRUPT no-debio-llegar');");
   } catch (e) { loadError = e; }
   assert.ok(loadError, 'loadPause() debe lanzar al arrancar con PAUSE_FILE corrupto');
-  assert.ok(/PAUSE_FILE corrupto/.test(String(loadError.stderr || loadError.message)),
+  assert.ok(/PAUSE_FILE corrupt/.test(String(loadError.stderr || loadError.message)),
     'el error debe ser inequívoco, got: ' + String(loadError.stderr || loadError.message).split('\n')[0]);
 });
 
@@ -266,7 +266,7 @@ t('[BLOQUEANTE] PAUSE_FILE con esquema inválido (falta jitsi/nostr booleano) ->
   try { runProbe(cfg, 'schema', "console.log('SCHEMA no-debio-llegar');"); }
   catch (e) { loadError = e; }
   assert.ok(loadError, 'loadPause() debe lanzar con esquema inválido');
-  assert.ok(/esquema inválido/.test(String(loadError.stderr || loadError.message)),
+  assert.ok(/invalid schema/.test(String(loadError.stderr || loadError.message)),
     'error inequívoco de esquema, got: ' + String(loadError.stderr || loadError.message).split('\n')[0]);
 });
 
@@ -292,7 +292,7 @@ t('[ALTO] migración legacy: si persistPause() falla al migrar, loadPause() abor
   try { runProbe(cfg, 'migfail', "console.log('MIGFAIL no-debio-llegar');"); }
   catch (e) { loadError = e; }
   assert.ok(loadError, 'la migración debe abortar si no puede crear el PAUSE_FILE durable');
-  assert.ok(/no se pudo migrar/.test(String(loadError.stderr || loadError.message)),
+  assert.ok(/failed to migrate/.test(String(loadError.stderr || loadError.message)),
     'error inequívoco de migración, got: ' + String(loadError.stderr || loadError.message).split('\n')[0]);
 });
 
