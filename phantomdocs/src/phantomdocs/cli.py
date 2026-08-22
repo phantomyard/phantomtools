@@ -13,7 +13,13 @@ import sys
 import click
 
 from . import __version__
-from .access import can_read, can_write, load_org, normalize_category, resolved_categories
+from .access import (
+    can_read,
+    can_write,
+    load_org,
+    normalize_category,
+    resolved_categories,
+)
 from .audit import append as audit_append
 from .audit import read as audit_read
 from .audit import verify_chain as audit_verify_chain
@@ -49,7 +55,12 @@ from .setup import (
     render_wrapper,
     write_wrapper,
 )
-from .signing import npub_to_pubkey_hex, pubkey_from_nsec, sign_mutation, verify_mutation
+from .signing import (
+    npub_to_pubkey_hex,
+    pubkey_from_nsec,
+    sign_mutation,
+    verify_mutation,
+)
 from .storage import LocalBackend, StorageError, read_reference, resolve_backend
 from .update import is_newer, latest_release
 

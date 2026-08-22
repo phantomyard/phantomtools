@@ -9,7 +9,6 @@ from click.testing import CliRunner
 
 from phantomdocs.cli import main
 
-
 ORG = """\
 version: 1
 organization:

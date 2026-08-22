@@ -99,9 +99,8 @@ actors:
 
 
 def test_add_signs_node_and_verify_accepts(tmp_path, nsec_file):
-    import coincurve
 
-    nsec_path, pubkey, secret = nsec_file
+    nsec_path, pubkey, _secret = nsec_file
     org = tmp_path / "org.yaml"
     org.write_text(ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey))))
 
@@ -141,7 +140,7 @@ def test_add_signs_node_and_verify_accepts(tmp_path, nsec_file):
 def test_verify_flags_undeclared_signing_key(tmp_path, nsec_file):
     import coincurve
 
-    nsec_path, pubkey, secret = nsec_file
+    nsec_path, _pubkey, _secret = nsec_file
     # org.yaml declares a DIFFERENT actor npub than the signing key
     other_pubkey = coincurve.PrivateKey().public_key.format()[1:33].hex()
     org = tmp_path / "org.yaml"

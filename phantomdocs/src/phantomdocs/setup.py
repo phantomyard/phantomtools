@@ -16,7 +16,6 @@ generated file and is replaced wholesale (it is marked as generated).
 from __future__ import annotations
 
 import os
-import stat
 from typing import Any
 
 START = "<!-- phantomdocs:start -->"

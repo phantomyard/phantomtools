@@ -90,7 +90,8 @@ def test_add_by_reference_no_local_copy(tmp_path):
     assert r.exit_code == 0, r.output
     assert "added external.pdf" in r.output
 
-    data = yaml.safe_load(open(f"{root}/manifest.yaml", encoding="utf-8"))
+    with open(f"{root}/manifest.yaml", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
     docs = [n for n in data["nodes"] if n.get("kind") == "doc"]
     assert len(docs) == 1
     assert docs[0]["locations"][0] == {"backend": "file", "ref": str(ext)}
