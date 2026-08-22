@@ -28,6 +28,7 @@ Two distinct write strategies, not one:
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import re
 import shutil
@@ -50,6 +51,13 @@ from .request_id import resolve_request_id_format
 from .scopes import SCOPES_FILENAME, derive_scopes, serialize_scopes
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+# The scaffold norms are filed as drawer ROWS at deploy time, not written as
+# a markdown drawer: memory/norms.md is a deprecated read path on phantombot
+# >= 1.1.282 (the threat judge is briefed from ranked drawer_entries rows in
+# memory.sqlite). norms.json is the deploy input carrying one plain-text line
+# per norm.
+NORMS_FILENAME = "norms.json"
 
 # mkstemp leftovers from a crashed `_atomic_write` (SIGKILL between mkstemp
 # and os.replace) are named `.{name}.{6 alnum}` in the output tree. They are
@@ -106,6 +114,10 @@ _SCAFFOLD_KB_DIRS = [
 # the memory system expects `memory/people.md` & co. as structured drawer
 # FILES (the nightly cycle promotes tagged entries into them), plus a KB
 # home page and note templates. Written only if missing, never overwritten.
+# NOTE: `memory/norms.md` is NOT seeded here — on phantombot >= 1.1.282 the
+# norms drawer is rows in memory.sqlite (drawer_entries), not a file, and the
+# compiler instead emits norms.json (see NORMS_FILENAME) which `po deploy`
+# files as rows at deploy time.
 _SEED_FILES: dict[str, str] = {
     "memory/people.md": (
         "# People\n\nContacts, relationships, dynamics. The nightly cycle "
@@ -125,17 +137,6 @@ _SEED_FILES: dict[str, str] = {
         "# Commitments\n\nDeadlines and obligations. The nightly cycle promotes "
         "[commitment]-tagged entries.\n\n"
         "## (no entries yet)\n"
-    ),
-    "memory/norms.md": (
-        "# Norms\n\nRoutine communication patterns used by the operator. "
-        "Channels, expected cadence, request-id conventions, and known "
-        'counterparties belong here. The ORG:BEGIN/END "norms" block below '
-        "is compiled from org.yaml on every build; everything OUTSIDE that "
-        "block is owned by the capture/heartbeat/nightly pipeline and is "
-        "preserved.\n\n"
-        "The full protocol page lives in the KB: see "
-        "[[procedures/comunicacion-agentes]].\n\n"
-        "<!-- ORG:BEGIN norms -->\n<!-- ORG:END norms -->\n"
     ),
     "kb/Home.md": (
         "---\ntype: index\ntitle: Home\ndescription: Persona knowledge-base index.\naliases: [home]\ntags: [navigation]\ncreated: {today}\nupdated: {today}\n---\n\n"
@@ -317,46 +318,47 @@ def _norma_context(spec: OrgSpec) -> dict:
     }
 
 
-def _norm_drawer_bullets(spec: OrgSpec, t: dict) -> list[str]:
-    """One flat bullet string per norm entry, so the drawer renders one
-    bullet per line. The Jinja env uses trim_blocks=True, which eats the
-    newline after any block tag — building the bullets here (instead of
-    wrapping each in `{% if %}`/`{% endif %}`) keeps them on separate lines
-    so phantombot's drawer-ingest files them as clean, stable entries."""
+def _norm_lines(spec: OrgSpec, t: dict) -> list[str]:
+    """One self-contained plain-text line per scaffold norm, for filing as
+    drawer ROWS at deploy time (phantombot's ``drawers.file``). No markdown
+    decoration and no embedded newline: one row is one line, so the threat
+    judge's line-based briefing trims on entry boundaries."""
     root = next((r for r in spec.roles if not r.reports_to), None)
     ceo_name = root.name if root else "CEO"
     reports_to_human = root.reports_to_human if root else None
     marker = (
         spec.communication.envelope.marker if spec.communication.envelope else "[env]"
     )
-    bullets: list[str] = []
+    lines: list[str] = []
     hc = spec.communication.human_channel
     if hc:
-        line = f"**{t['norm_drawer_human']}**: {hc.platform}"
+        line = f"{t['norm_drawer_human']}: {hc.platform}"
         if hc.group:
             line += f" — {hc.group}"
         if hc.chat_id:
-            line += f" (`{hc.chat_id}`)"
-        bullets.append(line)
+            line += f" ({hc.chat_id})"
+        lines.append(line)
     ac = spec.communication.agent_channel
     if ac:
-        line = f"**{t['norm_drawer_agent']}**: {ac.platform}"
+        line = f"{t['norm_drawer_agent']}: {ac.platform}"
         if ac.relay:
-            line += f" — relay `{ac.relay}`"
-        bullets.append(line)
-    bullets.append(f"**{t['norm_drawer_rid']}**: `{resolve_request_id_format(spec)}`")
-    bullets.append(t["norm_drawer_no_private"])
+            line += f" — relay {ac.relay}"
+        lines.append(line)
+    lines.append(f"{t['norm_drawer_rid']}: {resolve_request_id_format(spec)}")
+    lines.append(t["norm_drawer_no_private"])
     if reports_to_human:
-        bullets.append(
+        lines.append(
             t["norm_drawer_escalate_full"].format(
                 ceo_name=ceo_name, reports_to_human=reports_to_human
             )
         )
     else:
-        bullets.append(t["norm_drawer_escalate_short"].format(ceo_name=ceo_name))
+        lines.append(t["norm_drawer_escalate_short"].format(ceo_name=ceo_name))
     if marker:
-        bullets.append(t["norm_drawer_envelope"].format(marker=marker))
-    return bullets
+        lines.append(t["norm_drawer_envelope"].format(marker=marker))
+    # Plain prose for the judge: strip any residual markdown emphasis and
+    # backticks so the row content is clean, self-contained text.
+    return [ln.replace("**", "").replace("`", "").strip() for ln in lines]
 
 
 def _render_norm_protocol(norma_md: str, spec: OrgSpec, t: dict) -> str:
@@ -665,16 +667,17 @@ def build_actor(
 
     ensure_scaffold(actor_dir)
 
-    # The communication norm is written in TWO places:
+    # The communication norm is produced in TWO places:
     #   1. kb/procedures/comunicacion-agentes.md — the full, human-readable
     #      protocol page (OKF frontmatter so it ranks on recall).
-    #   2. memory/norms.md — a CONCISE operational summary, block-merged as
-    #      an `<!-- ORG:BEGIN norms -->` block. That drawer is read in full
-    #      by the threat judge, so it must be briefed on what routine
-    #      agent-to-agent traffic looks like — otherwise the org's own
-    #      coordination gets scored as anomalous. The block is rendered on
-    #      every build (empty when the org declares no channels, so a
-    #      channel drop empties it instead of leaving a stale block).
+    #   2. norms.json — one plain-text line per scaffold norm. `po deploy`
+    #      files each line as a drawer ROW at deploy time (phantombot's
+    #      `memory drawers --file`), because on phantombot >= 1.1.282 the
+    #      threat judge is briefed from ranked drawer_entries rows in
+    #      memory.sqlite — `memory/norms.md` is a deprecated read path and
+    #      nothing reads it anymore. The manifest is regenerated on every
+    #      build (empty when the org declares no channels, so a channel
+    #      drop empties it instead of leaving stale rows).
     if spec.communication.human_channel or spec.communication.agent_channel:
         norma_md = env.get_template("norma.j2").render(t=t, **_norma_context(spec))
         # Human-readable protocol page in the canonical KB category, with
@@ -686,14 +689,19 @@ def build_actor(
         if write_plain_if_changed(procedure_path, procedure_body):
             written.append(procedure_path)
 
-        drawer_md = env.get_template("norma_drawer.j2").render(
-            today=datetime.datetime.now(tz=datetime.timezone.utc).date().isoformat(),
-            bullets=_norm_drawer_bullets(spec, t),
-        )
+        norm_lines = _norm_lines(spec, t)
     else:
-        drawer_md = "<!-- ORG:BEGIN norms -->\n<!-- ORG:END norms -->\n"
-    p = actor_dir / "memory" / "norms.md"
-    if write_if_changed(p, drawer_md):
+        norm_lines = []
+    p = actor_dir / NORMS_FILENAME
+    if write_plain_if_changed(
+        p,
+        json.dumps(
+            {"kind": "norms", "origin": "phantomorg", "entries": norm_lines},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+    ):
         written.append(p)
 
     # Phantomchat config (phantomchat.json): compiled from org.yaml when the
@@ -722,10 +730,9 @@ def _reconcile_stale_output(spec: OrgSpec, out_dir: Path) -> None:
       dirs of OTHER orgs, unmanaged dirs, or dirs without our metadata are
       left untouched.
     - Derived artifacts (``phantomchat.json``, the communication norm
-      ``kb/procedures/comunicacion-agentes.md`` and the ``memory/norms.md``
-      marker block, ``HUMANS.md``) are removed from a current actor when the
-      org model no longer produces them (npub dropped, no channels, no
-      humans block).
+      ``kb/procedures/comunicacion-agentes.md``, the ``norms.json`` manifest,
+      ``HUMANS.md``) are removed from a current actor when the org model no
+      longer produces them (npub dropped, no channels, no humans block).
 
     This runs only on the build OUTPUT (regenerable state), never on a live
     persona directory.

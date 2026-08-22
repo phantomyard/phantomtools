@@ -41,6 +41,7 @@ from .deploy.target import (
     default_personas_dir,
 )
 from .deploy.target import deploy as deploy_target
+from .deploy.norms import file_norms, NormFilingResult
 from .importer import audit_persona_dir, render_org_yaml_fragment, resolve_against_org
 from .spec.loader import OrgSpecError
 from .updater import run_update as run_updater
@@ -741,7 +742,23 @@ def telegram_check_cmd(org_path, config_path, state_path, as_json):
     default=False,
     help="Skip the final confirmation (for scripting/CI)",
 )
-def deploy_cmd(compiled_dir, target, force, prune, assume_yes):
+@click.option(
+    "--phantombot-bin",
+    required=False,
+    default="phantombot",
+    show_default=True,
+    help="phantombot binary used to file scaffold norms as drawer rows (requires >= 1.1.282)",
+)
+@click.option(
+    "--no-file-norms",
+    "no_file_norms",
+    is_flag=True,
+    default=False,
+    help="Skip filing scaffold norms as drawer rows at deploy time",
+)
+def deploy_cmd(
+    compiled_dir, target, force, prune, assume_yes, phantombot_bin, no_file_norms
+):
     """Deploys the compiled output into the runtime's personas directory.
 
     Deploy is strictly ADDITIVE: it writes only the files PhantomOrg owns,
@@ -896,6 +913,23 @@ def deploy_cmd(compiled_dir, target, force, prune, assume_yes):
                 fg="red",
             )
             raise SystemExit(1)
+
+    if not no_file_norms:
+        norm_result = file_norms(compiled_dir_path, phantombot_bin=phantombot_bin)
+        if norm_result.filed:
+            total = sum(norm_result.filed.values())
+            click.secho(
+                f"Norms filed as drawer rows: {total} row(s) across "
+                f"{len(norm_result.filed)} persona(s)",
+                fg="green",
+            )
+        if norm_result.errors:
+            click.secho(
+                "Norm filing skipped or failed (phantombot >= 1.1.282 required):",
+                fg="yellow",
+            )
+            for err in norm_result.errors:
+                click.echo(f"  - {err}")
 
     if not archive_root_pre_existed and archives_dir(effective_target).is_dir():
         click.secho(
@@ -1069,7 +1103,23 @@ def build_all_cmd(base_dir, out_base):
     default=False,
     help="Skip the final confirmation (for scripting/CI)",
 )
-def deploy_all_cmd(base_dir, dist_base, target, force, prune, assume_yes):
+@click.option(
+    "--phantombot-bin",
+    required=False,
+    default="phantombot",
+    show_default=True,
+    help="phantombot binary used to file scaffold norms as drawer rows (requires >= 1.1.282)",
+)
+@click.option(
+    "--no-file-norms",
+    "no_file_norms",
+    is_flag=True,
+    default=False,
+    help="Skip filing scaffold norms as drawer rows at deploy time",
+)
+def deploy_all_cmd(
+    base_dir, dist_base, target, force, prune, assume_yes, phantombot_bin, no_file_norms
+):
     """Deploys all organizations under --base using what was compiled in --dist-base."""
     base_dir, dist_base = Path(base_dir), Path(dist_base)
     target_path = Path(target) if target else None
@@ -1106,6 +1156,8 @@ def deploy_all_cmd(base_dir, dist_base, target, force, prune, assume_yes):
     merged_created: list[str] = []
     merged_pruned: list[str] = []
     merged_archived: list[tuple[str, str]] = []
+    merged_norms_filed: dict[str, int] = {}
+    merged_norms_errors: list[str] = []
     # Data-dir backup info aggregated across orgs. Keep the FIRST
     # pre-overwrite backup seen per file (the true pre-session state,
     # matching the archive-dedup semantics: the first archive per name is
@@ -1248,6 +1300,13 @@ def deploy_all_cmd(base_dir, dist_base, target, force, prune, assume_yes):
                 merged_scopes_created = merged_scopes_created or result.scopes_created
                 merged_humans_created = merged_humans_created or result.humans_created
             ok += 1
+            if not no_file_norms:
+                norm_result = file_norms(compiled_dir, phantombot_bin=phantombot_bin)
+                for actor_id, count in norm_result.filed.items():
+                    merged_norms_filed[actor_id] = (
+                        merged_norms_filed.get(actor_id, 0) + count
+                    )
+                merged_norms_errors.extend(norm_result.errors)
 
         # One aggregated session for the whole deploy-all invocation: a single
         # `po rollback` undoes everything this command changed.
@@ -1316,6 +1375,21 @@ def deploy_all_cmd(base_dir, dist_base, target, force, prune, assume_yes):
             "(restore any persona with `phantombot import-persona`)",
             fg="cyan",
         )
+    if not no_file_norms:
+        if merged_norms_filed:
+            total = sum(merged_norms_filed.values())
+            click.secho(
+                f"Norms filed as drawer rows: {total} row(s) across "
+                f"{len(merged_norms_filed)} persona(s)",
+                fg="green",
+            )
+        if merged_norms_errors:
+            click.secho(
+                "Norm filing skipped or failed (phantombot >= 1.1.282 required):",
+                fg="yellow",
+            )
+            for err in merged_norms_errors:
+                click.echo(f"  - {err}")
     click.secho(
         "Rollback available: `po rollback` (restores the pre-deploy state)",
         fg="cyan",
