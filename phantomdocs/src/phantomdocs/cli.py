@@ -42,6 +42,13 @@ from .manifest import (
     urn_path,
     versions_of,
 )
+from .setup import (
+    apply_bounded,
+    render_documents_protocol,
+    render_memory_pointer,
+    render_wrapper,
+    write_wrapper,
+)
 from .storage import LocalBackend, StorageError, read_reference, resolve_backend
 from .update import is_newer, latest_release
 
@@ -701,6 +708,54 @@ def status(root):
     click.echo(f"nodes     {len(nodes)} ({len(docs)} docs, {len(folders)} folders)")
     click.echo(f"refs      {len(manifest.get('refs', {}))}")
     click.echo(f"bytes     {total}")
+
+
+@main.command()
+@click.option(
+    "--org-yaml", required=True, help="PhantomOrg org.yaml (authoritative ACL + inboxes)."
+)
+@click.option(
+    "--actor", required=True, help="Persona id to render the update package for."
+)
+@click.option(
+    "--persona-dir",
+    required=True,
+    help="Persona installation root (contains kb/, MEMORY.md, tools/).",
+)
+@click.option("--namespace", default="docs", show_default=True, help="Namespace name.")
+@click.option("--org-pubkey", default="", help="Org Nostr pubkey (documented in Documents.md).")
+def setup(org_yaml, actor, persona_dir, namespace, org_pubkey):
+    """Apply the §13 update package onto a persona installation.
+
+    Renders kb/procedures/Documents.md (protocol), a MEMORY.md pointer, and
+    tools/documents.sh (wrapper pinning --actor), all bounded by
+    ``<!-- phantomdocs:start/end -->`` markers. Idempotent and re-runnable.
+    """
+    org = load_org(org_yaml)
+    known_actors = {a.get("id") for a in org.get("actors", [])}
+    if actor not in known_actors:
+        raise click.ClickException(
+            f"denied: {actor!r} is not an actor in the org model (fail-closed)"
+        )
+
+    os.makedirs(os.path.join(persona_dir, "kb", "procedures"), exist_ok=True)
+    os.makedirs(os.path.join(persona_dir, "tools"), exist_ok=True)
+
+    documents_md = os.path.join(persona_dir, "kb", "procedures", "Documents.md")
+    memory_md = os.path.join(persona_dir, "MEMORY.md")
+    wrapper = os.path.join(persona_dir, "tools", "documents.sh")
+
+    apply_bounded(
+        documents_md,
+        render_documents_protocol(org, actor, namespace, org_pubkey),
+    )
+    apply_bounded(memory_md, render_memory_pointer(namespace, actor))
+    write_wrapper(wrapper, render_wrapper(org_yaml, actor))
+
+    click.echo(f"updated persona {actor!r} for namespace {namespace!r}")
+    click.echo(f"  protocol   {documents_md}")
+    click.echo(f"  pointer    {memory_md}")
+    click.echo(f"  wrapper    {wrapper}")
 
 
 @main.command()
