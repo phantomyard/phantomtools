@@ -702,10 +702,12 @@ function build(org_spec):
         soul_md     = render("soul.j2", role, access, escalation, org_spec.communication)
         tools_md    = render("tools.j2", actor.tools, actor.tools_excluded)
         memory_md   = render("memory.j2")  # seed <2KB
+        norms_json  = render_norms(org_spec.communication)  # one line per norm
 
         write_if_changed(actor.id, identity_md, soul_md, tools_md)  # merge by ORG blocks
         write_if_missing(actor.id, memory_md)  # MEMORY.md: only if it does not exist
         ensure_scaffold(actor.id)  # memory/*.md + kb/ drawer + seeds, idempotent
+        write_plain(actor.id, "norms.json", norms_json)  # derived, plain overwrite
 ```
 
 `write_if_changed` is key for incremental regeneration: it only rewrites files whose computed content differs from the existing one, and it respects blocks marked as manually edited (same pattern as Phantombot's `ensurePersonaScaffold`).
@@ -713,6 +715,8 @@ function build(org_spec):
 `MEMORY.md` uses `write_if_missing` instead: once created, the runtime keeps enriching it with durable facts, so PhantomOrg must never regenerate it — not even with block merging.
 
 The scaffold mirrors Phantombot's `personaScaffold.ts` exactly: `memory/` gets the four structured drawers as FILES (`people.md`, `decisions.md`, `lessons.md`, `commitments.md`) plus `archive/`, `kb/` gets the ten category dirs, and the seed files (`kb/Home.md`, `kb/templates/*.md`) are stamped idempotently — an existing seed is never overwritten.
+
+**The norms drawer is the exception — it is rows, not a file.** Since phantombot #412/#415/#416/#418 the five drawers live as rows in `memory.sqlite` (`drawer_entries`), ranked by `weight * 2^(-ageDays / halfLifeDays)` (norms: 365-day half-life), and `memory/norms.md` is a deprecated read path the threat judge never reads. PhantomOrg therefore emits `norms.json` (one plain-text line per scaffold norm) instead of a markdown drawer, and `po deploy` files each line as a row at deploy time via `phantombot memory drawers --kind norms --file "<line>" --persona <id>`. This requires the phantombot binary ≥ 1.1.282 on the target host (`--no-file-norms` skips it; `--phantombot-bin` overrides the binary path). Re-filing is idempotent (content-hash + `UNIQUE`), so re-deploys reaffirm rather than duplicate.
 
 ## 9. Validator — executable checklist
 

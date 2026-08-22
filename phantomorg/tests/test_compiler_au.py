@@ -35,13 +35,16 @@ class TestCompilerAU(unittest.TestCase):
                 self.assertTrue((actor_dir / "tools.md").exists())
                 self.assertTrue((actor_dir / "MEMORY.md").exists())
                 # Phantombot-shaped scaffold: memory drawers are FILES, the
-                # kb category dirs + seed files exist.
+                # kb category dirs + seed files exist. norms is the exception:
+                # it is emitted as norms.json (filed as drawer ROWS at deploy
+                # time) — not as a markdown drawer file.
                 self.assertTrue((actor_dir / "memory" / "archive").is_dir())
                 self.assertTrue((actor_dir / "memory" / "people.md").exists())
                 self.assertTrue((actor_dir / "memory" / "decisions.md").exists())
                 self.assertTrue((actor_dir / "memory" / "lessons.md").exists())
                 self.assertTrue((actor_dir / "memory" / "commitments.md").exists())
-                self.assertTrue((actor_dir / "memory" / "norms.md").exists())
+                self.assertFalse((actor_dir / "memory" / "norms.md").exists())
+                self.assertTrue((actor_dir / "norms.json").exists())
                 self.assertTrue((actor_dir / "kb" / "runbooks").is_dir())
                 self.assertTrue((actor_dir / "kb" / "Home.md").exists())
                 self.assertTrue(

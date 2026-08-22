@@ -582,7 +582,6 @@ _OWNED_FILES: dict[str, str] = {
     "memory/decisions.md": "seed",
     "memory/lessons.md": "seed",
     "memory/commitments.md": "seed",
-    "memory/norms.md": "merge",
     "kb/Home.md": "seed",
     "kb/templates/concept.md": "seed",
     "kb/templates/runbook.md": "seed",
