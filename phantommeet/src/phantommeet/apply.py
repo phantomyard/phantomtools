@@ -1,0 +1,1360 @@
+"""Apply the PhantomMeet update package to a PhantomOrg persona installation.
+
+All operations are **idempotent** (safe to re-run) and support ``--dry-run``
+to report every change without writing anything.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import os
+import re
+import shlex
+import tempfile
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
+
+from .manifest import access_for, load_manifest
+
+MARKER_START = "<!-- phantommeet:start -->"
+MARKER_END = "<!-- phantommeet:end -->"
+
+# Legacy headers from pre-PhantomMeet manual installs (ad-hoc protocol 1.0).
+# PhantomMeet replaces these with its managed section.
+LEGACY_SECTION_PATTERNS = [
+    re.compile(
+        r"^## 📡 Salas Jitsi \(protocolo 1\.0.*$\n(?:(?!^## ).*\n)*", re.MULTILINE
+    ),
+    re.compile(
+        r"^## 📡 Meetings? \(protocolo 1\.0.*$\n(?:(?!^## ).*\n)*", re.MULTILINE
+    ),
+]
+
+# Files PhantomMeet manages, relative to a persona directory.
+KB_REL = Path("kb/procedures/Meetings.md")
+MEMORY_REL = Path("MEMORY.md")
+PHANTOMCHAT_REL = Path("phantomchat.json")
+
+# Reversible patch bookkeeping: records only the field delta PhantomMeet
+# owns in phantomchat.json (the private relay it moves to the front), never a
+# frozen snapshot of the whole file. ``pm unapply`` consumes it.
+PHANTOMCHAT_DELTA_REL = Path(".phantommeet-phantomchat.delta.json")
+
+TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+
+@dataclass
+class Change:
+    """A single proposed change (written only when not dry-running)."""
+
+    persona: str
+    rel_path: Path
+    action: str  # write | upsert | patch | skip
+    detail: str = ""
+
+    def __str__(self) -> str:
+        return (
+            f"[{self.action:>7}] {self.persona}/{self.rel_path} {self.detail}".rstrip()
+        )
+
+
+@dataclass
+class ApplyResult:
+    """Summary of an apply run."""
+
+    changes: list[Change] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def skipped(self) -> list[Change]:
+        return [c for c in self.changes if c.action == "skip"]
+
+    @property
+    def pending(self) -> list[Change]:
+        return [c for c in self.changes if c.action != "skip"]
+
+
+@dataclass
+class _PendingWrite:
+    """A planned file write, committed only after the whole plan is clean."""
+
+    dest: Path
+    content: str
+    mode: int | None = None
+
+
+def _atomic_write_bytes(dest: Path, content: bytes, mode: int | None = None) -> None:
+    """Write ``content`` atomically: temp file in the same directory, then
+    ``os.replace``. Never writes through a symlink (the preflight already
+    refused symlinked destinations)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if mode is not None:
+            os.chmod(tmp, mode)
+        os.replace(tmp, dest)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_write(dest: Path, content: str, mode: int | None = None) -> None:
+    """Write ``content`` (UTF-8) atomically — see ``_atomic_write_bytes``."""
+    _atomic_write_bytes(dest, content.encode("utf-8"), mode)
+
+
+def _read_bytes_if_exists(path: Path) -> bytes | None:
+    """Return the file's bytes, or None when it does not exist."""
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _mode_if_exists(path: Path) -> int | None:
+    """Return the file's permission bits, or None when it does not exist."""
+    try:
+        return path.stat().st_mode & 0o777
+    except FileNotFoundError:
+        return None
+
+
+def parse_tool_mode(spec: Any) -> int | None:
+    """Parse a tool spec's ``chmod`` into an int permission mask, or None.
+
+    Accepts an int (0o755) or an octal string — ``"0o755"``, ``"0755"`` and
+    ``"755"`` all mean the same octal ``0o755`` (chmod semantics). An
+    unparseable value yields None (no mode constraint). Shared by
+    ``install_tools`` (apply) and ``check_persona_state`` (check-infra) so
+    both compare the same expected mode.
+    """
+    if not isinstance(spec, dict):
+        return None
+    mode = spec.get("chmod")
+    if isinstance(mode, int):
+        return mode
+    if isinstance(mode, str):
+        text = mode.strip()
+        # chmod strings are octal; strip a leading "0o" prefix if present so
+        # "0o755", "0755" and "755" all parse to the same 0o755.
+        if text.startswith(("0o", "0O")):
+            text = text[2:]
+        try:
+            return int(text, 8)
+        except ValueError:
+            return None
+    return None
+
+
+def _commit_writes(writes: list[_PendingWrite], removals: list[Path]) -> None:
+    """Commit every planned write and removal, rolling back on failure.
+
+    Every destination is snapshotted before any mutation; if a single step
+    raises, the already-applied steps are reverted from those snapshots in
+    reverse order, so a failed apply cannot leave a mixed installation.
+    """
+    snapshots: list[tuple[Path, bytes | None, int | None]] = []
+    for w in writes:
+        snapshots.append(
+            (w.dest, _read_bytes_if_exists(w.dest), _mode_if_exists(w.dest))
+        )
+    for r in removals:
+        snapshots.append((r, _read_bytes_if_exists(r), _mode_if_exists(r)))
+    try:
+        for w in writes:
+            _atomic_write(w.dest, w.content, w.mode)
+        for r in removals:
+            r.unlink(missing_ok=True)
+    except BaseException:
+        for dest, original, mode in reversed(snapshots):
+            try:
+                if original is None:
+                    dest.unlink(missing_ok=True)
+                else:
+                    _atomic_write_bytes(dest, original, mode)
+            except Exception:  # noqa: BLE001, S110  # nosec B110 — best-effort rollback
+                pass
+        raise
+
+
+def _env(lang: str) -> Environment:
+    # Templates are Markdown/persona files, not HTML: autoescape stays off
+    # for all extensions (select_autoescape with an empty enabled set).
+    return Environment(
+        loader=FileSystemLoader(TEMPLATES_DIR / "kb"),
+        undefined=StrictUndefined,
+        autoescape=select_autoescape(enabled_extensions=()),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+
+
+def _render_template(env: Environment, name: str, ctx: dict[str, Any]) -> str:
+    template = env.get_template(name)
+    return template.render(**ctx).rstrip() + "\n"
+
+
+def _persona_context(persona_id: str, manifest: dict[str, Any]) -> dict[str, Any]:
+    """Build the Jinja context for a persona (role-aware)."""
+    lang = manifest["language"]
+    role = manifest["roles"].get(persona_id)
+    access = access_for(persona_id, manifest)
+
+    role_label = {
+        "responsible": "Responsible",
+        "lead": "Project Lead",
+        "support": "Support",
+    }[role]
+    if lang == "es":
+        role_label = {
+            "responsible": "Responsable",
+            "lead": "Lead de Proyecto",
+            "support": "Soporte",
+        }[role]
+
+    rooms = manifest["rooms"]
+
+    if access["kind"] == "full":
+        permissions_detail = (
+            "You have **full access** to all meeting rooms."
+            if lang == "en"
+            else "Tienes **acceso completo** a todas las salas de reunión."
+        )
+    elif access["kind"] == "scoped":
+        permissions_detail = (
+            "You are **responsible for online meetings within your scope** "
+            f"**'{access['prefix']}-*'**: you schedule them with "
+            "`meeting-invite.sh`. If a meeting request is **outside your scope** "
+            "(another project or an org-wide AU meeting), **escalate it to the "
+            "responsible persona** with the exact parameters received."
+            if lang == "en"
+            else "Eres **responsable de las reuniones online dentro de tu ámbito** "
+            f"**'{access['prefix']}-*'**: las agendas con `meeting-invite.sh`. "
+            "Si una solicitud de reunión es de **fuera de tu ámbito** (otro "
+            "proyecto o una reunión general de AU), **escálala a la persona "
+            "responsable** con los parámetros exactos recibidos."
+        )
+    elif access["kind"] == "restricted":
+        permissions_detail = (
+            "You take part in the rooms you are **invited to** (the invitation "
+            "URL is your ticket). Your org scope marker is "
+            f"**'{access['prefix']}-*'**. "
+            "**Do not schedule online meetings**: if you receive an online-meeting "
+            "request, **escalate it to the responsible persona** with the exact "
+            "parameters received. Other agenda items (appointments, calendar, "
+            "reminders) you handle as usual."
+            if lang == "en"
+            else "Participas en las salas a las que te **inviten** (la URL de "
+            f"invitación es tu ticket). Tu ámbito de organización es "
+            f"**'{access['prefix']}-*'**. "
+            "**No agendes reuniones online**: si recibes una solicitud de reunión "
+            "online, **escálala a la persona responsable** con los parámetros "
+            "exactos recibidos. El resto de la agenda (citas, calendario, "
+            "recordatorios) la gestionas con normalidad."
+        )
+    else:
+        permissions_detail = (
+            "You have **no access** to meeting rooms."
+            if lang == "en"
+            else "No tienes **acceso** a las salas de reunión."
+        )
+
+    # Explicit escalation target for support/lead personas, derived from the
+    # org model (see derive.py). When present, the generic "escalate it to the
+    # responsible persona" rule names the concrete persona (and handle). For
+    # lead personas the escalation applies only to *out-of-scope* requests;
+    # the rendered sentence is phrased per tier.
+    escalation_target = manifest.get("escalation", {}).get(persona_id)
+    if escalation_target:
+        handles = manifest.get("invite", {}).get("telegram_bots", {}) or {}
+        handle = handles.get(escalation_target)
+        mention = f"**{escalation_target}**" + (f" ({handle})" if handle else "")
+        if access["kind"] == "scoped":
+            escalation_line = (
+                f" Meetings outside your scope escalate to {mention}."
+                if lang == "en"
+                else f" Las reuniones fuera de tu ámbito escalan a {mention}."
+            )
+        else:
+            escalation_line = (
+                f" Your escalation contact for online meetings is {mention}."
+                if lang == "en"
+                else f" Tu responsable de escalado para reuniones online es {mention}."
+            )
+        permissions_detail += escalation_line
+
+    # Canonical escalation rule text per tier (used by the Meetings.md
+    # "Escalation" section). support escalates *every* request; lead (scoped
+    # responsible) escalates only out-of-scope ones; responsible never escalates.
+    if access["kind"] == "scoped":
+        escalation_rule = (
+            "You are responsible for online meetings **within your scope**. "
+            "Requests **outside your scope** (another project or an org-wide "
+            "meeting) are escalated to the responsible persona with the exact "
+            "parameters received."
+            if lang == "en"
+            else "Eres responsable de las reuniones online **dentro de tu ámbito**. "
+            "Las solicitudes de **fuera de tu ámbito** (otro proyecto o una "
+            "reunión general de la organización) se escalan a la persona "
+            "responsable con los parámetros exactos recibidos."
+        )
+    elif access["kind"] == "restricted":
+        escalation_rule = (
+            "You do **not** schedule online meetings: if you receive an "
+            "online-meeting request, **escalate it to the responsible persona** "
+            "with the exact parameters received."
+            if lang == "en"
+            else "**No agendes reuniones online**: si recibes una solicitud de "
+            "reunión online, **escálala a la persona responsable** con los "
+            "parámetros exactos recibidos."
+        )
+    else:
+        escalation_rule = (
+            "You schedule online meetings for the whole organization."
+            if lang == "en"
+            else "Agendas las reuniones online de toda la organización."
+        )
+
+    # Destination folder is **per scope** (not a global default): a lead
+    # (scoped responsible) answers with their own project's meeting folder,
+    # not the org-wide recordings folder. The org-wide drive_folder is the
+    # default only for full responsibles.
+    storage = manifest.get("storage", {}) or {}
+    drive_folder = storage.get("drive_folder", "Grabaciones")
+    meeting_folders = storage.get("meeting_folders", {}) or {}
+    custodian = storage.get("custodian", "") or ""
+    if access["kind"] == "scoped":
+        destination_folder = meeting_folders.get(access["prefix"], drive_folder)
+        destination_note = (
+            "your project's meeting folder in Drive"
+            if lang == "en"
+            else "la carpeta de reuniones de tu ámbito en Drive"
+        )
+        destination_owner = persona_id.capitalize()
+        destination_custodian = custodian.capitalize() if custodian else ""
+    elif access["kind"] == "full":
+        destination_folder = drive_folder
+        destination_note = (
+            "the org's recordings folder in Drive"
+            if lang == "en"
+            else "la carpeta de grabaciones de la organización en Drive"
+        )
+        destination_owner = custodian.capitalize() if custodian else ""
+        destination_custodian = ""
+    else:
+        destination_folder = ""
+        destination_note = ""
+        destination_owner = ""
+        destination_custodian = ""
+
+    # Build a friendly example room name from the naming convention.
+    naming = rooms.get("naming", "{YYYY-MM-DD}-{HH-MM}_{topic}")
+    room_example = naming
+    for token, value in (
+        ("{type}", "project"),
+        ("{YYYY-MM-DD}", "2026-08-07"),
+        ("{DD-MM-YYYY}", "07-08-2026"),
+        ("{HH-MM}", "18-00"),
+        ("{YYYY}", "2026"),
+        ("{MM}", "08"),
+        ("{DD}", "07"),
+        ("{topic}", "topic"),
+    ):
+        room_example = room_example.replace(token, value)
+    # Generic fallback for any other brace token, e.g. custom conventions.
+    room_example = re.sub(r"\{[^}]*\}", "x", room_example)
+
+    return {
+        "org": manifest["org"],
+        "version": manifest.get("version", "?"),
+        "relay": manifest.get("bridge", {}).get("relay", "?"),
+        "name": persona_id,
+        "role_label": role_label,
+        "access_summary": access["summary"],
+        "permissions_detail": permissions_detail,
+        "escalation_target": escalation_target or "",
+        "escalation_rule": escalation_rule,
+        "active_room_required": rooms.get("active_room_required", True),
+        "naming": naming,
+        "room_example": room_example,
+        "language": lang,
+        "invite": manifest.get("invite", {}),
+        "rooms": rooms,
+        "roles": manifest.get("roles", {}),
+        "storage": manifest.get("storage", {}),
+        "defaults": manifest.get("defaults", {}),
+        "destination_folder": destination_folder,
+        "destination_note": destination_note,
+        "destination_owner": destination_owner,
+        "destination_custodian": destination_custodian,
+    }
+
+
+def _render_memory_section(ctx: dict[str, Any], lang: str) -> str:
+    # Markdown template (not HTML) — autoescape off, see _env().
+    env = Environment(
+        loader=FileSystemLoader(TEMPLATES_DIR / "memory"),
+        undefined=StrictUndefined,
+        autoescape=select_autoescape(enabled_extensions=()),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+    name = "section.en.md" if lang == "en" else "section.es.md"
+    # No trailing newline: the caller owns newline placement around the markers,
+    # so that replace/insert cycles are byte-identical (idempotent).
+    return env.get_template(name).render(**ctx).strip()
+
+
+def _strip_legacy_memory_sections(text: str) -> str:
+    """Remove legacy pre-PhantomMeet meeting sections (ad-hoc protocol 1.0).
+
+    These were inserted manually before PhantomMeet existed and have no
+    markers. PhantomMeet replaces them with its managed section.
+    """
+    for pattern in LEGACY_SECTION_PATTERNS:
+        text = pattern.sub("", text)
+    # Collapse 3+ consecutive blank lines into 2.
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text
+
+
+def _upsert_between_markers(text: str, section: str) -> str:
+    """Replace the region between the markers, or insert the section at the top.
+
+    Also strips legacy pre-PhantomMeet meeting sections (no markers) so the
+    managed section is the single source of truth.
+    """
+    text = _strip_legacy_memory_sections(text)
+    pattern = re.compile(
+        re.escape(MARKER_START) + r".*?" + re.escape(MARKER_END), re.DOTALL
+    )
+    if MARKER_START in text and MARKER_END in text:
+        return pattern.sub(section, text, count=1)
+    # Insert after the first line starting with '#' (title), else at the very top.
+    lines = text.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            return (
+                "".join(lines[: i + 1])
+                + "\n"
+                + section
+                + "\n"
+                + "".join(lines[i + 1 :])
+            )
+    return section + "\n" + text
+
+
+def _render_kb_frontmatter(ctx: dict[str, Any], lang: str) -> str:
+    """OKF frontmatter for Meetings.md (regenerated every apply).
+
+    ``type`` is OKF's only required field; ``title`` / ``tags`` / ``aliases``
+    are the high-weight BM25F fields, so a note without them only ever
+    competes at body weight.
+    """
+    org = ctx["org"]
+    org_slug = re.sub(r"[^a-z0-9]+", "-", org.lower()).strip("-")
+    today = datetime.now(timezone.utc).date().isoformat()
+    if lang == "es":
+        return (
+            "---\n"
+            "type: procedure\n"
+            f"title: Protocolo de reuniones — {org}\n"
+            "description: Cómo esta persona se une, participa y registra "
+            "reuniones vía el puente de PhantomMeet.\n"
+            f"tags: [reuniones, phantommeet, {org_slug}]\n"
+            "aliases: [protocolo de reuniones, cómo entrar a una reunión, "
+            "grabaciones, formato DM del puente, invitación a reunión]\n"
+            f"created: {today}\n"
+            f"updated: {today}\n"
+            "---\n"
+        )
+    return (
+        "---\n"
+        "type: procedure\n"
+        f"title: Meeting protocol — {org}\n"
+        "description: How this persona joins, participates in, and records "
+        "meetings via the PhantomMeet bridge.\n"
+        f"tags: [meetings, phantommeet, {org_slug}]\n"
+        "aliases: [meeting protocol, how to join a meeting, grabaciones, "
+        "bridge DM format, meeting invite]\n"
+        f"created: {today}\n"
+        f"updated: {today}\n"
+        "---\n"
+    )
+
+
+_SUPERSEDE_BANNER = "> Superseded by [[procedures/Meetings]]"
+
+
+def _has_supersede_banner(text: str) -> bool:
+    """True when the superseded banner is already present, immediately after
+    any leading OKF frontmatter — the exact position ``_supersede_legacy_kb``
+    inserts it at."""
+    rest, _ = _split_frontmatter(text)
+    return rest.lstrip().startswith(_SUPERSEDE_BANNER)
+
+
+def _supersede_legacy_kb(text: str) -> str:
+    """Return ``text`` with a superseded banner inserted so the note's OKF
+    frontmatter (if any) stays at the very top and keeps parsing as
+    frontmatter. The banner goes immediately after any leading YAML
+    frontmatter block; without frontmatter it is simply prepended.
+
+    Idempotent: a note already carrying the banner is returned unchanged,
+    whether or not it has frontmatter."""
+    if _has_supersede_banner(text):
+        return text
+    banner = _SUPERSEDE_BANNER + "\n"
+    rest, frontmatter = _split_frontmatter(text)
+    if frontmatter:
+        return frontmatter + banner + "\n" + rest.lstrip("\n")
+    return banner + "\n" + text
+
+
+def _contained_path(persona_dir: Path, rel: str | Path) -> Path | None:
+    """Resolve ``rel`` inside ``persona_dir``; None if it escapes the dir.
+
+    Manifest-controlled paths (``legacy_kb_files``, tool ``dest``) are
+    untrusted: resolve them and refuse anything that leaves the persona
+    directory (path traversal).
+    """
+    base = persona_dir.resolve()
+    target = (base / rel).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return None
+    return target
+
+
+def _contained_dest(persona_dir: Path, rel: str | Path) -> Path | None:
+    """Resolve a manifest-controlled destination strictly inside the persona
+    directory, refusing path traversal AND symlinks in the resolved path.
+
+    ``resolve()`` follows symlinks, so a symlinked directory inside the
+    persona could silently redirect a write outside it; the containment check
+    alone would not catch that. Returns None for any escape or symlink.
+    """
+    contained = _contained_path(persona_dir, rel)
+    if contained is None:
+        return None
+    # Every component from the persona dir down to the target must not be a
+    # symlink (the persona dir itself may legitimately be a symlink, e.g. a
+    # deploy-managed mount point).
+    base = persona_dir.resolve()
+    cursor = base
+    for part in contained.relative_to(base).parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            return None
+    return contained
+
+
+def _split_frontmatter(text: str) -> tuple[str, str]:
+    """Split a leading YAML frontmatter block (``---`` ... ``---``) from the
+    rest. Returns ``(rest_without_frontmatter, frontmatter_block)``.
+
+    ``frontmatter_block`` is ``""`` when the text does not start with a
+    frontmatter block. This is used to keep operator content that sits
+    between the frontmatter and the managed markers intact across applies.
+    """
+    if not text.startswith("---"):
+        return text, ""
+    lines = text.splitlines(keepends=True)
+    # lines[0] is the opening "---"; scan for the closing "---" line.
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            return "".join(lines[i + 1 :]), "".join(lines[: i + 1])
+    # No closing "---": not a frontmatter block.
+    return text, ""
+
+
+def _upsert_kb(existing: str, frontmatter: str, body: str) -> str:
+    """Upsert the managed Meetings.md: frontmatter + marker-delimited body.
+
+    The OKF frontmatter sits at the very top (it must be first for the
+    indexer); the generated body lives between the phantommeet markers.
+    Anything the persona added is preserved: operator content between the
+    frontmatter and the start marker (prefix) AND after the end marker
+    (suffix) survive a re-apply.
+    """
+    managed_body = f"{MARKER_START}\n{body}{MARKER_END}\n"
+    if MARKER_START in existing and MARKER_END in existing:
+        head = existing.split(MARKER_START, 1)[0]
+        tail = existing.split(MARKER_END, 1)[1]
+        # head = frontmatter + any operator content before the block.
+        operator_prefix, _ = _split_frontmatter(head)
+        return frontmatter + operator_prefix + managed_body + tail
+    # No markers yet: preserve the whole pre-existing file below the block.
+    if existing.strip():
+        return frontmatter + managed_body + "\n" + existing
+    return frontmatter + managed_body
+
+
+def _patch_phantomchat(
+    data: dict[str, Any], relay: str, bridge_npub: str | None, include_bridge: bool
+) -> tuple[dict[str, Any], str | None, str | None]:
+    """Ensure the private relay is first and the bridge npub is registered in
+    the untrusted ``relay_npubs`` tier. Returns
+    ``(patched, relay_added, npub_added)``:
+
+    - ``relay_added`` — the relay string when PhantomMeet *added* it to the
+      ``relays`` list (it was not present before) — the owned delta — or None
+      when it was already present (mere reorder) or empty.
+    - ``npub_added`` — the bridge npub when PhantomMeet *added* it to
+      ``relay_npubs`` (it was not present before) — the owned delta — or None.
+
+    The bridge npub is NEVER added to ``allowed_npubs``: that is a trust
+    grant in phantombot (allowlisted senders skip the threat judge), not a
+    delivery ACL. It goes to ``relay_npubs`` instead — phantombot's untrusted
+    relay tier (phantomyard/phantombot#423), where a relay sender is
+    threat-screened, treated as untrusted, never arms TOFU, and replies as
+    ``shared`` even in a 1:1 DM. When ``include_bridge`` is false the
+    ``relay_npubs`` list is left untouched.
+    """
+    relays = list(data.get("relays", []))
+    relay_added: str | None = None
+    if relay and relay not in relays:
+        relay_added = relay
+    if relay and relay in relays:
+        relays.remove(relay)
+    if relay:
+        relays.insert(0, relay)
+    data["relays"] = relays
+
+    npub_added: str | None = None
+    if include_bridge and bridge_npub:
+        relay_npubs = list(data.get("relay_npubs", []))
+        if bridge_npub not in relay_npubs:
+            relay_npubs.append(bridge_npub)
+            npub_added = bridge_npub
+        data["relay_npubs"] = relay_npubs
+
+    return data, relay_added, npub_added
+
+
+def _read_owned_delta(delta_dest: Path) -> dict[str, str]:
+    """Load the existing owned delta, failing closed on corruption.
+
+    The delta is the only record of what PhantomMeet owns in phantomchat.json
+    (the relay it prepended and the bridge npub it registered). A delta file
+    that exists but cannot be parsed is corruption, not absence: treating it
+    as absent would let a re-apply delete the delta, after which
+    ``pm unapply`` could no longer reverse the owned relay/npub. So a corrupt
+    or partial delta raises ``ValueError``; the caller records it as a
+    preflight error and aborts the apply.
+    """
+    if not delta_dest.exists():
+        return {}
+    try:
+        raw = delta_dest.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"owned delta is unreadable: {exc}") from exc
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError(f"owned delta is corrupt (invalid JSON): {exc}") from exc
+    if not isinstance(data, dict):
+        raise TypeError("owned delta is corrupt (expected a JSON object)")
+    owned: dict[str, str] = {}
+    for key in ("relay_added", "npub_added"):
+        if key not in data:
+            continue
+        value = data[key]
+        if not isinstance(value, str) or not value:
+            raise ValueError(
+                f"owned delta is corrupt ({key!r} must be a non-empty string)"
+            )
+        owned[key] = value
+    return owned
+
+
+def _personas_in_manifest(manifest: dict[str, Any]) -> list[str]:
+    """Personas that receive an update: those with a role or a permission."""
+    perms = manifest["permissions"]
+    ids = set(manifest["roles"]) | set(perms.get("full", []))
+    for prefix_ids in perms.get("scoped", {}).values():
+        ids.update(prefix_ids)
+    for prefix_ids in perms.get("restricted", {}).values():
+        ids.update(prefix_ids)
+    return sorted(ids)
+
+
+def _shquote(value: Any) -> str:
+    """Jinja filter: shell-quote a scalar for safe embedding in bash source.
+
+    Produces a single-quoted string via ``shlex.quote`` so a manifest value
+    can never break out of an assignment and execute (render-time shell
+    injection)."""
+    return shlex.quote(str(value))
+
+
+def _tool_env(lang: str) -> Environment:
+    """Jinja environment for the tools templates (templates/tools/)."""
+    # Shell-script template (not HTML) — autoescape off, see _env().
+    env = Environment(
+        loader=FileSystemLoader(TEMPLATES_DIR / "tools"),
+        undefined=StrictUndefined,
+        autoescape=select_autoescape(enabled_extensions=()),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+    env.filters["shquote"] = _shquote
+    return env
+
+
+def render_tool_content(
+    spec: Any, persona_id: str, manifest: dict[str, Any], lang: str
+) -> str | None:
+    """Render the expected content for a manifest tool spec.
+
+    Shared by ``install_tools`` (apply) and ``check_persona_state``
+    (check-infra) so both agree byte-for-byte on what a tool should contain.
+    Returns ``None`` when a static (non-template) source file is missing from
+    the package; template render errors propagate to the caller.
+    """
+    if isinstance(spec, str):
+        dest = Path(spec)
+        template_name = None
+    else:
+        dest = Path(spec["dest"])
+        template_name = spec.get("template")
+    if template_name:
+        template_name = template_name.removeprefix("tools/")
+        return _render_template(
+            _tool_env(lang), template_name, _persona_context(persona_id, manifest)
+        )
+    pkg_tool = TEMPLATES_DIR / "tools" / dest.name
+    if not pkg_tool.exists():
+        return None
+    return pkg_tool.read_text(encoding="utf-8")
+
+
+def install_tools(
+    manifest: dict[str, Any],
+    persona_dir: Path,
+    persona_id: str,
+) -> tuple[list[Change], list[_PendingWrite]]:
+    """Plan the installation of the manifest-declared tools into a persona
+    directory. Returns ``(changes, pending_writes)``; nothing is written here
+    (the caller commits all writes together, atomically, after the whole
+    plan is clean).
+
+    Tools come from ``manifest['tools']`` (a list of tool specs) and/or the
+    ``invite.tool`` spec (the meeting invitation script). Each spec is:
+
+    .. code-block:: yaml
+
+       - name: meeting-invite
+         template: tools/meeting-invite.sh.j2   # optional: render a template
+         dest: tools/meeting-invite.sh          # required: destination (relative to persona dir)
+         chmod: 0o755                           # optional: permissions
+
+    A tool spec may also be a plain ``str`` (destination path) for static
+    files shipped with the package. ``invite.roles`` decides which personas
+    get the meeting-invite tool; everyone else does not.
+    """
+    changes: list[Change] = []
+    writes: list[_PendingWrite] = []
+    lang = manifest["language"]
+    tool_specs = list(manifest.get("tools", []) or [])
+
+    invite = manifest.get("invite", {}) or {}
+    if invite.get("tool"):
+        # Only personas granted scheduling may hold the invite tool.
+        invite_roles = set(invite.get("roles", []) or [])
+        if persona_id in invite_roles:
+            tool_specs.append(invite["tool"])
+
+    if not tool_specs:
+        return changes, writes
+
+    for spec in tool_specs:
+        if isinstance(spec, str):
+            dest = Path(spec)
+            template_name = None
+        else:
+            dest = Path(spec["dest"])
+            template_name = spec.get("template")
+
+        # Manifest-controlled destination: resolve strictly inside the persona
+        # directory (no path traversal, no symlinked components). This check
+        # runs FIRST, before any content is read or rendered, so a traversing
+        # destination can never touch the filesystem outside the persona.
+        dest_abs = _contained_dest(persona_dir, dest)
+        if dest_abs is None:
+            changes.append(
+                Change(
+                    persona_id,
+                    dest,
+                    "error",
+                    "destination escapes the persona directory",
+                )
+            )
+            continue
+
+        if template_name:
+            # The loader is rooted at templates/tools/ — strip a leading
+            # "tools/" prefix so manifest specs can use either form.
+            template_name = template_name.removeprefix("tools/")
+            try:
+                content = render_tool_content(spec, persona_id, manifest, lang)
+            except Exception as exc:  # noqa: BLE001
+                changes.append(
+                    Change(
+                        persona_id, dest, "error", f"template {template_name!r}: {exc}"
+                    )
+                )
+                continue
+        else:
+            content = render_tool_content(spec, persona_id, manifest, lang)
+            if content is None:
+                changes.append(
+                    Change(
+                        persona_id,
+                        dest,
+                        "error",
+                        f"static tool not found: {TEMPLATES_DIR / 'tools' / dest.name}",
+                    )
+                )
+                continue
+
+        mode = parse_tool_mode(spec)
+
+        needs_chmod = False
+        if dest_abs.exists():
+            try:
+                current_mode = dest_abs.stat().st_mode & 0o777
+            except OSError:
+                current_mode = None
+            needs_chmod = mode is not None and current_mode != mode
+
+        if (
+            dest_abs.exists()
+            and dest_abs.read_text(encoding="utf-8") == content
+            and not needs_chmod
+        ):
+            changes.append(Change(persona_id, dest, "skip", "(up to date)"))
+            continue
+
+        changes.append(Change(persona_id, dest, "write"))
+        writes.append(_PendingWrite(dest_abs, content, mode))
+
+    return changes, writes
+
+
+def apply_manifest(
+    manifest_path: str | Path,
+    target: str | Path,
+    dry_run: bool = False,
+    verbose: bool = False,
+    invite_roles: list[str] | None = None,
+    ask_roles: bool = False,
+    card_file: str | None = None,
+    ask_card: bool = False,
+) -> ApplyResult:
+    """Apply the manifest to ``target`` (root of the persona installation).
+
+    ``card_file`` reads the announcement card from a file (overrides
+    ``invite.card`` for this run only, without persisting). ``ask_card``
+    interactively asks the operator for the card and persists the choice
+    back into the manifest (like ``ask_roles``).
+    """
+    result = ApplyResult()
+    manifest = load_manifest(manifest_path)
+    root = Path(target)
+    if not root.is_dir():
+        result.errors.append(f"target is not a directory: {root}")
+        return result
+
+    # Deferred interactive manifest mutations — persisted only after the whole
+    # plan is clean (no preflight error) and committed, so a failed apply
+    # never mutates the manifest file (the reviewer reproduced --ask-roles
+    # rewriting invite.roles even when a later persona failed preflight).
+    pending_roles: list[str] | None = None
+    pending_card: str | None = None
+    card_decision_made = False
+
+    lang = manifest["language"]
+    bridge = manifest.get("bridge", {})
+    relay = bridge.get("relay", "")
+    bridge_npub = bridge.get("npub", "")
+    env = _env(lang)
+
+    # --- interactive role decision (human decides who may schedule) ---------
+    invite = manifest.get("invite", {}) or {}
+    if invite.get("tool"):
+        if invite_roles is not None:
+            # One-shot flag: grant these roles for this run only (not persisted).
+            manifest["invite"]["roles"] = invite_roles
+        elif ask_roles or "roles" not in invite:
+            from .discovery import discover, prompt_for_roles
+
+            discovery = discover(root)
+            existing = invite.get("roles", []) or []
+            if ask_roles or not existing:
+                chosen = prompt_for_roles(discovery, existing=existing)
+                if not chosen:
+                    result.errors.append("no invite.roles selected; aborting")
+                    return result
+                manifest["invite"]["roles"] = chosen
+                # Persist the decision back into the manifest file only after
+                # the whole plan is clean (deferred to Phase 2).
+                pending_roles = chosen
+                result.changes.append(
+                    Change("*", Path("invite.roles"), "patch", f"{', '.join(chosen)}")
+                )
+            else:
+                result.changes.append(
+                    Change("*", Path("invite.roles"), "skip", "(already set)")
+                )
+
+        # --- announcement card configuration --------------------------------
+        if card_file is not None:
+            # One-shot flag: read the card from a file (not persisted).
+            try:
+                card_text = Path(card_file).read_text(encoding="utf-8").strip("\n")
+            except OSError as exc:
+                result.errors.append(f"cannot read card file: {exc}")
+                return result
+            from .manifest import REQUIRED_CARD_TOKENS
+
+            missing = [t for t in REQUIRED_CARD_TOKENS if t not in card_text]
+            if missing:
+                result.errors.append(
+                    "invite.card (from file) is missing mandatory token(s): "
+                    + ", ".join(missing)
+                    + f" (mandatory: {', '.join(REQUIRED_CARD_TOKENS)})"
+                )
+                return result
+            manifest["invite"]["card"] = card_text
+        elif ask_card:
+            from .discovery import prompt_for_card
+
+            existing = invite.get("card")
+            chosen = prompt_for_card(existing=existing)
+            if chosen is None and existing is None:
+                # Operator aborted the prompt (Ctrl-C).
+                result.errors.append("card prompt aborted; aborting apply")
+                return result
+            if chosen is None:
+                # 'clear' -> remove the custom card (built-in format).
+                manifest["invite"].pop("card", None)
+            else:
+                manifest["invite"]["card"] = chosen
+            # Re-validate the chosen card (mandatory tokens) before writing.
+            from .manifest import REQUIRED_CARD_TOKENS
+
+            if chosen is not None:
+                missing = [t for t in REQUIRED_CARD_TOKENS if t not in chosen]
+                if missing:
+                    result.errors.append(
+                        "invite.card is missing mandatory token(s): "
+                        + ", ".join(missing)
+                        + f" (mandatory: {', '.join(REQUIRED_CARD_TOKENS)}); "
+                        "apply aborted"
+                    )
+                    return result
+            if not dry_run:
+                card_decision_made = True
+                pending_card = chosen
+            result.changes.append(
+                Change(
+                    "*",
+                    Path("invite.card"),
+                    "patch" if chosen is not None else "remove",
+                    "(custom card)" if chosen is not None else "(built-in format)",
+                )
+            )
+
+    # ------------------------------------------------------------------
+    # Phase 1 — plan: compute every proposed change and validate it without
+    # mutating anything. A single plan error aborts before the first write
+    # (no partial apply).
+    # ------------------------------------------------------------------
+    pending_writes: list[_PendingWrite] = []
+    delta_writes: list[_PendingWrite] = []
+    delta_removals: list[Path] = []
+
+    for persona_id in _personas_in_manifest(manifest):
+        persona_dir = root / persona_id
+        if not persona_dir.is_dir():
+            result.errors.append(f"persona directory not found: {persona_dir}")
+            continue
+
+        ctx = _persona_context(persona_id, manifest)
+
+        # 1) KB protocol file: OKF frontmatter + marker-delimited managed body.
+        kb_name = "protocol.en.md" if lang == "en" else "protocol.es.md"
+        try:
+            kb_body = _render_template(env, kb_name, ctx)
+        except Exception as exc:  # noqa: BLE001
+            result.errors.append(f"{persona_id}: template {kb_name!r} failed: {exc}")
+            continue
+        appendix = manifest.get("kb_appendix", [])
+        if appendix:
+            # kb_appendix blocks are Jinja templates too: org-specific text in
+            # base.yaml can use ctx tokens (e.g. destination_folder/owner) so
+            # the appendix renders per-role, not as static text.
+            try:
+                rendered = [env.from_string(a).render(**ctx).rstrip() for a in appendix]
+            except Exception as exc:  # noqa: BLE001
+                result.errors.append(f"{persona_id}: kb_appendix render failed: {exc}")
+                continue
+            kb_body += "\n---\n\n" + "\n\n---\n\n".join(rendered) + "\n"
+        frontmatter = _render_kb_frontmatter(ctx, lang)
+        kb_dest = persona_dir / KB_REL
+        kb_existing = kb_dest.read_text(encoding="utf-8") if kb_dest.exists() else ""
+        kb_new = _upsert_kb(kb_existing, frontmatter, kb_body)
+        if kb_new == kb_existing:
+            result.changes.append(Change(persona_id, KB_REL, "skip", "(up to date)"))
+        else:
+            result.changes.append(Change(persona_id, KB_REL, "upsert"))
+            pending_writes.append(_PendingWrite(kb_dest, kb_new))
+
+        # 2) Legacy kb files superseded by Meetings.md are deprecated in
+        # place (a banner after any leading frontmatter) — never deleted.
+        # KB recall walks [[wikilinks]] outward, so deleting a note severs
+        # every path that ran through it and leaves dangling links elsewhere.
+        for legacy in manifest.get("legacy_kb_files", []):
+            legacy_dest = _contained_path(persona_dir, legacy)
+            if legacy_dest is None:
+                result.errors.append(
+                    f"{persona_id}/{legacy}: path escapes the persona directory"
+                )
+                continue
+            if legacy_dest.exists():
+                text = legacy_dest.read_text(encoding="utf-8")
+                if _has_supersede_banner(text):
+                    result.changes.append(
+                        Change(persona_id, Path(legacy), "skip", "(already superseded)")
+                    )
+                else:
+                    result.changes.append(
+                        Change(
+                            persona_id,
+                            Path(legacy),
+                            "deprecate",
+                            "(superseded by Meetings.md)",
+                        )
+                    )
+                    pending_writes.append(
+                        _PendingWrite(legacy_dest, _supersede_legacy_kb(text))
+                    )
+
+        # 3) MEMORY.md section (idempotent upsert between markers).
+        memory_dest = persona_dir / MEMORY_REL
+        memory_text = (
+            memory_dest.read_text(encoding="utf-8") if memory_dest.exists() else ""
+        )
+        section = _render_memory_section(ctx, lang)
+        new_memory = _upsert_between_markers(memory_text, section)
+        if new_memory == memory_text:
+            result.changes.append(
+                Change(persona_id, MEMORY_REL, "skip", "(up to date)")
+            )
+        else:
+            result.changes.append(Change(persona_id, MEMORY_REL, "upsert"))
+            pending_writes.append(_PendingWrite(memory_dest, new_memory))
+
+        # 4) phantomchat.json patch (reversible via owned-field delta).
+        pc_dest = persona_dir / PHANTOMCHAT_REL
+        include_bridge = access_for(persona_id, manifest)["kind"] != "none"
+        if pc_dest.exists():
+            original_text = pc_dest.read_text(encoding="utf-8")
+            try:
+                pc_data = json.loads(original_text)
+            except json.JSONDecodeError as exc:
+                # Preflight: the JSON error is recorded and the whole apply
+                # aborts BEFORE anything (KB/MEMORY.md/tools) is written.
+                result.errors.append(
+                    f"{persona_id}/phantomchat.json: invalid JSON ({exc})"
+                )
+                continue
+            patched, relay_added, npub_added = _patch_phantomchat(
+                pc_data, relay, bridge_npub, include_bridge
+            )
+            if patched == json.loads(original_text):
+                result.changes.append(
+                    Change(persona_id, PHANTOMCHAT_REL, "skip", "(up to date)")
+                )
+            else:
+                result.changes.append(Change(persona_id, PHANTOMCHAT_REL, "patch"))
+                # Merge this run's additions with any prior owned delta so a
+                # mere reorder (relay already present) cannot erase the
+                # ownership record `pm unapply` relies on.
+                delta_dest = persona_dir / PHANTOMCHAT_DELTA_REL
+                try:
+                    owned = _read_owned_delta(delta_dest)
+                except (ValueError, TypeError) as exc:
+                    # Fail closed: a corrupt delta must abort the apply, never
+                    # be silently dropped (dropping it would orphan the owned
+                    # relay/npub — pm unapply could no longer reverse them).
+                    result.errors.append(f"{persona_id}: {exc}")
+                    continue
+                if relay_added is not None:
+                    owned["relay_added"] = relay_added
+                if npub_added is not None:
+                    owned["npub_added"] = npub_added
+                if owned:
+                    delta_writes.append(
+                        _PendingWrite(delta_dest, json.dumps(owned, indent=2) + "\n")
+                    )
+                elif delta_dest.exists():
+                    delta_removals.append(delta_dest)
+                pending_writes.append(
+                    _PendingWrite(
+                        pc_dest,
+                        json.dumps(patched, indent=2, ensure_ascii=False) + "\n",
+                    )
+                )
+        else:
+            result.changes.append(
+                Change(persona_id, PHANTOMCHAT_REL, "skip", "(absent)")
+            )
+
+        # 5) Manifest-declared tools (e.g. the meeting-invite script).
+        tool_changes, tool_writes = install_tools(manifest, persona_dir, persona_id)
+        for change in tool_changes:
+            if change.action == "error":
+                result.errors.append(
+                    f"{persona_id}: tool {change.rel_path}: {change.detail}"
+                )
+        result.changes.extend(tool_changes)
+        pending_writes.extend(tool_writes)
+
+    # ------------------------------------------------------------------
+    # Phase 2 — commit. Any preflight error aborts before the first write.
+    # ------------------------------------------------------------------
+    if result.errors:
+        return result
+    if not dry_run:
+        # Delta files are committed BEFORE the phantomchat.json they describe,
+        # so a crash can never leave a patched JSON with no delta to reverse
+        # it. The whole batch is transactional: any failure rolls back every
+        # already-applied step (no partial deployment).
+        writes = delta_writes + pending_writes
+
+        # Deferred interactive manifest decisions are rendered to a string
+        # FIRST (no file touched yet) and folded into the SAME rollback batch
+        # as the persona writes, so a failed manifest render aborts before any
+        # write and a failed manifest write rolls back with everything else —
+        # the manifest can never be left truncated, or out of sync with the
+        # personas that were just committed.
+        if pending_roles is not None or card_decision_made:
+            try:
+                rendered = _render_manifest_invite(
+                    manifest_path,
+                    roles=pending_roles,
+                    card=pending_card if card_decision_made else _UNSET,
+                )
+            except Exception as exc:  # noqa: BLE001
+                result.errors.append(f"cannot render manifest update: {exc}")
+                return result
+            writes.append(
+                _PendingWrite(
+                    Path(manifest_path),
+                    rendered,
+                    _mode_if_exists(Path(manifest_path)),
+                )
+            )
+
+        _commit_writes(writes, delta_removals)
+
+    return result
+
+
+def unapply_manifest(manifest_path: str | Path, target: str | Path) -> ApplyResult:
+    """Reverse PhantomMeet's owned changes for every persona in the manifest.
+
+    Only PhantomMeet-owned state is touched, and only by reversing recorded
+    deltas — never by replacing unrelated current configuration:
+
+    - ``phantomchat.json``: remove the relay and bridge npub recorded in the
+      owned delta (``.phantommeet-phantomchat.delta.json``), leaving every
+      other relay, ``relay_npubs`` entry and all other fields exactly as they
+      are.
+    - ``kb/procedures/Meetings.md``: strip the managed marker block, keeping
+      the OKF frontmatter and any operator content around it.
+    - ``MEMORY.md``: strip the managed marker section, keeping the rest.
+
+    Idempotent: running it twice is a no-op on the second pass.
+    """
+    result = ApplyResult()
+    manifest = load_manifest(manifest_path)
+    root = Path(target)
+    if not root.is_dir():
+        result.errors.append(f"target is not a directory: {root}")
+        return result
+
+    for persona_id in _personas_in_manifest(manifest):
+        persona_dir = root / persona_id
+        if not persona_dir.is_dir():
+            continue
+
+        # 1) phantomchat.json — reverse the owned relay + relay_npubs deltas.
+        pc_dest = persona_dir / PHANTOMCHAT_REL
+        delta_dest = persona_dir / PHANTOMCHAT_DELTA_REL
+        if delta_dest.exists() and pc_dest.exists():
+            try:
+                delta = _read_owned_delta(delta_dest)
+            except (ValueError, TypeError) as exc:
+                # Fail closed: a corrupt delta must abort the unapply rather
+                # than silently skip the reversal (which would leave the
+                # owned relay/npub installed with no record to reverse them).
+                result.errors.append(f"{persona_id}: {exc}")
+                continue
+            relay_added = delta.get("relay_added")
+            npub_added = delta.get("npub_added")
+            if relay_added or npub_added:
+                try:
+                    data = json.loads(pc_dest.read_text(encoding="utf-8"))
+                except ValueError as exc:
+                    result.errors.append(
+                        f"{persona_id}/phantomchat.json: invalid JSON ({exc})"
+                    )
+                else:
+                    if relay_added:
+                        relays = [r for r in data.get("relays", []) if r != relay_added]
+                        data["relays"] = relays
+                        result.changes.append(
+                            Change(
+                                persona_id,
+                                PHANTOMCHAT_REL,
+                                "patch",
+                                f"removed relay {relay_added!r}",
+                            )
+                        )
+                    if npub_added:
+                        relay_npubs = [
+                            n for n in data.get("relay_npubs", []) if n != npub_added
+                        ]
+                        if relay_npubs:
+                            data["relay_npubs"] = relay_npubs
+                        else:
+                            data.pop("relay_npubs", None)
+                        result.changes.append(
+                            Change(
+                                persona_id,
+                                PHANTOMCHAT_REL,
+                                "patch",
+                                f"removed bridge npub {npub_added!r} from relay_npubs",
+                            )
+                        )
+                    _atomic_write(
+                        pc_dest,
+                        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                    )
+            delta_dest.unlink(missing_ok=True)
+            result.changes.append(
+                Change(persona_id, PHANTOMCHAT_DELTA_REL, "remove", "(delta)")
+            )
+
+        # 2) Meetings.md — strip the managed block (keep frontmatter + rest).
+        kb_dest = persona_dir / KB_REL
+        if kb_dest.exists():
+            text = kb_dest.read_text(encoding="utf-8")
+            if MARKER_START in text and MARKER_END in text:
+                head = text.split(MARKER_START, 1)[0]
+                tail = text.split(MARKER_END, 1)[1]
+                stripped = head.rstrip() + "\n" + tail.lstrip("\n")
+                if stripped != text:
+                    _atomic_write(kb_dest, stripped)
+                    result.changes.append(
+                        Change(persona_id, KB_REL, "remove", "(managed block)")
+                    )
+                else:
+                    result.changes.append(
+                        Change(persona_id, KB_REL, "skip", "(already stripped)")
+                    )
+
+        # 3) MEMORY.md — strip the managed section.
+        memory_dest = persona_dir / MEMORY_REL
+        if memory_dest.exists():
+            text = memory_dest.read_text(encoding="utf-8")
+            if MARKER_START in text and MARKER_END in text:
+                pattern = re.compile(
+                    re.escape(MARKER_START) + r".*?" + re.escape(MARKER_END) + r"\n?",
+                    re.DOTALL,
+                )
+                stripped = pattern.sub("", text, count=1)
+                stripped = re.sub(r"\n{3,}", "\n\n", stripped)
+                if stripped != text:
+                    _atomic_write(memory_dest, stripped)
+                    result.changes.append(
+                        Change(persona_id, MEMORY_REL, "remove", "(managed section)")
+                    )
+                else:
+                    result.changes.append(
+                        Change(persona_id, MEMORY_REL, "skip", "(already stripped)")
+                    )
+
+    return result
+
+
+_UNSET = object()
+
+
+def _render_manifest_invite(
+    manifest_path: str | Path,
+    roles: list[str] | None = None,
+    card: object = _UNSET,
+) -> str:
+    """Render the manifest with the deferred invite decisions applied.
+
+    Returns the new manifest text **without touching the file**. The caller
+    commits it with ``_atomic_write`` (temp + ``os.replace``) as part of the
+    same rollback batch as the persona writes, so the manifest is never
+    truncated until a complete document exists, and a failed render aborts
+    before the first write.
+
+    ``roles`` (when not None) sets ``invite.roles``. ``card`` is ``_UNSET``
+    to leave ``invite.card`` untouched, a string to set it, or ``None`` to
+    remove it (built-in format). ruamel.yaml (round-trip) is preferred to
+    preserve comments/formatting; PyYAML is the fallback. Both parse the
+    ORIGINAL text in memory — never a file that was just truncated — and the
+    only error that triggers the fallback is ``ImportError`` (ruamel absent).
+    A ruamel representer/parse error surfaces to the caller instead of being
+    silently downgraded to a PyYAML round-trip.
+    """
+    p = Path(manifest_path)
+    original = p.read_text(encoding="utf-8")
+
+    def _mutate(data: dict[str, Any]) -> dict[str, Any]:
+        invite = data.setdefault("invite", {})
+        if roles is not None:
+            invite["roles"] = roles
+        if card is not _UNSET:
+            if card is None:
+                invite.pop("card", None)
+            else:
+                invite["card"] = card
+        return data
+
+    try:
+        from ruamel.yaml import YAML
+
+        yaml_obj = YAML()
+        data = _mutate(yaml_obj.load(original))
+        buf = io.StringIO()
+        yaml_obj.dump(data, buf)  # render first — no file touched yet
+        return buf.getvalue()
+    except ImportError:
+        pass
+
+    import yaml as pyyaml
+
+    data = _mutate(pyyaml.safe_load(original))
+    return pyyaml.safe_dump(data, sort_keys=False, allow_unicode=True)

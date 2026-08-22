@@ -1,0 +1,56 @@
+version: 1
+
+organization:
+  id: smoke-org
+  name: "Smoke Org"
+  sector: ngo
+  languages: [es, en]
+  default_language: es
+
+roles:
+  - id: ceo
+    name: "CEO"
+    department: direccion
+    reports_to: null
+    functions: [liderazgo]
+    access_level: level-3
+    security_exceptions: []
+
+  - id: cfo
+    name: "CFO"
+    department: finanzas
+    reports_to: ceo
+    functions: [finanzas]
+    access_level: level-3
+    security_exceptions: []
+
+  - id: project_lead
+    name: "Project Lead"
+    department: operaciones
+    reports_to: ceo
+    functions: [proyectos]
+    access_level: level-2
+    security_exceptions: []
+
+  - id: training_lead
+    name: "Training Lead"
+    department: formacion
+    reports_to: ceo
+    functions: [formacion]
+    access_level: level-2
+    security_exceptions: []
+
+actors:
+  - id: maria
+    role: ceo
+  - id: juan
+    role: cfo
+  - id: pedro
+    role: project_lead
+  - id: lucia
+    role: training_lead
+
+escalation_matrix:
+  - { from: cfo, to: ceo, condition: "gasto sobre umbral", cross_department: false }
+  - { from: project_lead, to: ceo, condition: "fuera de ambito del proyecto", cross_department: false }
+  - { from: training_lead, to: ceo, condition: "contenido fuera de alcance", cross_department: false }

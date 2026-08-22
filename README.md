@@ -13,7 +13,22 @@ deps, and license.
 | [`bot-inbox/`](./bot-inbox) | Thin CLI for inter-bot messaging over a shared filesystem inbox — one source of truth for the message schema, atomic delivery, dedup, and the `processed/` audit log. |
 | [`email-triage/`](./email-triage) | Self-driving inbox triage for a phantombot persona — a cheap IMAP poller wakes a full agent turn on new mail and drives the inbox to zero unread. Dependency-free Python; scheduling is a single `phantombot task`. |
 | [`phantombridge/`](./phantombridge) | Node.js bridge between Jitsi (XMPP/MUC) and Nostr — text presence for phantombot personas in meetings: multi-room join, agent DMs (NIP-17), hardened anti-loop envelope, local HTTP API, per-side kill-switches. `bridge.js` CLI + `install.sh` + CI. |
+| [`phantommeet/`](./phantommeet) | Meeting layer for PhantomForge deployments — text participation via bridge, recordings, transcription, calendar logistics, per-scope recording custody. `pm` CLI (validate / derive-manifest / apply / check-infra). |
 | [`phantomorg/`](./phantomorg) | Spec-driven organization compiler for phantombot personas — departments, roles, actors, access policies, escalation matrix, communication rules → compiled persona files (SOUL/IDENTITY/tools/memory/kb). `po` CLI (validate / build / deploy / rollback / update). |
+
+## Tool dependency chain
+
+Some tools are not fully self-contained; they form a chain. Deploy them in
+order and keep the dependencies in mind when diagnosing:
+
+- **PhantomOrg** (`phantomorg/`) — produces the `org.yaml` org model. This is
+  the single source of truth for roles/actors/escalation.
+- **PhantomBridge** (`phantombridge/`) — depends on PhantomOrg's `org.yaml`
+  for room/participant admission; carries meeting traffic.
+- **PhantomMeet** (`phantommeet/`) — depends on PhantomOrg's `org.yaml` (its
+  manifests are *derived* from it) and on PhantomBridge being deployed for
+  actual meeting participation. It degrades to an invitation/scheduling layer
+  when the bridge is absent.
 
 ## Keeping installed copies in sync
 
