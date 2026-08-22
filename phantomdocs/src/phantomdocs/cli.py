@@ -49,6 +49,7 @@ from .setup import (
     render_wrapper,
     write_wrapper,
 )
+from .signing import npub_to_pubkey_hex, pubkey_from_nsec, sign_mutation, verify_mutation
 from .storage import LocalBackend, StorageError, read_reference, resolve_backend
 from .update import is_newer, latest_release
 
@@ -154,9 +155,36 @@ def _require_acl(org_yaml: str | None, actor: str | None = None):
 
 
 def _audit(
-    root: str, actor: str, action: str, urn: str, mac: str, ch: str | None
+    root: str, actor: str, action: str, urn: str, mac: str, ch: str | None,
+    sig: str | None = None, sig_pubkey: str | None = None,
 ) -> None:
-    audit_append(root, actor, action, urn, mac, ch)
+    audit_append(root, actor, action, urn, mac, ch, sig, sig_pubkey)
+
+
+def _signing_key(nsec_file: str | None) -> str | None:
+    """Resolve the mutation-signing nsec (SPEC §9, issue #30 v2).
+
+    Precedence: ``--nsec-file`` → ``$PHANTOMDOCS_NSEC``. Returns None when
+    the operator has not configured signing, in which case mutations are
+    unsigned (v1 behavior).
+    """
+    if nsec_file:
+        try:
+            with open(nsec_file, "r", encoding="utf-8") as f:
+                return f.read().strip() or None
+        except OSError as exc:
+            raise click.ClickException(f"cannot read --nsec-file: {exc}")
+    return os.environ.get("PHANTOMDOCS_NSEC", "").strip() or None
+
+
+def _sign_fields(nsec: str | None, mac: str) -> dict[str, str]:
+    """The ``sig`` / ``sigPubkey`` fields for a mutation, or ``{}`` unsigned."""
+    if not nsec:
+        return {}
+    return {
+        "sig": sign_mutation(nsec, mac),
+        "sigPubkey": pubkey_from_nsec(nsec),
+    }
 
 
 def _resolve_store(root: str, backend: str | None):
@@ -205,8 +233,11 @@ def init(org: str, namespace: str, org_pubkey: str, root: str) -> None:
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
 @click.option("--actor", default=None, help=_ACTOR_HELP)
+@click.option(
+    "--nsec-file", default=None, help="File containing the actor's nsec (issue #30 v2 signing)."
+)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def mkdir(name, parent, category, owners, org_yaml, actor, root):
+def mkdir(name, parent, category, owners, org_yaml, actor, nsec_file, root):
     """Create a folder node (a link in the chained MAC hierarchy).
 
     Access-controlled: requires --org-yaml + an authenticated OS identity; the
@@ -240,21 +271,24 @@ def mkdir(name, parent, category, owners, org_yaml, actor, root):
         if node_by_urn(manifest, urn) is not None:
             raise click.ClickException(f"folder already exists: {urn}")
 
-        manifest["nodes"].append(
-            {
-                "urn": urn,
-                "mac": mac,
-                "parentMac": parent_mac,
-                "kind": "folder",
-                "slug": name,
-                "category": category,
-                "owners": list(owners),
-                "meta": {},
-                "relations": {},
-            }
-        )
+        node = {
+            "urn": urn,
+            "mac": mac,
+            "parentMac": parent_mac,
+            "kind": "folder",
+            "slug": name,
+            "category": category,
+            "owners": list(owners),
+            "meta": {},
+            "relations": {},
+        }
+        node.update(_sign_fields(_signing_key(nsec_file), mac))
+        manifest["nodes"].append(node)
         save(_manifest_path(root), manifest)
-    _audit(root, actor_id, "mkdir", urn, mac, None)
+    _audit(
+        root, actor_id, "mkdir", urn, mac, None,
+        node.get("sig"), node.get("sigPubkey"),
+    )
     click.echo(f"created {path}")
     click.echo(f"  urn  {urn}")
     click.echo(f"  mac  {full_id(mac)}")
@@ -286,8 +320,11 @@ def mkdir(name, parent, category, owners, org_yaml, actor, root):
     "ingesting a local file. Read to hash, but NOT copied.",
 )
 @click.option("--actor", default=None, help=_ACTOR_HELP)
+@click.option(
+    "--nsec-file", default=None, help="File containing the actor's nsec (issue #30 v2 signing)."
+)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def add(path, ref, slug, category, folder, owners, org_yaml, actor, backend, root):
+def add(path, ref, slug, category, folder, owners, org_yaml, actor, nsec_file, backend, root):
     """Ingest a document: compute MAC chain, store blob, register node.
 
     Access-controlled: requires --org-yaml + an authenticated OS identity; the
@@ -375,27 +412,30 @@ def add(path, ref, slug, category, folder, owners, org_yaml, actor, backend, roo
             scheme = backend.split("://")[0] if backend and "://" in backend else "local"
             locations = [{"backend": scheme, "path": location}]
 
-        manifest["nodes"].append(
-            {
-                "urn": urn,
-                "mac": mac,
-                "parentMac": parent_mac,
-                "kind": "doc",
-                "slug": slug,
-                "category": effective_category,
-                "contentHash": ch,
-                "size": len(content),
-                "owners": (
-                    list(existing.get("owners", []) or []) if existing else list(owners)
-                ),
-                "locations": locations,
-                "meta": {"title": slug},
-                "relations": {},
-                "previous": previous,
-            }
-        )
+        node = {
+            "urn": urn,
+            "mac": mac,
+            "parentMac": parent_mac,
+            "kind": "doc",
+            "slug": slug,
+            "category": effective_category,
+            "contentHash": ch,
+            "size": len(content),
+            "owners": (
+                list(existing.get("owners", []) or []) if existing else list(owners)
+            ),
+            "locations": locations,
+            "meta": {"title": slug},
+            "relations": {},
+            "previous": previous,
+        }
+        node.update(_sign_fields(_signing_key(nsec_file), mac))
+        manifest["nodes"].append(node)
         save(_manifest_path(root), manifest)
-    _audit(root, actor_id, "add" if previous is None else "version", urn, mac, ch)
+    _audit(
+        root, actor_id, "add" if previous is None else "version", urn, mac, ch,
+        node.get("sig"), node.get("sigPubkey"),
+    )
 
     verb = "added" if previous is None else "versioned"
     click.echo(f"{verb} {logical}")
@@ -522,13 +562,32 @@ def search(query, org_yaml, actor, root):
 @click.option(
     "--backend", default=None, help="Backend URI (local:// ssh:// gdrive://)."
 )
+@click.option(
+    "--org-yaml", default=None,
+    help="Optional PhantomOrg org.yaml to also check mutation signatures "
+    "against declared actor npubs (issue #30 v2).",
+)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def verify(backend, root):
+def verify(backend, org_yaml, root):
     """Recompute MAC chain + content hashes against the manifest."""
     manifest = _load_or_die(root)
     store = _resolve_store(root, backend)
     known_macs = {n["mac"] for n in manifest.get("nodes", [])}
     known_macs.add(manifest["manifest"]["rootMac"])
+
+    # Declared actor pubkeys (from org.yaml) for the signature authorization
+    # check. Only enforced when --org-yaml is supplied (issue #30 v2).
+    declared_pubkeys: set[str] | None = None
+    if org_yaml:
+        org = load_org(org_yaml)
+        declared_pubkeys = set()
+        for a in org.get("actors", []):
+            npub = a.get("npub")
+            if npub:
+                try:
+                    declared_pubkeys.add(npub_to_pubkey_hex(npub))
+                except ValueError:
+                    pass
 
     failures = 0
     for node in manifest.get("nodes", []):
@@ -588,6 +647,19 @@ def verify(backend, root):
             ):
                 issues.append("MAC chain mismatch")
 
+        # Mutation signature (issue #30 v2): if the node carries a signature,
+        # it must verify against its pubkey; and if --org-yaml is supplied, the
+        # signing key must belong to a declared actor.
+        sig = node.get("sig")
+        sig_pubkey = node.get("sigPubkey")
+        if sig is not None or sig_pubkey is not None:
+            if not sig or not sig_pubkey:
+                issues.append("incomplete mutation signature")
+            elif not verify_mutation(sig_pubkey, sig, node["mac"]):
+                issues.append("signature invalid")
+            elif declared_pubkeys is not None and sig_pubkey not in declared_pubkeys:
+                issues.append("signature from undeclared key")
+
         if issues:
             failures += 1
             click.echo(f"FAIL {node['urn']}: {', '.join(issues)}")
@@ -611,8 +683,11 @@ def verify(backend, root):
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
 @click.option("--actor", default=None, help=_ACTOR_HELP)
+@click.option(
+    "--nsec-file", default=None, help="File containing the actor's nsec (issue #30 v2 signing)."
+)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def tag(name, ref, org_yaml, actor, root):
+def tag(name, ref, org_yaml, actor, nsec_file, root):
     """Point a mutable ref (e.g. `latest`, `approved-<date>`) at a version MAC.
 
     Access-controlled: the actor must be able to write the target node's
@@ -631,7 +706,11 @@ def tag(name, ref, org_yaml, actor, root):
             )
         manifest.setdefault("refs", {})[name] = node["mac"]
         save(_manifest_path(root), manifest)
-    _audit(root, actor_id, "tag", node["urn"], node["mac"], node.get("contentHash"))
+    sig_fields = _sign_fields(_signing_key(nsec_file), node["mac"])
+    _audit(
+        root, actor_id, "tag", node["urn"], node["mac"], node.get("contentHash"),
+        sig_fields.get("sig"), sig_fields.get("sigPubkey"),
+    )
     click.echo(f"{name} -> {display_id(node['mac'])}  ({node['urn']})")
 
 

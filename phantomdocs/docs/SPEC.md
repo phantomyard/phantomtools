@@ -298,10 +298,16 @@ guarantees, and only one of them is cryptographically enforced.
   the model's tool use may touch — not to stop a malicious process that can
   already write the filesystem.
 
-  Binding authorship cryptographically (signing each mutation with the actor's
-  Nostr key, recorded in the node/audit so `pd verify` can also detect
-  unauthorized writes) is the v2 path to a real authorization boundary and is
-  tracked in issue #30.
+  Binding authorship cryptographically is the v2 authorization boundary,
+  now implemented (issue #30): a mutating command MAY sign the node MAC with
+  the actor's Nostr nsec (``PHANTOMDOCS_NSEC`` or ``--nsec-file``); the
+  BIP-340 Schnorr signature + x-only pubkey are recorded on the node and in
+  the audit entry. ``pd verify --org-yaml`` then (a) verifies each signature
+  against the recorded pubkey and (b) rejects a signature whose key is not a
+  declared actor ``npub`` in org.yaml. This detects an unauthorized write
+  signed with the wrong key (or tampered after signing); it is an opt-in
+  boundary — unsigned mutations remain valid for namespaces that have not
+  adopted signing.
 - **Read** — allowed iff the actor's resolved access (`merge_access`) covers
   the node's `category` (i.e. the category number is in the actor's resolved
   category set, or the actor holds a category exception). `category-0` is

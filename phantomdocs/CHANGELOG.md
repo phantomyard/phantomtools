@@ -4,6 +4,28 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+**Hierarchical categories (#31), index by reference (#35), update package (#33), mutation signing (#30 v2).**
+
+- **Hierarchical / project-scoped categories** (`access.py`, `cli.py`):
+  category ids are now `category-...` strings with a project umbrella
+  (`category-4` → `category-4-almaponia`). Holding a parent grants every
+  descendant (prefix rule); per-project grants live at the actor level
+  (`actor_exceptions`), not the shared role. `resolved_categories` returns
+  strings; ints are normalized on read (backward compatible).
+- **Index by reference** (`storage.py::read_reference`, `cli.py`):
+  `pd add --ref gdrive://… | file://… | ssh://…` indexes an external object
+  without copying it into the content-addressed store. `pd get` / `pd verify`
+  re-read the reference to serve bytes / check integrity.
+- **§13 update package** (`setup.py`, `cli.py::setup`): `pd setup` renders
+  `kb/procedures/Documents.md`, a `MEMORY.md` pointer and `tools/documents.sh`
+  (wrapper pinning `--actor`), all bounded by `<!-- phantomdocs:start/end -->`
+  markers; idempotent and re-runnable, preserving persona-authored content.
+- **Mutation signing (#30 v2)** (`signing.py`, `cli.py`, `audit.py`): a
+  mutating command may sign the node MAC with the actor's Nostr nsec
+  (`PHANTOMDOCS_NSEC` / `--nsec-file`); the BIP-340 Schnorr signature + x-only
+  pubkey are recorded on the node and audit entry. `pd verify --org-yaml`
+  verifies signatures and rejects keys not declared as an actor npub.
+
 **PR #27 review hardening — enforce the advertised ACL.**
 
 - **ACL is enforced, not just declared** (`cli.py`): `get`, `search`,
