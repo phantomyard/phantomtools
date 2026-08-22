@@ -274,8 +274,11 @@ security classification, referencing PhantomOrg's `security_categories`.
   variable → the OS username (`pwd.getpwuid(os.getuid())`). In the
   PhantomOrg/phantombot deployment model N personas live as directories under
   ONE OS account and phantombot gives focus to one persona at a time, so the OS
-  username is **not** the persona identity; the harness (which knows which
-  persona has focus) supplies the actor via `--actor` / `PHANTOMDOCS_ACTOR`.
+  username is **not** the persona identity. PhantomDocs never requires
+  phantombot (or any core app) to change: each persona's own tool wrapper
+  (`tools/documents.sh`, installed by `pd setup` — §13) pins `--actor`, and
+  `PHANTOMDOCS_ACTOR` remains an optional operator-supplied override. Both are
+  phantomtools-side; there is no phantombot hook.
   The OS username is kept only as a fallback for deployments that genuinely run
   one persona per OS account (e.g. the VPS Virtualmin model). The resolved id
   must be a declared actor `id` in `org.yaml`; an unmapped actor is refused.
@@ -298,10 +301,16 @@ guarantees, and only one of them is cryptographically enforced.
   the model's tool use may touch — not to stop a malicious process that can
   already write the filesystem.
 
-  Binding authorship cryptographically (signing each mutation with the actor's
-  Nostr key, recorded in the node/audit so `pd verify` can also detect
-  unauthorized writes) is the v2 path to a real authorization boundary and is
-  tracked in issue #30.
+  Binding authorship cryptographically is the v2 authorization boundary,
+  now implemented (issue #30): a mutating command MAY sign the node MAC with
+  the actor's Nostr nsec (``PHANTOMDOCS_NSEC`` or ``--nsec-file``); the
+  BIP-340 Schnorr signature + x-only pubkey are recorded on the node and in
+  the audit entry. ``pd verify --org-yaml`` then (a) verifies each signature
+  against the recorded pubkey and (b) rejects a signature whose key is not a
+  declared actor ``npub`` in org.yaml. This detects an unauthorized write
+  signed with the wrong key (or tampered after signing); it is an opt-in
+  boundary — unsigned mutations remain valid for namespaces that have not
+  adopted signing.
 - **Read** — allowed iff the actor's resolved access (`merge_access`) covers
   the node's `category` (i.e. the category number is in the actor's resolved
   category set, or the actor holds a category exception). `category-0` is
@@ -352,13 +361,18 @@ Enables queries like "which minutes cite this policy?".
 
 ## 13. Update package (what PhantomDocs applies)
 
-Idempotent, applied on top of a PhantomOrg persona installation:
+Idempotent and strictly **phantomtools-side**: applied on top of a PhantomOrg
+persona installation by `pd setup`. PhantomDocs never requires phantombot — or
+any core app — to grow per-tool hooks; the package only writes into the
+persona's own files and consumes `org.yaml`.
 
 - `kb/procedures/Documents.md` — document-management protocol per persona
   (rendered from templates, bounded by `<!-- phantomdocs:start/end -->` markers).
 - `MEMORY.md` — a compact pointer to the protocol (same marker convention).
-- Document-management tooling installed into `tools/` of the personas that need
-  it.
+- `tools/documents.sh` — a generated wrapper pinning `--actor <id>` (the
+  per-persona stopgap for a fixed actor; no phantombot-side injection).
+- `documents.inboxes` in `org.yaml` — each persona's Drive inbox (`{name, id}`),
+  consumed by `pd setup` so the protocol references the inbox by id.
 
 ## 14. Security
 
