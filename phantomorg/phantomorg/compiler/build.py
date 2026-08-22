@@ -317,6 +317,48 @@ def _norma_context(spec: OrgSpec) -> dict:
     }
 
 
+def _norm_drawer_bullets(spec: OrgSpec, t: dict) -> list[str]:
+    """One flat bullet string per norm entry, so the drawer renders one
+    bullet per line. The Jinja env uses trim_blocks=True, which eats the
+    newline after any block tag — building the bullets here (instead of
+    wrapping each in `{% if %}`/`{% endif %}`) keeps them on separate lines
+    so phantombot's drawer-ingest files them as clean, stable entries."""
+    root = next((r for r in spec.roles if not r.reports_to), None)
+    ceo_name = root.name if root else "CEO"
+    reports_to_human = root.reports_to_human if root else None
+    marker = (
+        spec.communication.envelope.marker if spec.communication.envelope else "[env]"
+    )
+    bullets: list[str] = []
+    hc = spec.communication.human_channel
+    if hc:
+        line = f"**{t['norm_drawer_human']}**: {hc.platform}"
+        if hc.group:
+            line += f" — {hc.group}"
+        if hc.chat_id:
+            line += f" (`{hc.chat_id}`)"
+        bullets.append(line)
+    ac = spec.communication.agent_channel
+    if ac:
+        line = f"**{t['norm_drawer_agent']}**: {ac.platform}"
+        if ac.relay:
+            line += f" — relay `{ac.relay}`"
+        bullets.append(line)
+    bullets.append(f"**{t['norm_drawer_rid']}**: `{resolve_request_id_format(spec)}`")
+    bullets.append(t["norm_drawer_no_private"])
+    if reports_to_human:
+        bullets.append(
+            t["norm_drawer_escalate_full"].format(
+                ceo_name=ceo_name, reports_to_human=reports_to_human
+            )
+        )
+    else:
+        bullets.append(t["norm_drawer_escalate_short"].format(ceo_name=ceo_name))
+    if marker:
+        bullets.append(t["norm_drawer_envelope"].format(marker=marker))
+    return bullets
+
+
 def _render_norm_protocol(norma_md: str, spec: OrgSpec, t: dict) -> str:
     """Wrap the rendered communication norm in OKF frontmatter for the KB
     protocol page. ``type``/``title``/``description``/``aliases`` give it the
@@ -645,7 +687,8 @@ def build_actor(
             written.append(procedure_path)
 
         drawer_md = env.get_template("norma_drawer.j2").render(
-            t=t, **_norma_context(spec)
+            today=datetime.datetime.now(tz=datetime.timezone.utc).date().isoformat(),
+            bullets=_norm_drawer_bullets(spec, t),
         )
     else:
         drawer_md = "<!-- ORG:BEGIN norms -->\n<!-- ORG:END norms -->\n"

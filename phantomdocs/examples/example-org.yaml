@@ -1,0 +1,19 @@
+# PhantomDocs reference manifest (org-agnostic placeholders).
+#
+# The manifest is DERIVED from a PhantomOrg org model, not hand-edited:
+#   pd derive-manifest --org-yaml organizations/<org>/org.yaml \
+#                      --namespace docs --out <org>.yaml
+#
+# (The org id is read from organization.id in org.yaml — never typed by hand.)
+
+manifest:
+  version: 1
+  org: example-org
+  namespace: docs
+  tenant: single            # v1 fixed; "multi" is reported as unsupported
+  rootMac: "..."            # H(org_pubkey || namespace)
+  signedRootMac: null       # optional HMAC with the entity key
+
+refs: {}                    # mutable pointers: latest / approved-<date> -> MAC
+
+nodes: []

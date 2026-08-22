@@ -73,6 +73,33 @@ jobs:
           bash github-app-auth/tests/test_clone_wrapper.sh
           bash github-app-auth/tests/test_gh_wrapper.sh
 
+      - name: Lint (phantomdocs)
+        working-directory: phantomdocs
+        run: |
+          python3 -m pip install --quiet ruff==0.16.2 bandit==1.9.4
+          ruff check src tests
+          ruff format --check src tests
+          bandit -r src -q
+
+      - name: Unit tests (phantomdocs)
+        working-directory: phantomdocs
+        run: |
+          python3 -m pip install --quiet ".[dev]"
+          python3 -m pytest -q
+
+      - name: Smoke test (phantomdocs)
+        working-directory: phantomdocs
+        run: |
+          python3 -m pip install --quiet .
+          cd /tmp && rm -rf pd-smoke && mkdir pd-smoke && cd pd-smoke
+          cp "$GITHUB_WORKSPACE/phantomdocs/tests/fixtures/smoke-org.yaml" org.yaml
+          sed -i "s/^  - id: marco/  - id: $(id -un)/" org.yaml
+          pd init --org smoke --root .
+          printf '# hello\n' > hello.md
+          pd add hello.md --slug hello.md --category 1 --owners ceo --root . --org-yaml org.yaml
+          pd verify --root . | grep -q "verified 1 node" \
+            && echo "SMOKE OK: init + add + verify"
+
   phantomorg:
     name: phantomorg
     runs-on: ubuntu-latest
