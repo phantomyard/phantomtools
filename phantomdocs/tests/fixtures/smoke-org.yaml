@@ -1,0 +1,14 @@
+version: 1
+policies:
+  access_levels:
+    level-3: { label: Executive, categories: [1, 2, 3] }
+  security_categories:
+    category-1: { label: Public }
+roles:
+  - id: ceo
+    access_level: level-3
+    security_exceptions: []
+actors:
+  - id: marco
+    role: ceo
+    actor_exceptions: []
