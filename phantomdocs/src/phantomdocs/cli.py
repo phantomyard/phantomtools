@@ -115,9 +115,9 @@ def _resolve_actor(explicit: str | None) -> str | None:
     persona at a time, so the OS username is NOT the persona identity.
     The actor is resolved from, in order:
 
-      1. an explicit ``--actor`` flag (harness/caller override);
-      2. the ``PHANTOMDOCS_ACTOR`` environment variable, set by the harness
-         (phantombot knows which persona has focus);
+      1. an explicit ``--actor`` flag (per-persona wrapper / caller override);
+      2. the ``PHANTOMDOCS_ACTOR`` environment variable (operator-supplied
+         override — never injected by phantombot);
       3. the OS username (fallback for one-account-per-persona deployments).
 
     Returns None when nothing resolves (fail-closed). The candidate is

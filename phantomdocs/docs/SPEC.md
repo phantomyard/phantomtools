@@ -274,8 +274,11 @@ security classification, referencing PhantomOrg's `security_categories`.
   variable → the OS username (`pwd.getpwuid(os.getuid())`). In the
   PhantomOrg/phantombot deployment model N personas live as directories under
   ONE OS account and phantombot gives focus to one persona at a time, so the OS
-  username is **not** the persona identity; the harness (which knows which
-  persona has focus) supplies the actor via `--actor` / `PHANTOMDOCS_ACTOR`.
+  username is **not** the persona identity. PhantomDocs never requires
+  phantombot (or any core app) to change: each persona's own tool wrapper
+  (`tools/documents.sh`, installed by `pd setup` — §13) pins `--actor`, and
+  `PHANTOMDOCS_ACTOR` remains an optional operator-supplied override. Both are
+  phantomtools-side; there is no phantombot hook.
   The OS username is kept only as a fallback for deployments that genuinely run
   one persona per OS account (e.g. the VPS Virtualmin model). The resolved id
   must be a declared actor `id` in `org.yaml`; an unmapped actor is refused.
@@ -358,13 +361,18 @@ Enables queries like "which minutes cite this policy?".
 
 ## 13. Update package (what PhantomDocs applies)
 
-Idempotent, applied on top of a PhantomOrg persona installation:
+Idempotent and strictly **phantomtools-side**: applied on top of a PhantomOrg
+persona installation by `pd setup`. PhantomDocs never requires phantombot — or
+any core app — to grow per-tool hooks; the package only writes into the
+persona's own files and consumes `org.yaml`.
 
 - `kb/procedures/Documents.md` — document-management protocol per persona
   (rendered from templates, bounded by `<!-- phantomdocs:start/end -->` markers).
 - `MEMORY.md` — a compact pointer to the protocol (same marker convention).
-- Document-management tooling installed into `tools/` of the personas that need
-  it.
+- `tools/documents.sh` — a generated wrapper pinning `--actor <id>` (the
+  per-persona stopgap for a fixed actor; no phantombot-side injection).
+- `documents.inboxes` in `org.yaml` — each persona's Drive inbox (`{name, id}`),
+  consumed by `pd setup` so the protocol references the inbox by id.
 
 ## 14. Security
 

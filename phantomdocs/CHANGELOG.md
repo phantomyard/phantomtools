@@ -20,6 +20,11 @@ All notable changes to PhantomDocs are documented in this file.
   `kb/procedures/Documents.md`, a `MEMORY.md` pointer and `tools/documents.sh`
   (wrapper pinning `--actor`), all bounded by `<!-- phantomdocs:start/end -->`
   markers; idempotent and re-runnable, preserving persona-authored content.
+- **Product decision — no phantombot-side hooks** (`docs/SPEC.md` §9/§13,
+  `setup.py`, `cli.py`): the phantombot-side `PHANTOMDOCS_ACTOR` injection is
+  dropped. PhantomDocs stays fully additive: the per-persona
+  `tools/documents.sh` wrapper pins `--actor`, and `PHANTOMDOCS_ACTOR` remains
+  an operator-supplied override — neither requires any change to phantombot.
 - **Mutation signing (#30 v2)** (`signing.py`, `cli.py`, `audit.py`): a
   mutating command may sign the node MAC with the actor's Nostr nsec
   (`PHANTOMDOCS_NSEC` / `--nsec-file`); the BIP-340 Schnorr signature + x-only
