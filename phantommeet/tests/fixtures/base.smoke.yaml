@@ -1,0 +1,56 @@
+# Minimal org-agnostic base manifest for the derive smoke test.
+# The shipped examples/ base is org-specific (telegram_bots, card branding);
+# the smoke fixture org has different personas, so derive+validate here must
+# use a neutral base.
+
+org: smoke-org
+language: es
+version: 0.0.0
+
+bridge:
+  relay: ws://example.invalid:7777
+  npub: npub1qh7upcrg0l3h88yx9tkggept8x552l0tgl303fen9s7vrxn6dyzs5tn0nu
+
+rooms:
+  suffix: "@conference.example.invalid"
+  naming: "{DD-MM-YYYY}-{HH-MM}_{topic}"
+  active_room_required: true
+
+storage:
+  recordings_dir: /tmp/phantommeet-recordings
+  drive_folder: Grabaciones
+  custodian: maria
+  meeting_folders:
+    example-project: "example-meetings"
+  decided_by: responsible
+  cleanup_after_confirm: true
+
+kb_appendix:
+  - |-
+    ## Custodia (flujo post-reunión)
+
+    4. {% if destination_owner %}**{{ destination_owner }}** sube el MP4, la transcripción y el resumen a Google Drive → carpeta `{{ destination_folder }}/` ({{ destination_note }}).{% if destination_custodian %} Si {{ destination_owner }} no puede, lo hace **{{ destination_custodian }}** (custodia de la organización).{% endif %}{% else %}La persona responsable sube el MP4, la transcripción y el resumen a Google Drive (la carpeta destino la indica la solicitud).{% endif %}
+
+defaults:
+  title: reunion
+  time: "18:00"
+  duration_min: 60
+  recipients: []
+  sensitive: false
+
+invite:
+  phantombot_bin: phantombot
+  meet_base_url: https://meet.example.invalid
+  send_via: phantombot-notify
+  tool:
+    template: tools/meeting-invite.sh.j2
+    dest: tools/meeting-invite.sh
+    chmod: 0o755
+
+derive:
+  directive_roles: [ceo, cfo]
+  scoped_responsible_roles:
+    project_lead: example-project
+  support_roles: [training_lead]
+  restricted_prefixes:
+    training_lead: formacion

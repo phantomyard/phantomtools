@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+#
+# meeting-invite.sh — create a meeting invitation for PhantomMeet.
+#
+# Rendered from the PhantomMeet manifest by `pm apply`: every
+# installation-specific value below comes from the manifest (see the
+# "Installation configuration" block). This script only creates and sends
+# the *invitation notification*. It never switches personas and never
+# schedules tasks in another runtime: each recipient's own runtime decides
+# (from its own scheduled state) whether to join. See
+# kb/procedures/Meetings.md.
+#
+# Usage:
+#   meeting-invite.sh --title "..." --type <type> --datetime <ISO-8601> \
+#       --recipients "@a,@b" [--topic <topic>] \
+#       [--password-vault <name> | --password-file <path>] [--dry-run]
+#
+# Flags:
+#   --title TEXT          Meeting title (required)
+#   --type TEXT           Room type token (optional; only used if the naming
+#                         convention contains a {type} slot)
+#   --datetime ISO        Start time, ISO 8601 (required, e.g. 2026-08-10T17:00:00)
+#   --recipients LIST     Comma-separated @mentions of the recipients (required)
+#   --topic TEXT          Optional room topic token; when omitted, the {topic}
+#                         slot (and its leading hyphen) is dropped from the name
+#   --password-vault NAME Declare the room is password-locked (secret lives in
+#                         the vault; never read or broadcast here)
+#   --password-file PATH  Declare the room is password-locked (secret lives in
+#                         the file; never read or broadcast here)
+#   --dry-run             Print everything without sending anything
+#
+# Announcement card format: the manifest may define a custom card
+# (invite.card) using the tokens %TITLE%, %RECIPIENTS%, %DATETIME%,
+# %LINK%, %ROOM% and %PASSWORD_LINE% (expands to a "password shared
+# separately" notice when the room is password-locked, or nothing when it is
+# not — the secret itself is never read or broadcast). Without invite.card,
+# a built-in language-aware format is used.
+#
+# Every message that leaves this machine goes through phantombot; this
+# script only shells out to the configured binary.
+
+set -euo pipefail
+
+# =========================================================================
+# Installation configuration (rendered from the manifest — edit per install)
+# =========================================================================
+# Every scalar is shell-quoted at render time (single-quoted, shlex-style),
+# so a manifest value can never break out of an assignment and execute.
+PHANTOMBOT_BIN={{ invite.phantombot_bin | default('phantombot') | shquote }}
+PERSONA={{ name | shquote }}                      # the persona running this script
+MEET_BASE_URL={{ invite.meet_base_url | default('') | shquote }}
+ROOM_NAMING={{ rooms.naming | default('{YYYY-MM-DD}-{HH-MM}_{topic}') | shquote }}
+LANGUAGE={{ language | shquote }}
+# Personalized announcement card (optional). Empty string = built-in format.
+# Shell-quoted at render time; multi-line cards survive verbatim and cannot
+# terminate the script or inject commands.
+CARD_TEMPLATE={{ invite.card | default('') | shquote }}
+# =========================================================================
+{% raw %}
+usage() {
+  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+  exit 1
+}
+
+# --- argument parsing -----------------------------------------------------
+TITLE=""
+TYPE=""
+DATETIME=""
+RECIPIENTS=""
+TOPIC=""
+PASSWORD_VAULT=""
+PASSWORD_FILE=""
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --title) TITLE="$2"; shift 2 ;;
+    --type) TYPE="$2"; shift 2 ;;
+    --datetime) DATETIME="$2"; shift 2 ;;
+    --recipients) RECIPIENTS="$2"; shift 2 ;;
+    --topic) TOPIC="$2"; shift 2 ;;
+    --password-vault) PASSWORD_VAULT="$2"; shift 2 ;;
+    --password-file) PASSWORD_FILE="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    *) echo "unknown option: $1" >&2; usage ;;
+  esac
+done
+
+[[ -n "$TITLE" && -n "$DATETIME" && -n "$RECIPIENTS" ]] || {
+  echo "error: --title, --datetime and --recipients are required" >&2
+  usage
+}
+
+# --- strict ISO-8601 validation (before any use of $DATETIME substrings) --
+# YYYY-MM-DDTHH:MM:SS with an optional Z / ±HH:MM offset. Rejecting anything
+# else means the substrings fed into the room name are digits and hyphens
+# only — no shell/sed metacharacters can ride in through --datetime.
+if [[ ! "$DATETIME" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})?$ ]]; then
+  echo "error: --datetime must be strict ISO 8601 (YYYY-MM-DDTHH:MM:SS, optional Z/±HH:MM)" >&2
+  exit 1
+fi
+
+# --- room password: declared, never read, never broadcast ------------------
+# `phantombot notify` broadcasts to every authorized owner on every configured
+# channel, so the room password must NOT travel in the invitation body. The
+# --password-vault / --password-file flags only DECLARE that the room is
+# password-locked (and name where the secret lives for the operator). This
+# script never reads the secret and never prints it; recipients receive the
+# password through a separate, targeted channel — not this broadcast.
+PASSWORD_SET=0
+if [[ -n "$PASSWORD_VAULT" && -n "$PASSWORD_FILE" ]]; then
+  echo "error: use either --password-vault or --password-file, not both" >&2
+  exit 1
+fi
+if [[ -n "$PASSWORD_VAULT" || -n "$PASSWORD_FILE" ]]; then
+  PASSWORD_SET=1
+fi
+
+# --- resolve the phantombot binary (skipped in --dry-run) ------------------
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if ! command -v "$PHANTOMBOT_BIN" >/dev/null 2>&1; then
+    for cand in "$HOME/.local/bin/$PHANTOMBOT_BIN" "$HOME/.local/bin/phantombot"; do
+      if [[ -x "$cand" ]]; then
+        PHANTOMBOT_BIN="$cand"
+        break
+      fi
+    done
+  fi
+  if ! command -v "$PHANTOMBOT_BIN" >/dev/null 2>&1 && [[ "$PHANTOMBOT_BIN" != /* ]]; then
+    echo "error: no se encontró el binario phantombot ($PHANTOMBOT_BIN) en PATH ni en ~/.local/bin" >&2
+    exit 1
+  fi
+fi
+
+# --- derive the room name from the naming convention ----------------------
+slug() {
+  # lowercase, no accents, spaces/symbols -> underscores, strip non [a-z0-9_].
+  # Fixed sed programs only: the input is piped through, never interpolated
+  # into the sed expression, so no injection surface here.
+  echo "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed 's/á/a/g; s/é/e/g; s/í/i/g; s/ó/o/g; s/ú/u/g; s/ñ/n/g; s/ü/u/g' \
+    | sed 's/[^a-z0-9]\+/_/g' \
+    | sed 's/^_//; s/_$//'
+}
+
+YYYY="${DATETIME:0:4}"
+MM="${DATETIME:5:2}"
+DD="${DATETIME:8:2}"
+HH="${DATETIME:11:2}"
+MIN="${DATETIME:14:2}"
+
+# Build the room name with bash parameter expansion (no generated sed
+# program). $DATETIME was already validated, and $TYPE/$TOPIC are slug()'d,
+# so every substituted value is [a-z0-9_-] only.
+room_name="$ROOM_NAMING"
+room_name="${room_name//\{type\}/$(slug "$TYPE")}"
+room_name="${room_name//\{YYYY-MM-DD\}/$YYYY-$MM-$DD}"
+room_name="${room_name//\{DD-MM-YYYY\}/$DD-$MM-$YYYY}"
+room_name="${room_name//\{HH-MM\}/$HH-$MIN}"
+room_name="${room_name//\{YYYY\}/$YYYY}"
+room_name="${room_name//\{MM\}/$MM}"
+room_name="${room_name//\{DD\}/$DD}"
+if [[ -n "$TOPIC" ]]; then
+  room_name="${room_name//\{topic\}/$(slug "$TOPIC")}"
+else
+  # Drop the {topic} slot together with its leading hyphen.
+  room_name="${room_name//-\{topic\}/}"
+  room_name="${room_name//\{topic\}/}"
+fi
+# any remaining {token} collapses to 'x' (constant pattern, no user input)
+room_name="$(printf '%s' "$room_name" | sed 's/{[^}]*}/x/g')"
+
+# --- build the invitation text --------------------------------------------
+# Custom card from the manifest (invite.card) wins; the built-in format is
+# the fallback. Runtime values are substituted literally (%TOKEN% → value);
+# blank lines are dropped so an empty %PASSWORD_LINE% leaves no hole.
+if [[ -n "$CARD_TEMPLATE" ]]; then
+  card_text="$CARD_TEMPLATE"
+  card_text="${card_text//%TITLE%/$TITLE}"
+  card_text="${card_text//%RECIPIENTS%/$RECIPIENTS}"
+  card_text="${card_text//%DATETIME%/$DATETIME}"
+  card_text="${card_text//%LINK%/$MEET_BASE_URL/$room_name}"
+  card_text="${card_text//%ROOM%/$room_name}"
+  if [[ "$PASSWORD_SET" -eq 1 ]]; then
+    if [[ "$LANGUAGE" == "es" ]]; then
+      card_text="${card_text//%PASSWORD_LINE%/🔒 Contraseña: se comparte por separado}"
+    else
+      card_text="${card_text//%PASSWORD_LINE%/🔒 Password: shared separately}"
+    fi
+  else
+    card_text="${card_text//%PASSWORD_LINE%/}"
+  fi
+  card_text="$(printf '%s\n' "$card_text" | sed '/^[[:space:]]*$/d')"
+  invite_text="$card_text"
+else
+  if [[ "$LANGUAGE" == "es" ]]; then
+    INVITE_HEADER="📅 Reunión: ${TITLE}"
+    INVITE_RECIPIENTS="👥 Destinatarios: ${RECIPIENTS}"
+    INVITE_TIME="🕐 ${DATETIME}"
+    INVITE_LINK="🔗 ${MEET_BASE_URL}/${room_name}"
+    if [[ "$PASSWORD_SET" -eq 1 ]]; then
+      INVITE_PASSWORD="🔒 Contraseña: se comparte por separado"
+    fi
+  else
+    INVITE_HEADER="📅 Meeting: ${TITLE}"
+    INVITE_RECIPIENTS="👥 Recipients: ${RECIPIENTS}"
+    INVITE_TIME="🕐 ${DATETIME}"
+    INVITE_LINK="🔗 ${MEET_BASE_URL}/${room_name}"
+    if [[ "$PASSWORD_SET" -eq 1 ]]; then
+      INVITE_PASSWORD="🔒 Password: shared separately"
+    fi
+  fi
+
+  invite_text="${INVITE_HEADER}
+${INVITE_RECIPIENTS}
+${INVITE_TIME}
+${INVITE_LINK}"
+  [[ -n "${INVITE_PASSWORD:-}" ]] && invite_text="${invite_text}
+${INVITE_PASSWORD}"
+fi
+
+# --- send the invitation as a notification only ---------------------------
+# No cross-persona scheduling and no persona switch happen here. Each
+# recipient's own runtime decides, from its own scheduled state, whether to
+# join — the invitation text is informational, never an authorization.
+# `phantombot notify` broadcasts to every authorized owner on every
+# configured channel; there is no targeted per-chat delivery interface.
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "[dry-run] would notify: ${PHANTOMBOT_BIN} notify --message \"${invite_text}\" --persona ${PERSONA}"
+else
+  "${PHANTOMBOT_BIN}" notify --message "${invite_text}" --persona "${PERSONA}"
+  echo "invitation broadcast via phantombot notify"
+fi
+
+# --- summary ----------------------------------------------------------------
+# The invitation body never contains the room password (it is declared, never
+# read, and never broadcast), so it is safe to echo verbatim.
+echo "---"
+echo "room       : ${room_name}"
+echo "invite     :"
+echo "${invite_text}"
+exit 0
+{% endraw %}
