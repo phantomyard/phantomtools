@@ -19,8 +19,16 @@ ORG_YAML = textwrap.dedent("""\
         category-1: { label: Public }
         category-2: { label: Confidential }
         category-3: { label: "Sensitive financial" }
+        category-4: { label: "Sensitive project (umbrella)" }
+        category-4-almaponia: { label: "Sensitive - ALMAPONIA" }
     roles:
       - id: cfo
+        access_level: level-2
+        security_exceptions: []
+      - id: chief_of_staff
+        access_level: level-2
+        security_exceptions: [category-3, category-4]
+      - id: project_lead
         access_level: level-2
         security_exceptions: []
     actors:
@@ -30,6 +38,12 @@ ORG_YAML = textwrap.dedent("""\
       - id: elena
         role: cfo
         actor_exceptions: [category-3]
+      - id: pepa
+        role: chief_of_staff
+        actor_exceptions: []
+      - id: alma
+        role: project_lead
+        actor_exceptions: [category-4-almaponia]
 """)
 
 
@@ -41,8 +55,13 @@ def _org(tmp_path):
 
 def test_resolved_categories(tmp_path):
     org = _org(tmp_path)
-    assert resolved_categories(org, "roberto") == [1, 2]
-    assert resolved_categories(org, "elena") == [1, 2, 3]
+    assert resolved_categories(org, "roberto") == ["category-1", "category-2"]
+    assert resolved_categories(org, "elena") == [
+        "category-1", "category-2", "category-3"]
+    assert resolved_categories(org, "pepa") == [
+        "category-1", "category-2", "category-3", "category-4"]
+    assert resolved_categories(org, "alma") == [
+        "category-1", "category-2", "category-4-almaponia"]
     assert resolved_categories(org, "unknown") == []
 
 
@@ -53,8 +72,23 @@ def test_can_read_fail_closed(tmp_path):
     assert can_read(org, "unknown", 1) is False
 
 
+def test_can_read_hierarchical_umbrella(tmp_path):
+    """Holding the parent category-4 grants every category-4-* leaf."""
+    org = _org(tmp_path)
+    # pepa holds category-4 (umbrella) -> any project's sensitive docs
+    assert can_read(org, "pepa", "category-4-almaponia") is True
+    assert can_read(org, "pepa", "category-4-proyecto2") is True
+    # alma holds only category-4-almaponia -> only her project
+    assert can_read(org, "alma", "category-4-almaponia") is True
+    assert can_read(org, "alma", "category-4-proyecto2") is False
+    # alma cannot read org-level category-3 (finance/secretariat credentials)
+    assert can_read(org, "alma", "category-3") is False
+    assert can_read(org, "alma", 3) is False
+    # roberto has category-3 but NOT category-4 -> cannot read project-sensitive
+    assert can_read(org, "roberto", "category-4-almaponia") is False
+
+
 def test_can_write_requires_owners(tmp_path):
-    """No owners -> denied, even for a category the actor can read (spec §9)."""
     org = _org(tmp_path)
     assert can_write(org, "roberto", 1) is False
     assert can_write(org, "roberto", 1, []) is False
@@ -62,28 +96,38 @@ def test_can_write_requires_owners(tmp_path):
 
 
 def test_can_write_requires_read(tmp_path):
-    """An owner who cannot read the category cannot write it."""
     org = _org(tmp_path)
-    # roberto has clearance [1,2]; category-3 is unreadable -> write denied.
     assert can_write(org, "roberto", 3, ["cfo"]) is False
 
 
 def test_can_write_allows_role_owner(tmp_path):
-    """owners may name a ROLE id; any actor holding that role may write."""
     org = _org(tmp_path)
     assert can_write(org, "roberto", 1, ["cfo"]) is True
     assert can_write(org, "elena", 1, ["cfo"]) is True
 
 
 def test_can_write_allows_actor_owner(tmp_path):
-    """owners may name an ACTOR id directly."""
     org = _org(tmp_path)
     assert can_write(org, "roberto", 1, ["roberto"]) is True
     assert can_write(org, "elena", 1, ["roberto"]) is False
 
 
+def test_can_write_project_scope(tmp_path):
+    """A project lead writes their project's sensitive docs; an overseer
+    (umbrella category-4 + owner role) can too; a peer lead cannot."""
+    org = _org(tmp_path)
+    owners = ["alma", "chief_of_staff", "cfo"]
+    # alma is owner (actor) and can read category-4-almaponia
+    assert can_write(org, "alma", "category-4-almaponia", owners) is True
+    # pepa (chief_of_staff, category-4 umbrella + owner role) can write
+    assert can_write(org, "pepa", "category-4-almaponia", owners) is True
+    # roberto has no category-4 -> cannot read -> cannot write (cfo owner or not)
+    assert can_write(org, "roberto", "category-4-almaponia", owners) is False
+    # a peer lead cannot write a project she does not own
+    assert can_write(org, "alma", "category-4-proyecto2", owners) is False
+
+
 def test_can_write_denies_unrelated_same_category(tmp_path):
-    """An actor who can read the category but is not an owner is denied."""
     org = _org(tmp_path)
     assert can_read(org, "elena", 1) is True
     assert can_write(org, "elena", 1, ["roberto"]) is False

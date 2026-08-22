@@ -13,7 +13,7 @@ import sys
 import click
 
 from . import __version__
-from .access import can_read, can_write, load_org, resolved_categories
+from .access import can_read, can_write, load_org, normalize_category, resolved_categories
 from .audit import append as audit_append
 from .audit import read as audit_read
 from .audit import verify_chain as audit_verify_chain
@@ -42,7 +42,7 @@ from .manifest import (
     urn_path,
     versions_of,
 )
-from .storage import LocalBackend, StorageError, resolve_backend
+from .storage import LocalBackend, StorageError, read_reference, resolve_backend
 from .update import is_newer, latest_release
 
 
@@ -188,10 +188,10 @@ def init(org: str, namespace: str, org_pubkey: str, root: str) -> None:
 @click.option("--parent", default=None, help="Parent folder (logical path or slug).")
 @click.option(
     "--category",
-    type=int,
-    default=1,
+    type=str,
+    default="category-1",
     show_default=True,
-    help="Default security category for children.",
+    help="Security category id (e.g. 'category-2', 'category-4-almaponia').",
 )
 @click.option("--owners", multiple=True, help="PhantomOrg role ids allowed to write.")
 @click.option(
@@ -206,9 +206,10 @@ def mkdir(name, parent, category, owners, org_yaml, actor, root):
     actor must be able to write the folder's category (fail-closed).
     """
     actor_id, org = _require_acl(org_yaml, actor)
+    category = normalize_category(category)
     if not can_write(org, actor_id, category, list(owners)):
         raise click.ClickException(
-            f"denied: {actor_id} cannot write category-{category}"
+            f"denied: {actor_id} cannot write {category}"
         )
 
     # Load-modify-save under the inter-process lock: a concurrent `pd` must
@@ -253,14 +254,15 @@ def mkdir(name, parent, category, owners, org_yaml, actor, root):
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+@click.argument("path", required=False)
 @click.option("--slug", required=True, help="Stable slug (no version; spec §7).")
 @click.option(
     "--category",
-    type=int,
+    type=str,
     default=None,
-    help="Security category (PhantomOrg security_categories). Defaults to 1 "
-    "for new nodes; versioning an existing node preserves its category.",
+    help="Security category id (e.g. 'category-2', 'category-4-almaponia'). "
+    "Defaults to category-1 for new nodes; versioning an existing node "
+    "preserves its category.",
 )
 @click.option("--folder", default=None, help="Parent folder (logical path or slug).")
 @click.option("--owners", multiple=True, help="PhantomOrg role ids allowed to write.")
@@ -270,17 +272,33 @@ def mkdir(name, parent, category, owners, org_yaml, actor, root):
 @click.option(
     "--backend", default=None, help="Backend URI (local:// ssh:// gdrive://)."
 )
+@click.option(
+    "--ref", default=None,
+    help="Index an existing external object by reference "
+    "(gdrive://<file_id>, file:///path, ssh://host/path) instead of "
+    "ingesting a local file. Read to hash, but NOT copied.",
+)
 @click.option("--actor", default=None, help=_ACTOR_HELP)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def add(path, slug, category, folder, owners, org_yaml, actor, backend, root):
+def add(path, ref, slug, category, folder, owners, org_yaml, actor, backend, root):
     """Ingest a document: compute MAC chain, store blob, register node.
 
     Access-controlled: requires --org-yaml + an authenticated OS identity; the
     actor must be able to write the document's category, and when versioning an
     existing node, be one of its owners (fail-closed).
     """
-    with open(path, "rb") as f:
-        content = f.read()
+    if (path is None) == (ref is None):
+        raise click.ClickException(
+            "provide exactly one of: PATH (ingest a local file) or --ref URI "
+            "(index an external object by reference)"
+        )
+
+    if ref:
+        content, ref_location = read_reference(ref)
+    else:
+        with open(path, "rb") as f:
+            content = f.read()
+        ref_location = None
 
     actor_id, org = _require_acl(org_yaml, actor)
 
@@ -315,14 +333,21 @@ def add(path, slug, category, folder, owners, org_yaml, actor, backend, root):
         # downgrade a document by passing a lower --category.
         if existing is not None:
             effective_category = existing["category"]
-            if category is not None and category != effective_category:
+            if (
+                category is not None
+                and normalize_category(category)
+                != normalize_category(effective_category)
+            ):
                 raise click.ClickException(
                     f"denied: cannot reclassify {urn} from "
-                    f"category-{effective_category} to category-{category} via add "
+                    f"{normalize_category(effective_category)} to "
+                    f"{normalize_category(category)} via add "
                     "(reclassification is a separate operation)"
                 )
         else:
-            effective_category = 1 if category is None else category
+            effective_category = (
+                "category-1" if category is None else normalize_category(category)
+            )
 
         # Write ACL: base category access; when versioning an existing node,
         # the actor must be one of its declared owners.
@@ -331,12 +356,17 @@ def add(path, slug, category, folder, owners, org_yaml, actor, backend, root):
         )
         if not can_write(org, actor_id, effective_category, effective_owners):
             raise click.ClickException(
-                f"denied: {actor_id} cannot write category-{effective_category} "
+                f"denied: {actor_id} cannot write "
+                f"{normalize_category(effective_category)} "
                 f"{'(owner required)' if effective_owners else ''}"
             )
 
-        location = _resolve_store(root, backend).put(ch, content)
-        scheme = backend.split("://")[0] if backend and "://" in backend else "local"
+        if ref_location is not None:
+            locations = [ref_location]
+        else:
+            location = _resolve_store(root, backend).put(ch, content)
+            scheme = backend.split("://")[0] if backend and "://" in backend else "local"
+            locations = [{"backend": scheme, "path": location}]
 
         manifest["nodes"].append(
             {
@@ -351,7 +381,7 @@ def add(path, slug, category, folder, owners, org_yaml, actor, backend, root):
                 "owners": (
                     list(existing.get("owners", []) or []) if existing else list(owners)
                 ),
-                "locations": [{"backend": scheme, "path": location}],
+                "locations": locations,
                 "meta": {"title": slug},
                 "relations": {},
                 "previous": previous,
@@ -398,14 +428,22 @@ def get(ref, mac, cat, backend, org_yaml, actor, root):
     actor_id, org = _require_acl(org_yaml, actor)
     if not can_read(org, actor_id, node.get("category", 0)):
         raise click.ClickException(
-            f"denied: {actor_id} cannot read category-{node.get('category')} "
-            f"({node['urn']})"
+            f"denied: {actor_id} cannot read "
+            f"{normalize_category(node.get('category', 0))} ({node['urn']})"
         )
 
-    location = node.get("locations", [{}])[0].get("path", "")
-    click.echo(f"{node['urn']} -> {location}")
+    location = node.get("locations", [{}])[0]
+    if "ref" in location:
+        click.echo(f"{node['urn']} -> {location['backend']}://{location['ref']}")
+    else:
+        click.echo(f"{node['urn']} -> {location.get('path', '')}")
     if cat and node.get("kind") == "doc":
-        sys.stdout.buffer.write(_resolve_store(root, backend).get(node["contentHash"]))
+        loc = node.get("locations", [{}])[0]
+        if "ref" in loc:
+            data = read_reference(f"{loc['backend']}://{loc['ref']}")[0]
+        else:
+            data = _resolve_store(root, backend).get(node["contentHash"])
+        sys.stdout.buffer.write(data)
 
 
 @main.command()
@@ -424,8 +462,8 @@ def versions(ref, org_yaml, actor, root):
     actor_id, org = _require_acl(org_yaml, actor)
     if not can_read(org, actor_id, node.get("category", 0)):
         raise click.ClickException(
-            f"denied: {actor_id} cannot read category-{node.get('category')} "
-            f"({node['urn']})"
+            f"denied: {actor_id} cannot read "
+            f"{normalize_category(node.get('category', 0))} ({node['urn']})"
         )
     history = versions_of(manifest, node["urn"])
     if not history:
@@ -497,28 +535,45 @@ def verify(backend, root):
             if not ch:
                 issues.append("missing contentHash")
             else:
-                try:
-                    if not store.has(ch):
-                        issues.append("blob missing")
-                    else:
-                        try:
-                            data = store.get(ch)
-                        except StorageError as exc:
-                            issues.append(f"{exc}")
-                            data = None
-                        if data is not None:
-                            if content_hash(data) != ch:
-                                issues.append("content hash mismatch")
-                            elif (
-                                node_mac(
-                                    node["parentMac"],
-                                    component_for_doc(node["slug"], data),
-                                )
-                                != node["mac"]
-                            ):
-                                issues.append("MAC chain mismatch")
-                except StorageError as exc:
-                    issues.append(f"backend error: {exc}")
+                loc = node.get("locations", [{}])[0]
+                if loc.get("ref"):
+                    try:
+                        data = read_reference(f"{loc['backend']}://{loc['ref']}")[0]
+                        if content_hash(data) != ch:
+                            issues.append("content hash mismatch (reference)")
+                        elif (
+                            node_mac(
+                                node["parentMac"],
+                                component_for_doc(node["slug"], data),
+                            )
+                            != node["mac"]
+                        ):
+                            issues.append("MAC chain mismatch")
+                    except StorageError as exc:
+                        issues.append(f"reference read failed: {exc}")
+                else:
+                    try:
+                        if not store.has(ch):
+                            issues.append("blob missing")
+                        else:
+                            try:
+                                data = store.get(ch)
+                            except StorageError as exc:
+                                issues.append(f"{exc}")
+                                data = None
+                            if data is not None:
+                                if content_hash(data) != ch:
+                                    issues.append("content hash mismatch")
+                                elif (
+                                    node_mac(
+                                        node["parentMac"],
+                                        component_for_doc(node["slug"], data),
+                                    )
+                                    != node["mac"]
+                                ):
+                                    issues.append("MAC chain mismatch")
+                    except StorageError as exc:
+                        issues.append(f"backend error: {exc}")
         else:
             if (
                 node_mac(node["parentMac"], component_for_folder(node["slug"]))
@@ -564,8 +619,8 @@ def tag(name, ref, org_yaml, actor, root):
             raise click.ClickException(f"not found: {ref}")
         if not can_write(org, actor_id, node.get("category", 0), node.get("owners")):
             raise click.ClickException(
-                f"denied: {actor_id} cannot write category-{node.get('category')} "
-                f"({node['urn']})"
+                f"denied: {actor_id} cannot write "
+                f"{normalize_category(node.get('category', 0))} ({node['urn']})"
             )
         manifest.setdefault("refs", {})[name] = node["mac"]
         save(_manifest_path(root), manifest)
@@ -614,7 +669,7 @@ def derive_manifest(org_yaml, namespace, org_pubkey, out):
 @click.option("--org-yaml", required=True, help="Path to a PhantomOrg org.yaml.")
 @click.option("--actor", required=True, help="Actor id to resolve.")
 @click.option(
-    "--category", type=int, default=None, help="Check read access for this category."
+    "--category", type=str, default=None, help="Check read access for this category id."
 )
 def acl(org_yaml, actor, category):
     """Resolve an actor's access from a PhantomOrg org.yaml (spec §9)."""
@@ -625,8 +680,9 @@ def acl(org_yaml, actor, category):
         return
     click.echo(f"{actor}: categories {categories}")
     if category is not None:
-        verdict = "ALLOW" if can_read(org, actor, category) else "DENY"
-        click.echo(f"  read category-{category}: {verdict}")
+        cat = normalize_category(category)
+        verdict = "ALLOW" if can_read(org, actor, cat) else "DENY"
+        click.echo(f"  read {cat}: {verdict}")
 
 
 @main.command()

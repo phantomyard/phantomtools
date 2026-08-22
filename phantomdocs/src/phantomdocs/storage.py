@@ -236,3 +236,78 @@ def resolve_backend(uri: str):
     if scheme == "gdrive":
         return GdriveBackend()
     raise StorageError(f"unknown backend scheme: {scheme!r}")
+
+
+def _gdrive_download(workspace_py: str, file_id: str) -> bytes:
+    """Download a Drive file's raw bytes via the persona's workspace tooling."""
+    with tempfile.NamedTemporaryFile(prefix="pd-gdrive-", delete=False) as f:
+        tmp = f.name
+    try:
+        proc = _run_checked(
+            [workspace_py, "drive", "download", file_id, tmp], text=True
+        )
+        if proc.returncode != 0:
+            detail = proc.stderr.strip()
+            raise StorageError(
+                f"gdrive download failed: {detail}" if detail else "gdrive download failed"
+            )
+        with open(tmp, "rb") as f:
+            return f.read()
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def read_reference(uri: str, workspace_py: str | None = None) -> tuple[bytes, dict]:
+    """Read the bytes of an external object and return ``(bytes, location)``.
+
+    "Add by reference": index an object that already lives somewhere else,
+    without copying it into a content-addressed store. Backends:
+
+      - ``gdrive://<file_id>``              -> the persona's Google Drive
+        (via ``workspace.py drive download``; the path is taken from
+        ``$PHANTOMDOCS_WORKSPACE_PY``, falling back to ``workspace.py``)
+      - ``file:///abs/path`` or a bare path -> local filesystem
+      - ``ssh://[user@]host[:port]/<path>`` -> a remote file over SSH
+
+    The returned location carries a ``ref`` key (an external object pointer),
+    never a content-addressed store path.
+    """
+    if workspace_py is None:
+        workspace_py = os.environ.get("PHANTOMDOCS_WORKSPACE_PY", "workspace.py")
+    if uri.startswith("gdrive://"):
+        file_id = uri[len("gdrive://"):]
+        data = _gdrive_download(workspace_py, file_id)
+        return data, {"backend": "gdrive", "ref": file_id}
+    if uri.startswith("file://"):
+        path = uri[len("file://"):]
+        with open(path, "rb") as f:
+            data = f.read()
+        return data, {"backend": "file", "ref": path}
+    if uri.startswith("ssh://"):
+        parsed = urlparse(uri)
+        target = (
+            f"{parsed.username}@{parsed.hostname}"
+            if parsed.username
+            else (parsed.hostname or "")
+        )
+        remote = parsed.path or ""
+        proc = _run_checked(
+            [
+                "ssh", "-p", str(parsed.port or 22),
+                "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                target, f"cat {remote}",
+            ]
+        )
+        if proc.returncode != 0:
+            detail = proc.stderr.decode(errors="replace").strip()
+            raise StorageError(
+                f"ssh read failed: {detail}" if detail else "ssh read failed"
+            )
+        return proc.stdout, {"backend": "ssh", "ref": remote}
+    # bare local path
+    with open(uri, "rb") as f:
+        data = f.read()
+    return data, {"backend": "file", "ref": uri}
