@@ -1,25 +1,24 @@
-// AUDIT kaieriksen M01 (🔴 BLOQUEANTE del PR #24 phantomyard):
+// AUDIT kaieriksen M01 (🔴 BLOCKING of PR #24 phantomyard):
 //   "the configured permissions are never enforced on the agent-controlled
 //    Jitsi paths... roomAgents only limits recipients and does not authorize
 //    the sender. Gate every room command and message by sender plus room
 //    scope before accepting it."
 //
-// Confirmado en el código previo al fix: CONFIG.permissions NO se leía en
-// ningún sitio; roomAgents solo filtraba DESTINATARIOS y routingPerms solo
-// aplicaba a DM↔DM. Cualquier agente autenticado podía join/leave/inject/
-// recordings en cualquier sala.
+// Confirmed in the pre-fix code: CONFIG.permissions was NOT read anywhere;
+// roomAgents only filtered RECIPIENTS and routingPerms only applied to DM↔DM.
+// Any authenticated agent could join/leave/inject/recordings in any room.
 //
-// Fix: helper `agentCanOperateRoom(sender, room)` (y su lógica pura
-// `evalRoomPermission`) que resuelve contra
+// Fix: helper `agentCanOperateRoom(sender, room)` (and its pure logic
+// `evalRoomPermission`) that resolves against
 //   "permissions": { "full": [...], "restricted": { room: [agents] } }
-// con fail-closed, y los gates se aplican en join/leave/inject/recordings.
-// SIN bloque `permissions` configura el helper -> true (compat: comportamiento
-// legacy previo, sin romper despliegues sin permisos).
+// with fail-closed, and the gates are applied on join/leave/inject/recordings.
+// WITHOUT a `permissions` block the helper -> true (compat: legacy behavior,
+// without breaking deployments without permissions).
 //
-// ESTE TEST PRUEBA LA MATRIZ REAL (crítica de la revisión §4): ejercita la
-// lógica de decisión contra configs AISLADOS — incluidos los bugs fail-closed
-// (permissions:{}, permissions mal formado) y verifica el orden de los gates
-// reales y el avance del watermark (BLOQUEANTE 2) en el código.
+// THIS TEST EXERCISES THE REAL MATRIX (review §4 critique): it exercises the
+// decision logic against ISOLATED configs — including the fail-closed bugs
+// (permissions:{}, malformed permissions) and verifies the order of the real
+// gates and the watermark advance (BLOCKER 2) in the code.
 const assert = require('assert');
 const fs = require('fs');
 
@@ -29,7 +28,7 @@ function t(name, fn) {
   catch (e) { console.error('  FAIL:', name, '-', e.message); failed++; }
 }
 
-// --- Matriz de decisión pura (sin cargar el módulo, sin red) ---
+// --- Pure decision matrix (without loading the module, without network) ---
 // evalRoomPermission(permConfig, senderName, room):
 //   undefined          -> legacy/open
 //   {}                 -> fail-closed
@@ -42,21 +41,21 @@ function t(name, fn) {
 function evalP(permConfig, sender, room) {
   return bridgeModule.evalRoomPermission(permConfig, sender, room);
 }
-// Cargamos una vez el módulo (basta para la lógica pura exportada; el config
-// base del repo se usa por compatibilidad con la carga, no para la matriz).
+// We load the module once (enough for the exported pure logic; the repo base
+// config is used for loading compatibility, not for the matrix).
 require('./testlib.js').setup();
 const bridgeModule = require('./bridge.js');
 
-t('legacy: sin bloque permissions -> open (compat despliegues existentes)', () => {
+t('legacy: without a permissions block -> open (compat with existing deployments)', () => {
   assert.strictEqual(evalP(undefined, 'alice', 'mia'), true);
   assert.strictEqual(evalP(undefined, 'algún-agente', null), true);
 });
 
-t('ALTO FIX: permissions:{} (bloque vacío) -> fail-closed, NO legacy', () => {
-  // El bug detectado en la revisión: `permissions: {}` se interpretaba como
-  // ausencia -> legacy/open. Ahora un bloque presente (aunque vacío) deniega.
-  assert.strictEqual(evalP({}, 'alice', 'mia'), false, '{} debe denegar a alice');
-  assert.strictEqual(evalP({}, 'alice', null), false, '{} room-agnostic deniega');
+t('HIGH FIX: permissions:{} (empty block) -> fail-closed, NOT legacy', () => {
+  // The bug found in review: `permissions: {}` was interpreted as absence ->
+  // legacy/open. Now a present (even empty) block denies.
+  assert.strictEqual(evalP({}, 'alice', 'mia'), false, '{} must deny alice');
+  assert.strictEqual(evalP({}, 'alice', null), false, '{} room-agnostic denies');
 });
 
 t('full:[] -> deny (nadie tiene full)', () => {
@@ -81,85 +80,85 @@ t('restricted:{mia:[bob]} -> bob en mia; fuera de mia sin full denegado', () => 
   assert.strictEqual(evalP({ restricted: { mia: ['bob'] } }, 'bob', null), false); // room-agnostic exige full
 });
 
-t('ALTO FIX: full mal formado (string) -> fail-closed, no legacy', () => {
-  // Un bloque permissions presente pero mal formado NO debe abrir el puente.
-  assert.strictEqual(evalP({ full: 'alice' }, 'alice', 'mia'), false, 'full:string debe fail-closed');
+t('HIGH FIX: malformed full (string) -> fail-closed, not legacy', () => {
+  // A present but malformed permissions block must NOT open the bridge.
+  assert.strictEqual(evalP({ full: 'alice' }, 'alice', 'mia'), false, 'full:string must fail-closed');
 });
 
-t('sender vacío nunca tiene permiso (fail cerrado)', () => {
+t('empty sender never has permission (fail-closed)', () => {
   assert.strictEqual(bridgeModule.evalRoomPermission(undefined, null, 'mia'), false);
   assert.strictEqual(bridgeModule.evalRoomPermission(undefined, '', 'mia'), false);
 });
 
-t('agentCanOperateRoom es una función exportada (gate real)', () => {
+t('agentCanOperateRoom is an exported function (real gate)', () => {
   assert.strictEqual(typeof bridgeModule.agentCanOperateRoom, 'function');
 });
 
-// --- Verificación de que los gates REALES están aplicados en el código ---
+// --- Verification that the REAL gates are applied in the code ---
 const src = fs.readFileSync('./bridge.js', 'utf8');
-t('gates aplicados: recordings + [room] text + join/leave', () => {
+t('gates applied: recordings + [room] text + join/leave', () => {
   const uses = (src.match(/agentCanOperateRoom\(/g) || []).length;
-  // grabaciones(1) + inyección(1) + handleJoinLeave(1) = 3 llamadas
-  assert.ok(uses >= 3, 'se esperaban >=3 llamadas al gate, hay ' + uses);
+  // recordings(1) + injection(1) + handleJoinLeave(1) = 3 calls
+  assert.ok(uses >= 3, 'expected >=3 gate calls, found ' + uses);
 });
 
-t('BLOQUEANTE 2 FIX: processWatermark NO corre antes del gate M01', () => {
-  // El watermark de recuperación debe avanzar SOLO por reloj local del bridge
-  // (progreso real confirmado del stream), nunca con `created_at` del emisor, y
-  // nunca en la admisión (antes del gate). Verificamos que la admisión ya NO
-  // llama a processWatermark y que finishDelivery usa advanceRecoveryWatermark().
+t('BLOCKER 2 FIX: processWatermark does NOT run before the M01 gate', () => {
+  // The recovery watermark must advance ONLY by the bridge local clock (real
+  // confirmed stream progress), never with the sender `created_at`, and never
+  // on admission (before the gate). We verify admission no longer calls
+  // processWatermark and finishDelivery uses advanceRecoveryWatermark().
   const admissionBlock = src.slice(
     src.indexOf('const admitted = markDelivery'),
     src.indexOf('const content = unwrapped.content'));
   assert.ok(!admissionBlock.includes('processWatermark(wrapTs)'),
-    'processWatermark(wrapTs) NO debe ejecutarse en la admisión (adelanta cursor con created_at hostil)');
+    'processWatermark(wrapTs) must NOT run on admission (advances cursor with hostile created_at)');
   const fin = src.indexOf('function finishDelivery(id, ok, rejected)');
-  // Encontrar el cierre REAL de la función (balanceando llaves), no el primer
-  // '\n}' (que cortaría en el cierre del if (rejected) interno).
+  // Find the REAL end of the function (balancing braces), not the first '\n}'
+  // (which would cut at the closing of the internal if (rejected)).
   let depth = 0, finEnd = fin;
   for (; finEnd < src.length; finEnd++) {
     if (src[finEnd] === '{') depth++;
     else if (src[finEnd] === '}') { depth--; if (depth === 0) break; }
   }
   const finBlock = src.slice(fin, finEnd + 1);
-  // OPCION2: el avance del watermark usa advanceRecoveryWatermark() (reloj
-  // local del bridge), no processWatermark(wrapTs) (created_at del emisor).
-  // Buscamos la LLAMADA real (con ';' — el comentario explicativo nombra la
-  // funcion sin llamarla y no debe contar como código).
+  // OPTION2: the watermark advance uses advanceRecoveryWatermark() (bridge
+  // local clock), not processWatermark(wrapTs) (sender created_at). We look for
+  // the real CALL (with ';' — the explanatory comment names the function
+  // without calling it and must not count as code).
   assert.ok(finBlock.includes('advanceRecoveryWatermark();'),
-    'finishDelivery debe avanzar el watermark por reloj local (OPCION2)');
+    'finishDelivery must advance the watermark by local clock (OPTION2)');
   const delivPos = finBlock.indexOf("markDelivery(id, 'delivered')");
   const wmPos = finBlock.indexOf('advanceRecoveryWatermark();');
   assert.ok(wmPos > delivPos,
-    'el avance del watermark debe ir DESPUÉS de marcar delivered (solo tras éxito)');
+    'the watermark advance must go AFTER marking delivered (only after success)');
 });
 
-t('BLOQUEANTE 2 FIX: el cursor no se alimenta con timestamps externos (proceso eliminado)', () => {
-  // AUDIT-M01-OPCION2-FIX: processWatermark(ts) fue ELIMINADO por completo.
-  // Alimentar el watermark con un timestamp del wire (created_at del emisor)
-  // reintroduce la superficie de ataque. El único avance legítimo es
-  // advanceRecoveryWatermark() con paso acotado (RECOVERY_WATERMARK_STEP_SECS),
-  // que NUNCA salta a Date.now() tras un downtime.
+t('BLOCKER 2 FIX: the cursor is not fed with external timestamps (process removed)', () => {
+  // AUDIT-M01-OPTION2-FIX: processWatermark(ts) was REMOVED entirely. Feeding
+  // the watermark with a wire timestamp (sender created_at) reintroduces the
+  // attack surface. The only legitimate advance is advanceRecoveryWatermark()
+  // with a bounded step (RECOVERY_WATERMARK_STEP_SECS), which NEVER jumps to
+  // Date.now() after downtime.
   assert.ok(!/function processWatermark\(/.test(src),
-    'processWatermark(ts) debe haber sido eliminado (no alimentar el cursor con ts del emisor)');
+    'processWatermark(ts) must have been removed (do not feed the cursor with sender ts)');
   assert.ok(src.includes('RECOVERY_WATERMARK_STEP_SECS'),
-    'el avance debe estar ACOTADO por un paso (RECOVERY_WATERMARK_STEP_SECS), no saltar a now');
+    'the advance must be BOUNDED by a step (RECOVERY_WATERMARK_STEP_SECS), not jump to now');
   assert.ok(src.includes('Math.min(prev + RECOVERY_WATERMARK_STEP_SECS, now)'),
-    'el watermark avanza a min(prev+paso, now): nunca un salto libre a Date.now()');
+    'the watermark advances to min(prev+step, now): never a free jump to Date.now()');
 });
 
-t('BLOQUEANTE 1 FIX: GET /recordings exige admin (cierra signed URLs públicas)', () => {
+t('BLOCKER 1 FIX: GET /recordings requires admin (closes public signed URLs)', () => {
   const listIdx = src.indexOf("req.url === '/recordings'");
   const dlIdx = src.indexOf("req.url.startsWith('/recordings/')");
-  assert.ok(listIdx > 0 && dlIdx > listIdx, 'matcher del listado debe ir antes que el download');
+  assert.ok(listIdx > 0 && dlIdx > listIdx, 'the list matcher must come before the download one');
   const window_ = src.slice(listIdx, dlIdx);
   assert.ok(window_.includes('requireAdmin'),
-    'el listado /recordings debe exigir requireAdmin (fail-closed, no signed URLs públicas)');
+    'the /recordings listing must require requireAdmin (fail-closed, no public signed URLs)');
 });
 
-t('README documenta el gate y el fail-closed', () => {
+t('README documents the gate and the fail-closed', () => {
   const readme = fs.readFileSync('./README.md', 'utf8');
-  assert.ok(/permissions/i.test(readme), 'README debería documentar permissions');
+  assert.ok(/permissions/i.test(readme), 'README should document permissions');
 });
 
 console.log(`\nAUDIT M01 (permissions gate) Result: ${passed} ok, ${failed} fail`);

@@ -1,14 +1,14 @@
-// Verifica que la nueva logica del bridge (2 pasos con check seal.pubkey==rumor.pubkey)
-// rechaza el wrap malicioso con rumor.pubkey != seal.pubkey
+// Verifies that the bridge's new logic (2 steps with check seal.pubkey==rumor.pubkey)
+// rejects the malicious wrap with rumor.pubkey != seal.pubkey
 const {generateSecretKey, getPublicKey, finalizeEvent, getEventHash} = require('nostr-tools');
 const nip44 = require('nostr-tools/nip44');
 
-// === claves ===
+// === keys ===
 const bridgePriv = generateSecretKey(), bridgePub = getPublicKey(bridgePriv);
 const legitAgentPub = getPublicKey(generateSecretKey());
 const attackerPriv = generateSecretKey(), attackerPub = getPublicKey(attackerPriv);
 
-// === helper: reproduce EXACTAMENTE la logica nueva del bridge ===
+// === helper: reproduces EXACTLY the bridge's new logic ===
 function bridgeVerifyDecrypt(giftWrap, bridgeSk) {
   try {
     const seal = JSON.parse(nip44.decrypt(giftWrap.content, nip44.getConversationKey(bridgeSk, giftWrap.pubkey)));
@@ -21,7 +21,7 @@ function bridgeVerifyDecrypt(giftWrap, bridgeSk) {
     return {ok: false, reason: 'invalid', err: e.message};
   }
 }
-// helper legit: wrap normal (rumor.pubkey == seal.pubkey)
+// legit helper: normal wrap (rumor.pubkey == seal.pubkey)
 function legitWrap(priv, bridgePub) {
   const rumor = {kind:14, created_at:Math.floor(Date.now()/1000), content:'status', tags:[['p',bridgePub]], pubkey:getPublicKey(priv)};
   rumor.id = getEventHash(rumor);
@@ -29,7 +29,7 @@ function legitWrap(priv, bridgePub) {
   const seal = finalizeEvent({kind:13, content:nip44.encrypt(JSON.stringify(rumor), ck), created_at:Math.floor(Date.now()/1000), tags:[]}, priv);
   return finalizeEvent({kind:1059, content:nip44.encrypt(JSON.stringify(seal), ck), created_at:Math.floor(Date.now()/1000), tags:[['p',bridgePub]]}, priv);
 }
-// helper malicious: rumor.pubkey=legitAgent pero seal/wrap firmados por attacker
+// malicious helper: rumor.pubkey=legitAgent but seal/wrap signed by attacker
 function maliciousWrap(attackerPriv, attackerPub, legitAgentPub, bridgePub) {
   const rumor = {kind:14, created_at:Math.floor(Date.now()/1000), content:'status', tags:[['p',bridgePub]], pubkey:legitAgentPub};
   rumor.id = getEventHash(rumor);
@@ -41,19 +41,19 @@ function maliciousWrap(attackerPriv, attackerPub, legitAgentPub, bridgePub) {
 let ok = true;
 const check = (n,c) => { console.log((c?'✅':'❌'), n); if(!c) ok=false; };
 
-// caso 1: wrap LEGITIMO -> aceptado (rumor.pubkey == seal.pubkey)
-const legit = legitWrap(attackerPriv, bridgePub); // un agente legit cualquiera
+// case 1: LEGITIMATE wrap -> accepted (rumor.pubkey == seal.pubkey)
+const legit = legitWrap(attackerPriv, bridgePub); // any legit agent
 const r1 = bridgeVerifyDecrypt(legit, bridgePriv);
-check('wrap legítimo se acepta (rumor==seal)', r1.ok && r1.unwrapped.content === 'status');
+check('legit wrap is accepted (rumor==seal)', r1.ok && r1.unwrapped.content === 'status');
 
-// caso 2: wrap MALICIOSO (rumor=legitAgent, seal=attacker) -> RECHAZADO
+// case 2: MALICIOUS wrap (rumor=legitAgent, seal=attacker) -> REJECTED
 const mal = maliciousWrap(attackerPriv, attackerPub, legitAgentPub, bridgePub);
 const r2 = bridgeVerifyDecrypt(mal, bridgePriv);
-check('wrap malicioso (rumor.pubkey != seal.pubkey) RECHAZADO', !r2.ok && r2.reason === 'mismatch');
+check('malicious wrap (rumor.pubkey != seal.pubkey) REJECTED', !r2.ok && r2.reason === 'mismatch');
 
-// caso 3: wrap invalido (garbage) -> RECHAZADO sin crash
+// case 3: invalid wrap (garbage) -> REJECTED without crash
 const r3 = bridgeVerifyDecrypt({content:'no-es-json', pubkey:legitAgentPub}, bridgePriv);
-check('wrap inválido rechazado sin crash', !r3.ok);
+check('invalid wrap rejected without crash', !r3.ok);
 
 console.log('');
-console.log(ok ? '✅ FIX VERIFICADO: la nueva verificacion de identidad del bridge bloquea el spoofing rumor.pubkey!=seal.pubkey' : '❌ FALLO');
+console.log(ok ? '✅ FIX VERIFIED: the bridge\'s new identity verification blocks rumor.pubkey!=seal.pubkey spoofing' : '❌ FAILED');

@@ -1,17 +1,17 @@
-// AUDIT-10 (ALTO, raíz): separación de cursores — recepción cruda vs watermark
-// de recuperación.
+// AUDIT-10 (HIGH, root): cursor separation — raw reception vs recovery
+// watermark.
 //
-// El ALTO-7 vino de mezclar dos semánticas incompatibles en lastSeen:
-//   - "último evento RECIBIDO" (avanza con cada frame, incluso rechazados/
-//     no-admitidos/descartados) — lo usa el `since` de la suscripción.
-//   - "watermark que demuestra que los eventos anteriores ya no pueden
-//     reaparecer" — lo usaba deliveredCanExpire() para borrar delivered.
+// AUDIT-7 came from mixing two incompatible semantics in lastSeen:
+//   - "last RECEIVED event" (advances with every frame, even rejected/
+//     non-admitted/discarded) — used by the subscription `since`.
+//   - "watermark proving earlier events can no longer reappear" — used by
+//     deliveredCanExpire() to delete delivered.
 //
-// Con Fase 2, deliveredCanExpire() NO debe depender de lastSeen (recepción
-// cruda) sino de recoveryWatermark, que SOLO avanza cuando un evento se
-// PROCESA/ADMITE de verdad (markDelivery exitoso). Un frame recibido pero
-// rechazado/no-admitido NUNCA mueve recoveryWatermark, por mucho que avance
-// lastSeen.
+// With Phase 2, deliveredCanExpire() must NOT depend on lastSeen (raw
+// reception) but on recoveryWatermark, which ONLY advances when an event is
+// really PROCESSED/ADMITTED (successful markDelivery). A received but
+// rejected/non-admitted frame NEVER moves recoveryWatermark, no matter how
+// much lastSeen advances.
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -42,119 +42,120 @@ function freshState() {
     dropped: [], droppedOverflow: false, recoveryWatermark: 0, delivery: {}};
 }
 
-console.log('AUDIT-10: separación receiveCursor (lastSeen) vs recoveryWatermark:');
+console.log('AUDIT-10: receiveCursor (lastSeen) vs recoveryWatermark separation:');
 
-// Test 1: recepción cruda (updateLastSeen) avanza lastSeen PERO NO recoveryWatermark.
-t('updateLastSeen (recepción) NO avanza el watermark de recuperación', () => {
+// Test 1: raw reception (updateLastSeen) advances lastSeen BUT NOT recoveryWatermark.
+t('updateLastSeen (reception) does NOT advance the recovery watermark', () => {
   _setBridgeStateForTest(freshState());
   const before = bridge.recoveryWatermark;
-  // Simula una ráfaga de frames recibidos (autorizados o no): cada frame
-  // llama a updateLastSeen(0) antes de autenticar/admitir (exactamente el
-  // patrón del handler). lastSeen avanza, recoveryWatermark NO debe.
+  // Simulates a burst of received frames (authorized or not): each frame
+  // calls updateLastSeen(0) before authenticating/admitting (exactly the
+  // handler pattern). lastSeen advances, recoveryWatermark must not.
   updateLastSeen(0);
   updateLastSeen(0);
   updateLastSeen(0);
   const st = getBridgeState();
-  assert.ok(st.lastSeen > 0, 'lastSeen (receiveCursor) avanzó con la recepción');
+  assert.ok(st.lastSeen > 0, 'lastSeen (receiveCursor) advanced with reception');
   assert.strictEqual(st.recoveryWatermark, before,
-    'recoveryWatermark NO avanza por recepción cruda (solo por procesamiento real)');
+    'recoveryWatermark does NOT advance via raw reception (only via real processing)');
 });
 
-// Test 2: el delivered NUNCA se borra por lastSeen inflado por no-admitidos.
-// Escenario ALTO-7: ráfaga de no-admitidos avanza lastSeen muy por delante de
-// un delivered X; con la semántica antigua, deliveredCanExpire(X, lastSeen)
-// lo borraba (break exactly-once). Con Fase 2, deliveredCanExpire usa
-// recoveryWatermark que NO avanzó -> X se conserva.
-t('delivered sobrevive a lastSeen inflado por no-admitidos (watermark intacto)', () => {
+// Test 2: the delivered is NEVER deleted due to lastSeen inflated by non-admitted.
+// AUDIT-7 scenario: a burst of non-admitted advances lastSeen far ahead of a
+// delivered X; with the old semantics, deliveredCanExpire(X, lastSeen) deleted
+// it (break exactly-once). With Phase 2, deliveredCanExpire uses
+// recoveryWatermark which did NOT advance -> X is preserved.
+t('delivered survives lastSeen inflated by non-admitted (watermark intact)', () => {
   _setBridgeStateForTest(freshState());
   const now = Math.floor(Date.now() / 1000);
-  const tX = now - 60; // delivered entregado hace 1 min
+  const tX = now - 60; // delivered delivered 1 min ago
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: 0, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false, recoveryWatermark: 0,
     delivery: {'X': {status: 'delivered', ts: tX}}});
-  // Ráfaga de no-admitidos: lastSeen avanza MÁS de 240s (+120+120 margen)
-  // por delante de X (el relay devuelve tráfico que el bridge no admite), pero
-  // recoveryWatermark sigue en 0 (nada procesado todavía).
+  // Burst of non-admitted: lastSeen advances MORE than 240s (+120+120 margin)
+  // ahead of X (the relay returns traffic the bridge does not admit), but
+  // recoveryWatermark stays at 0 (nothing processed yet).
   const st = getBridgeState();
-  st.lastSeen = tX + 600; // recepción cruda muy por delante de X
-  // Cualquier markDelivery posterior dispara evictDeliveryLedger.
+  st.lastSeen = tX + 600; // raw reception far ahead of X
+  // Any later markDelivery triggers evictDeliveryLedger.
   markDelivery('Y', 'pending');
-  // X NO debe expirar: el watermark de recuperación no avanzó.
+  // X must NOT expire: the recovery watermark did not advance.
   assert.strictEqual(deliveryStatus('X'), 'delivered',
-    'delivered X se conserva aunque lastSeen avanzo (solo el watermark REAL lo expira)');
+    'delivered X is preserved even though lastSeen advanced (only the REAL watermark expires it)');
 });
 
-// Test 3: SOLO el procesamiento real confirmado (evento/rango que el relay ha
-// recorrido, vía advanceRecoveryWatermark) avanza el watermark y es entonces
-// (y solo entonces) cuando un delivered viejo puede expirar. El avance es
-// INCREMENTAL y ACOTADO (nunca un salto libre a Date.now()): un evento real
-// confirma a lo sumo un paso de backlog (RECOVERY_WATERMARK_STEP_SECS). Tras
-// un downtime el watermark progresa poco a poco con la ráfaga de backlog.
-t('advanceRecoveryWatermark (evento confirmado) avanza el watermark -> delivered viejo expira', () => {
+// Test 3: ONLY real confirmed processing (event/range the relay has walked,
+// via advanceRecoveryWatermark) advances the watermark, and it is then (and
+// only then) that an old delivered can expire. The advance is INCREMENTAL and
+// BOUNDED (never a free jump to Date.now()): a real event confirms at most one
+// backlog step (RECOVERY_WATERMARK_STEP_SECS). After downtime, the watermark
+// progresses little by little with the backlog burst.
+t('advanceRecoveryWatermark (confirmed event) advances the watermark -> old delivered expires', () => {
   _setBridgeStateForTest(freshState());
   const now = Math.floor(Date.now() / 1000);
-  const tX = now - 600; // delivered entregado hace 10 min
+  const tX = now - 600; // delivered delivered 10 min ago
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now - 600, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false,
-    recoveryWatermark: tX - 1, // watermark justo antes de X (X aún inalcanzable tras 1 paso)
+    recoveryWatermark: tX - 1, // watermark just before X (X still unreachable after 1 step)
     delivery: {'X': {status: 'delivered', ts: tX}}});
-  // Un evento REAL procesado avanza el watermark un paso. Con un paso de 300s
-  // y tX a 599s detrás del watermark previo+paso, X queda dentro del solapado
-  // (no expira aún con 1 solo evento — correcto: el relay no ha recorrido más).
+  // One REAL processed event advances the watermark one step. With a 300s step
+  // and tX 599s behind the previous watermark+step, X stays inside the overlap
+  // (does not expire yet with just 1 event — correct: the relay has not walked
+  // further).
   const wmBefore = bridge.recoveryWatermark;
   advanceRecoveryWatermark();
-  assert.ok(bridge.recoveryWatermark > wmBefore, 'watermark avanza con el evento confirmado');
-  // Procesamos suficientes eventos (ráfaga) para que el watermark supere X+overlap.
+  assert.ok(bridge.recoveryWatermark > wmBefore, 'watermark advances with the confirmed event');
+  // We process enough events (burst) for the watermark to surpass X+overlap.
   for (let i = 0; i < 5; i++) advanceRecoveryWatermark();
   assert.ok(bridge.recoveryWatermark >= tX + 120 + 120,
-    'tras la ráfaga el watermark supera la ventana de X');
-  assert.ok(markDelivery('nuevo-1', 'pending'), 'admision exitosa');
+    'after the burst the watermark surpasses X\'s window');
+  assert.ok(markDelivery('nuevo-1', 'pending'), 'admission successful');
   assert.strictEqual(deliveryStatus('X'), null,
-    'delivered viejo expira SOLO cuando el watermark de recuperacion lo supera');
+    'old delivered expires ONLY when the recovery watermark surpasses it');
 });
 
-// Test 4: markDelivery por sí solo (admisión interna) NO avanza el watermark
-// si no hubo watermark previo — tras un downtime el relay no ha confirmado
-// haber recorrido el rango, y una admisión interna no debe expirar delivered
-// legítimos (break exactly-once).
-t('markDelivery sin watermark previo NO expira delivered (downtime)', () => {
+// Test 4: markDelivery by itself (internal admission) does NOT advance the
+// watermark if there was no previous watermark — after downtime the relay has
+// not confirmed walking the range, and an internal admission must not expire
+// legitimate delivered (break exactly-once).
+t('markDelivery without a prior watermark does NOT expire delivered (downtime)', () => {
   _setBridgeStateForTest(freshState());
   const now = Math.floor(Date.now() / 1000);
-  const tX = now - 3600; // delivered entregado hace 1h
+  const tX = now - 3600; // delivered delivered 1h ago
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: tX, seenIds: [], pendingSince: null,
-    dropped: [], droppedOverflow: false, recoveryWatermark: 0, // nunca procesado confirmado
+    dropped: [], droppedOverflow: false, recoveryWatermark: 0, // never confirmed processed
     delivery: {'X': {status: 'delivered', ts: tX}}});
   markDelivery('Y', 'pending');
   assert.strictEqual(deliveryStatus('X'), 'delivered',
-    'delivered sobrevive: el watermark sigue en 0 (sin evento confirmado) tras el downtime');
+    'delivered survives: the watermark stays at 0 (no confirmed event) after downtime');
 });
 
-// Test 5: advanceRecoveryWatermark es un helper que avanza el watermark de
-// forma INCREMENTAL ACOTADA. No da un salto libre a Date.now() tras downtime
-// (rompería exactly-once), pero sí puede establecer el primer watermark desde
-// 0 con un paso pequeño (arranque frío conservador).
-t('advanceRecoveryWatermark: avance incremental acotado, nunca salto libre a now', () => {
+// Test 5: advanceRecoveryWatermark is a helper that advances the watermark in
+// an INCREMENTAL BOUNDED way. It does not give a free jump to Date.now() after
+// downtime (that would break exactly-once), but it can establish the first
+// watermark from 0 with a small step (conservative cold start).
+t('advanceRecoveryWatermark: bounded incremental advance, never a free jump to now', () => {
   _setBridgeStateForTest(freshState());
   const now = Math.floor(Date.now() / 1000);
-  assert.strictEqual(bridge.recoveryWatermark, 0, 'empieza en 0');
-  // Desde 0, un solo evento establece un watermark ACOTADO (paso), no now.
+  assert.strictEqual(bridge.recoveryWatermark, 0, 'starts at 0');
+  // From 0, a single event establishes a BOUNDED watermark (step), not now.
   advanceRecoveryWatermark();
   const w0 = bridge.recoveryWatermark;
-  assert.ok(w0 > 0, 'establece un watermark desde 0 (paso acotado de arranque)');
-  assert.ok(w0 < now, 'el primer establecimiento NO salta a now (acotado al paso)');
-  // Cada evento posterior suma como mucho un paso; nunca supera el reloj local.
+  assert.ok(w0 > 0, 'establishes a watermark from 0 (bounded startup step)');
+  assert.ok(w0 < now, 'the first establishment does NOT jump to now (bounded to the step)');
+  // Each later event adds at most one step; never exceeds the local clock.
   const step = 300; // RECOVERY_WATERMARK_STEP_SECS default
   for (let i = 0; i < 200; i++) advanceRecoveryWatermark();
-  assert.ok(bridge.recoveryWatermark <= now, 'monotónico y nunca supera now');
-  // Un evento aislado tras downtime (prev far detrás de now) avanza SOLO un paso.
+  assert.ok(bridge.recoveryWatermark <= now, 'monotonic and never exceeds now');
+  // An isolated event after downtime (prev far behind now) advances ONLY one step.
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false,
-    recoveryWatermark: now - 30 * 24 * 3600, // hace 30 días
+    recoveryWatermark: now - 30 * 24 * 3600, // 30 days ago
     delivery: {}});
   const prev = bridge.recoveryWatermark;
-  advanceRecoveryWatermark(); // un solo evento procesado
+  advanceRecoveryWatermark(); // a single processed event
   assert.strictEqual(bridge.recoveryWatermark, prev + step,
-    'un evento tras 30 días de downtime avanza EXACTAMENTE un paso, no hasta now');
+    'an event after 30 days of downtime advances EXACTLY one step, not to now');
 });
 
 // cleanup

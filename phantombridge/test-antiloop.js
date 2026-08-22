@@ -41,9 +41,9 @@ fs.writeFileSync(path.join(TEST_DIR, 'config.json'), JSON.stringify({
 }, null, 2));
 
 process.env.PHANTOMBRIDGE_CONFIG = path.join(TEST_DIR, 'config.json');
-// LOW-9: loadState() distingue ENOENT vs corrupción y aborta si el shape es
-// inesperado. Limpiamos cualquier .bridge-state.json residual de corridas
-// anteriores para que el test no dependa de un artefacto obsoleto.
+// LOW-9: loadState() distinguishes ENOENT vs corruption and aborts if the shape is
+// unexpected. We clear any residual .bridge-state.json from previous runs so that
+// the test does not depend on a stale artifact.
 fs.rmSync(path.join(TEST_DIR, '.bridge-state.json'), {force: true});
 const {antiLoopCheck, antiLoopRollback, resolveRid, ANTILOOP, parseEnvelope, envelopeMac, stampEnvelope, extractRid, flushStateNow} = require('./bridge.js');
 
@@ -53,7 +53,7 @@ function t(name, fn) {
   catch (e) { failed++; console.log('  FAIL:', name, '—', e.message); }
 }
 
-// Reset del estado entre tests
+// Reset state between tests
 function reset() {
   ANTILOOP.hashes.clear();
   ANTILOOP.pairs.clear();
@@ -80,7 +80,7 @@ function signEnvelope(env, rest) {
 
 console.log('Anti-loop tests:');
 
-t('mensaje nuevo pasa', () => {
+t('new message passes', () => {
   reset();
   assert.strictEqual(antiLoopCheck('carol', 'dave', 'REQUEST example-org-20250101-0001: hola').ok, true);
 });
@@ -93,7 +93,7 @@ t('identical repeated message is dropped (dedup)', () => {
   assert.strictEqual(ANTILOOP.dropped.hash, 1);
 });
 
-t('mismo texto a distinto receptor NO se dropea', () => {
+t('same text to a different recipient is NOT dropped', () => {
   reset();
   antiLoopCheck('carol', 'dave', 'texto identico');
   assert.strictEqual(antiLoopCheck('carol', 'bob', 'texto identico').ok, true);

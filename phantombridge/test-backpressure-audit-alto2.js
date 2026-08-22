@@ -42,13 +42,13 @@ function resetState() {
 
 console.log('ALTO-2 (pendingSince sticky + dropped ledger):');
 
-t('drop bajo backpressure -> id entra en ledger dropped[]', () => {
+t('drop under backpressure -> id enters the dropped[] ledger', () => {
   resetState();
   recordDropped('dropped-ev-001');
-  assert.ok(bs().dropped.some(d => d.id === 'dropped-ev-001'), 'id en ledger');
+  assert.ok(bs().dropped.some(d => d.id === 'dropped-ev-001'), 'id in ledger');
 });
 
-t('pendingSince sticky: NO se libera mientras haya drops pendientes', () => {
+t('pendingSince sticky: NOT released while there are pending drops', () => {
   resetState();
   bs().dropped = [{id: 'p1', ts: 1000}];
   bs().pendingSince = 1000;
@@ -56,26 +56,26 @@ t('pendingSince sticky: NO se libera mientras haya drops pendientes', () => {
   assert.strictEqual(bs().pendingSince, 1000, 'pendingSince sigue anclado con drops pendientes');
 });
 
-t('recovery: al ver (markSeen) un id descartado sale del ledger', () => {
+t('recovery: on seeing (markSeen) an dropped id it leaves the ledger', () => {
   resetState();
   bs().dropped = [{id: 'p2', ts: 1000}, {id: 'p3', ts: 900}];
   bs().pendingSince = 900;
   markSeen('p2');
-  assert.ok(!bs().dropped.some(d => d.id === 'p2'), 'p2 recuperado y fuera del ledger');
-  assert.ok(bs().dropped.some(d => d.id === 'p3'), 'p3 sigue pendiente');
+  assert.ok(!bs().dropped.some(d => d.id === 'p2'), 'p2 recovered and out of the ledger');
+  assert.ok(bs().dropped.some(d => d.id === 'p3'), 'p3 still pending');
   assert.strictEqual(bs().pendingSince, 900, 'pendingSince sigue activo con p3 pendiente');
 });
 
-t('pendingSince se libera SOLO cuando el ledger queda vacío', () => {
+t('pendingSince is released ONLY when the ledger is empty', () => {
   resetState();
   bs().dropped = [{id: 'p4', ts: 800}];
   bs().pendingSince = 800;
   markSeen('p4');
-  assert.strictEqual(bs().dropped.length, 0, 'ledger vacío');
-  assert.strictEqual(bs().pendingSince, null, 'pendingSince liberado tras recuperar el último drop');
+  assert.strictEqual(bs().dropped.length, 0, 'ledger empty');
+  assert.strictEqual(bs().pendingSince, null, 'pendingSince released after recovering the last drop');
 });
 
-t('pumpNostrQueue con drops pendientes NO limpia pendingSince', () => {
+t('pumpNostrQueue with pending drops does NOT clear pendingSince', () => {
   resetState();
   bs().dropped = [{id: 'pump-1', ts: 1000}];
   bs().pendingSince = 1000;
@@ -83,16 +83,16 @@ t('pumpNostrQueue con drops pendientes NO limpia pendingSince', () => {
   assert.strictEqual(bs().pendingSince, 1000, 'pump no borra pendingSince con drops pendientes');
 });
 
-t('replay del escenario completo: saturar -> drop -> drenar -> restaurar -> recuperar', () => {
+t('replay of the full scenario: saturate -> drop -> drain -> restore -> recover', () => {
   resetState();
   let droppedId = null;
   for (let i = 0; i < 400 && droppedId === null; i++) {
     const ev = fakeEvent('burst-' + i);
     if (!enqueueGiftWrap(ev)) droppedId = ev.id;
   }
-  assert.ok(droppedId !== null, 'se produjo un descarte bajo backpressure');
-  assert.ok(bs().dropped.some(d => d.id === droppedId), 'el descartado quedó en el ledger');
-  assert.ok(bs().pendingSince != null, 'pendingSince marcado al descartar');
+  assert.ok(droppedId !== null, 'a drop occurred under backpressure');
+  assert.ok(bs().dropped.some(d => d.id === droppedId), 'the dropped event stayed in the ledger');
+  assert.ok(bs().pendingSince != null, 'pendingSince set on drop');
   pumpNostrQueue();
   assert.strictEqual(bs().pendingSince != null, true, 'pendingSince activo tras drenar la cola');
   markSeen(droppedId);

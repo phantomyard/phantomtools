@@ -1,17 +1,17 @@
-// AUDIT-4 regression test (opción B — watermark, no TTL wall-clock):
-// reproduce el escenario del auditor: un bridge que entrega un gift-wrap,
-// cae >30 min y al reiniciar NO debe re-ejecutar el `delivered` (exactly-once
-// tras downtime largo).
+// AUDIT-4 regression test (option B — watermark, not TTL wall-clock):
+// reproduces the auditor's scenario: a bridge that delivers a gift-wrap,
+// goes down >30 min and on restart must NOT re-run `delivered` (exactly-once
+// after a long downtime).
 //
-// Antes (DELIVERY_TTL_SECS=30min): delivered[X] expiraba por reloj de pared,
-// seenIds expiraba a los ~180s, pero lastSeen se conserva en disco -> al
-// reiniciar con since=lastSeen-120 el relay re-entregaba X y deliveryStatus(X)
-// era null -> se re-ejecutaba.
+// Before (DELIVERY_TTL_SECS=30min): delivered[X] expired by wall-clock,
+// seenIds expired at ~180s, but lastSeen persisted to disk -> on
+// restart with since=lastSeen-120 the relay re-delivered X and deliveryStatus(X)
+// was null -> it re-ran.
 //
-// Ahora (opción B): delivered SOLO expira por WATERMARK (cuando lastSeen ya
-// avanzó por delante de la ventana de replay), nunca por reloj de pared. Un
-// downtime largo congela lastSeen -> delivered[X] NO expira -> el dedup real
-// de handleIncomingGiftWrap (isSeen && delivered==='delivered') lo salta.
+// Now (option B): delivered ONLY expires by WATERMARK (when lastSeen already
+// advanced past the replay window), never by wall-clock. A
+// long downtime freezes lastSeen -> delivered[X] does NOT expire -> the real
+// dedup in handleIncomingGiftWrap (isSeen && delivered==='delivered') skips it.
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -42,71 +42,71 @@ function freshState() {
     dropped: [], droppedOverflow: false, recoveryWatermark: 0, delivery: {}};
 }
 
-// El dedup real de handleIncomingGiftWrap (tras AUDIT-4): el ledger durable
-// es la fuente autoritativa de "ya entregado"; NO requiere isSeen() (que
-// expira a los 180s y por tanto es false tras un downtime largo).
+// The real dedup in handleIncomingGiftWrap (after AUDIT-4): the durable ledger
+// is the authoritative source of "already delivered"; it does NOT require isSeen() (which
+// expires at 180s and is therefore false after a long downtime).
 function shouldSkipAsDelivered(id) {
   return deliveryStatus(id) === 'delivered';
 }
 
-assert.strictEqual(STATE_FILE, tmpState, 'STATE_FILE debe apuntar al temp');
+assert.strictEqual(STATE_FILE, tmpState, 'STATE_FILE must point to the temp file');
 
-console.log('AUDIT-4: delivered por watermark (no TTL wall-clock) + cap fail-closed:');
+console.log('AUDIT-4: delivered by watermark (no TTL wall-clock) + cap fail-closed:');
 
-// ---- 🔴: downtime largo NO re-ejecuta delivered ----
-t('downtime 1h: delivered sobrevive tras restart (no expira por reloj)', () => {
+// ---- 🔴: long downtime does NOT re-run delivered ----
+t('downtime 1h: delivered survives restart (does not expire by wall-clock)', () => {
   _setBridgeStateForTest(freshState());
-  // Simular: recibido+entregado en T0, con lastSeen=T0.
-  const T0 = Math.floor(Date.now() / 1000) - 3600; // hace 1 hora
-  // lastSeen = T0 (congelado durante el downtime, como persiste en disco)
+  // Simulate: received+delivered at T0, with lastSeen=T0.
+  const T0 = Math.floor(Date.now() / 1000) - 3600; // 1 hour ago
+  // lastSeen = T0 (frozen during the downtime, as persisted to disk)
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: T0, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false,
     delivery: {'X': {status: 'delivered', ts: T0}}});
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: T0, seenIds: [{id: 'X', ts: T0}], pendingSince: null,
     dropped: [], droppedOverflow: false,
     delivery: {'X': {status: 'delivered', ts: T0}}});
-  // "Reinicio": recargar desde disco. lastSeen sigue siendo T0 (1h viejo).
-  // El delivered NO debe expirar aunque hayan pasado 60 min del TTL de antes.
+  // "Restart": reload from disk. lastSeen is still T0 (1h old).
+  // delivered must NOT expire even though 60 min of the old TTL have passed.
   getBridgeState().delivery = getBridgeState().delivery || {};
-  // marcar una entrada nueva dispara el sweep; delivered debe seguir presente.
+  // marking a new entry triggers the sweep; delivered must still be present.
   markDelivery('Y', 'pending');
-  assert.strictEqual(deliveryStatus('X'), 'delivered', 'delivered NO expira por reloj tras 1h de downtime');
-  // Y el dedup salta X (no re-ejecuta)
+  assert.strictEqual(deliveryStatus('X'), 'delivered', 'delivered does NOT expire by wall-clock after 1h of downtime');
+  // And dedup skips X (does not re-run)
   assert.strictEqual(shouldSkipAsDelivered('X'), true, 'replay de X -> SKIP (exactly-once)');
 });
 
-t('delivered solo expira por watermark (recoveryWatermark avanzado por delante)', () => {
+t('delivered only expires by watermark (recoveryWatermark advanced past it)', () => {
   _setBridgeStateForTest(freshState());
   const now = Math.floor(Date.now() / 1000);
-  // X entregado hace 1h, pero el WATERMARK DE RECUPERACIÓN ya avanzó
-  // (el bridge PROCESÓ/admitió eventos tras entregar X -> el relay ya no
-  // puede re-entregarlo dentro de la ventana). -> X se puede expirar.
+  // X delivered 1h ago, but the RECOVERY WATERMARK already advanced
+  // (the bridge PROCESSED/admitted events after delivering X -> the relay can no
+  // longer re-deliver it within the window). -> X can be expired.
   const tX = now - 3600;
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now - 600, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false,
     recoveryWatermark: now - 600, // procesado hasta hace 10 min
     delivery: {'X': {status: 'delivered', ts: tX}}});
   markDelivery('Y', 'pending');
-  assert.strictEqual(deliveryStatus('X'), null, 'delivered con recoveryWatermark muy adelantado -> expira (watermark cumplido)');
+  assert.strictEqual(deliveryStatus('X'), null, 'delivered with recoveryWatermark far ahead -> expires (watermark met)');
 });
 
-t('delivered NO expira si lastSeen no avanzó (downtime)', () => {
+t('delivered does NOT expire if lastSeen did not advance (downtime)', () => {
   _setBridgeStateForTest(freshState());
   const now = Math.floor(Date.now() / 1000);
-  const tX = now - 7200; // entregado hace 2h
-  // lastSeen = tX (el bridge NO procesó nada desde X: downturn / arranque)
+  const tX = now - 7200; // delivered 2h ago
+  // lastSeen = tX (the bridge did NOT process anything since X: downtime / startup)
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: tX, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false,
     delivery: {'X': {status: 'delivered', ts: tX}}});
   markDelivery('Y', 'pending');
-  assert.strictEqual(deliveryStatus('X'), 'delivered', 'delivered se mantiene aunque lleve 2h: lastSeen no avanzó');
+  assert.strictEqual(deliveryStatus('X'), 'delivered', 'delivered is kept even after 2h: lastSeen did not advance');
 });
 
-// ---- 🟠: pending SI expira por TTL (semántica distinta) ----
-t('pending expira por TTL wall-clock (PENDING_TTL_SECS)', () => {
+// ---- 🟠: pending DOES expire by TTL (different semantics) ----
+t('pending expires by TTL wall-clock (PENDING_TTL_SECS)', () => {
   _setBridgeStateForTest(freshState());
   const now = Math.floor(Date.now() / 1000);
-  // pending de hace 25h (PENDING_TTL_SECS=24h) -> expira
+  // pending from 25h ago (PENDING_TTL_SECS=24h) -> expires
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false,
     delivery: {'P': {status: 'pending', ts: now - 25 * 3600}}});

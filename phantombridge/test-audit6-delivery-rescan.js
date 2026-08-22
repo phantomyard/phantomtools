@@ -26,8 +26,8 @@ const {
   markDelivery, deliveryStatus, _setBridgeStateForTest, STATE_FILE,
   getBridgeState, requestDeliveryRescan,
 } = bridge;
-// backpressureRejected y deliveryRescanNeeded son getters vivos: se leen
-// via bridge.X en cada acceso (desestructurarlos los congelaría en el import).
+// backpressureRejected and deliveryRescanNeeded are live getters: they are read
+// via bridge.X on each access (destructuring them would freeze them at import).
 
 let passed = 0, failed = 0;
 function t(name, fn) {
@@ -40,47 +40,47 @@ function fresh() {
     dropped: [], droppedOverflow: false, delivery: {}};
 }
 
-// NO exportamos DELIVERY_MAX/SOFT_LIMIT (internos); medimos via comportamiento.
-t('soft-limit: limpieza agresiva NO evicta delivered protegido ni pending vigente', () => {
+// We do not export DELIVERY_MAX/SOFT_LIMIT (internal); we measure via behavior.
+t('soft-limit: aggressive cleanup does NOT evict protected delivered nor active pending', () => {
   _setBridgeStateForTest(fresh());
   const now = Math.floor(Date.now() / 1000);
-  // Llenar delivery justo bajo el cap con delivered inmaduros (protegidos) +
-  // 1 pending vigente.
+  // Fill delivery just under the cap with immature delivered (protected) +
+  // 1 active pending.
   const entry = {};
   for (let i = 0; i < 9995; i++) entry['d-' + i] = {status: 'delivered', ts: now - 60};
-  entry['p-active'] = {status: 'pending', ts: now - 60}; // vigente (<24h)
+  entry['p-active'] = {status: 'pending', ts: now - 60}; // active (<24h)
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false, delivery: entry});
   const admitted = markDelivery('new-1', 'pending');
-  // Puede admitir si hay sitio; no debe expulsar delivered protegido ni el pending vigente.
+  // It may admit if there is room; it must not evict protected delivered nor the active pending.
   const st = getBridgeState().delivery;
-  assert.strictEqual(st['p-active'].status, 'pending', 'pending vigente NO expulsado');
-  assert.ok(st['d-0'] && st['d-0'].status === 'delivered', 'delivered protegido NO expulsado');
+  assert.strictEqual(st['p-active'].status, 'pending', 'active pending NOT evicted');
+  assert.ok(st['d-0'] && st['d-0'].status === 'delivered', 'protected delivered NOT evicted');
   void admitted;
 });
 
-t('re-scan: markDelivery rechazada por lleno programa re-scan (flag se activa)', () => {
+t('re-scan: markDelivery rejected when full schedules re-scan (flag activates)', () => {
   _setBridgeStateForTest(fresh());
   const now = Math.floor(Date.now() / 1000);
-  // Llenar del todo con delivered inmaduros -> pending nuevo NO cabe.
+  // Fill entirely with immature delivered -> new pending does NOT fit.
   const entry = {};
   for (let i = 0; i < 20000; i++) entry['d-' + i] = {status: 'delivered', ts: now - 60};
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false, delivery: entry});
   const beforeCount = bridge.backpressureRejected;
   const admitted = markDelivery('stuck-1', 'pending');
-  assert.strictEqual(admitted, false, 'admisión rechazada (fail-closed)');
-  assert.ok(bridge.deliveryRescanNeeded, 'se solicita re-scan para desatascar el cursor');
+  assert.strictEqual(admitted, false, 'admission rejected (fail-closed)');
+  assert.ok(bridge.deliveryRescanNeeded, 're-scan requested to unblock the cursor');
   const afterCount = getBridgeState(); void afterCount;
   assert.ok(bridge.backpressureRejected > beforeCount, 'contador de backpressure incrementado');
 });
 
-t('re-scan: requestDeliveryRescan es invocable y no lanza si no hay conexion', () => {
+t('re-scan: requestDeliveryRescan is invocable and does not throw if no connection', () => {
   // En tests no hay subscribeIncoming corriendo -> reconnectIncoming sigue null;
   // requestDeliveryRescan debe completar sin lanzar (warning, no crash).
   requestDeliveryRescan();
-  // Solo pedimos que no haya excepción; el flag marca que se solicitó.
-  assert.ok(true, 'requestDeliveryRescan no lanza sin conexion');
+  // We only require no exception; the flag marks that it was requested.
+  assert.ok(true, 'requestDeliveryRescan does not throw without connection');
 });
 
 // cleanup

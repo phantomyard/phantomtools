@@ -1,13 +1,12 @@
-// 🟡 BAJO (auditoría): el tamaño del ledger de delivery no debe depender de
-// Object.keys(delivery).length repetido en caminos calientes (markDelivery,
-// medición de progreso del rescan). Con DELIVERY_MAX=10000 un atacante
-// autorizado capaz de llenar el ledger amplifica el coste CPU.
+// 🟡 LOW (audit): the delivery ledger size must not depend on repeated
+// Object.keys(delivery).length in hot paths (markDelivery, rescan progress
+// measurement). With DELIVERY_MAX=10000 an authorized attacker able to fill
+// the ledger amplifies CPU cost.
 //
-// Solución: contador incremental `deliverySize`, sincronizado con TODA
-// mutación del ledger (inserción en markDelivery, borrados en
-// evictDeliveryLedger y finishDelivery rejected, carga de estado al restart).
-// Este test verifica que el contador se mantiene consistente con el estado
-// real en todos los caminos.
+// Solution: incremental counter `deliverySize`, synchronized with EVERY
+// ledger mutation (insertion in markDelivery, deletions in evictDeliveryLedger
+// and finishDelivery rejected, state loading at restart). This test verifies
+// the counter stays consistent with the real state on all paths.
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -26,9 +25,9 @@ const {
   markDelivery, deliveryStatus, releasePendingSinceIfRecovered,
   _setBridgeStateForTest, getBridgeState,
 } = bridge;
-// deliverySize no se exporta como getter vivo; accedemos al objeto de estado.
-// Para el test usamos Object.keys del estado como fuente de verdad y
-// verificamos consistencia tras operaciones.
+// deliverySize is not exported as a live getter; we access the state object.
+// For the test we use the state's Object.keys as the source of truth and
+// verify consistency after operations.
 
 let passed = 0, failed = 0;
 let _chain = Promise.resolve();
@@ -48,23 +47,23 @@ function actualCount() {
   return s && s.delivery ? Object.keys(s.delivery).length : 0;
 }
 function internalSize() {
-  // El contador no se exporta; lo inferimos a través del comportamiento:
-  // tras cada operación, los tests de regresión existentes ya validan el soft-
-  // limit/cap. Aquí validamos consistencia funcional: las admisiones/reset
-  // respetan DELIVERY_MAX y el contador no desincroniza (verificamos que el
-  // proceso no rompe al llenar y vaciar).
-  // Comprobamos que el contador sigue el estado REAL (fuente de verdad).
+  // The counter is not exported; we infer it through behavior: after each
+  // operation, the existing regression tests already validate the soft-limit/
+  // cap. Here we validate functional consistency: admissions/reset respect
+  // DELIVERY_MAX and the counter does not desync (we verify the process does
+  // not break when filling and emptying).
+  // We check the counter follows the REAL state (source of truth).
   return require('./bridge.js').getDeliverySizeForTest ? require('./bridge.js').getDeliverySizeForTest() : null;
 }
 
-console.log('🟡 AUDIT-13: tamaño del ledger sin Object.keys repetido en caminos calientes:');
+console.log('🟡 AUDIT-13: ledger size without repeated Object.keys in hot paths:');
 
 if (typeof bridge.getDeliverySizeForTest !== 'function') {
-  console.log('  (aviso) deliverySize no expuesto para test — validamos consistencia funcional.');
+  console.log('  (notice) deliverySize not exposed for test — we validate functional consistency.');
 }
 
-// Test 1: inserción mantiene el conteo correcto (delivered + pending).
-t('inserciones incrementan el tamaño del ledger de forma consistente', () => {
+// Test 1: insertion keeps the count correct (delivered + pending).
+t('insertions increase the ledger size consistently', () => {
   _setBridgeStateForTest(freshState());
   const before = actualCount();
   markDelivery('a-1', 'delivered');
@@ -74,51 +73,51 @@ t('inserciones incrementan el tamaño del ledger de forma consistente', () => {
   assert.strictEqual(after, before + 3, '3 entradas tras 3 inserciones (' + before + ' -> ' + after + ')');
 });
 
-// Test 2: finishDelivery rejected borra y el contador baja (no deja pending).
-t('finishDelivery rejected libera el ledger (sin pending inútil)', () => {
+// Test 2: finishDelivery rejected deletes and the counter drops (no useless pending).
+t('finishDelivery rejected frees the ledger (no useless pending)', () => {
   _setBridgeStateForTest(freshState());
   markDelivery('b-1', 'pending');
   const n1 = actualCount();
-  // finishDelivery(id, false, true) borra el pending (rejected). No está
-  // exportado directo; ejecutamos el camino vía handleRoute: agente
-  // inexistente -> rejected -> delete. Simplificamos: comprobamos que
-  // deliveryStatus vuelve a null tras un rejected equivalente.
-  // (El caso handleRoute ya lo cubre test-route-rejected-finalize.) Aquí
-  // validamos solo la consistencia del conteo con la API pública.
+  // finishDelivery(id, false, true) deletes the pending (rejected). It is not
+  // directly exported; we exercise the path via handleRoute: nonexistent
+  // agent -> rejected -> delete. We simplify: we check deliveryStatus returns
+  // to null after an equivalent rejected.
+  // (The handleRoute case is already covered by test-route-rejected-finalize.)
+  // Here we only validate count consistency with the public API.
   markDelivery('b-2', 'delivered');
   const n2 = actualCount();
-  assert.strictEqual(n2, n1 + 1, 'una entrada más tras delivered (' + n1 + ' -> ' + n2 + ')');
+  assert.strictEqual(n2, n1 + 1, 'one more entry after delivered (' + n1 + ' -> ' + n2 + ')');
 });
 
-// Test 3: cap DELIVERY_MAX — llenar hasta el límite no rompe el contador y la
-// evicción de delivered inmaduros es fail-closed (ninguna pérdida silenciosa).
-t('llenar el ledger no desincroniza el conteo (fail-closed)', async () => {
+// Test 3: DELIVERY_MAX cap — filling to the limit does not break the counter and the
+// eviction of immature delivered is fail-closed (no silent loss).
+t('filling the ledger does not desync the count (fail-closed)', async () => {
   _setBridgeStateForTest(freshState());
   const now = Math.floor(Date.now() / 1000);
-  // Llenamos delivery con delivered inmaduros (recientes, no expirables).
+  // We fill delivery with immature delivered (recent, not expirable).
   const delivery = {};
   for (let i = 0; i < 150; i++) {
-    // Nos mantenemos muy por debajo de DELIVERY_MAX (10000) para no hacer el
-    // test lento, pero por encima de cualquier soft-limit minúsculo del test.
+    // We stay well below DELIVERY_MAX (10000) to keep the test fast, but
+    // above any tiny soft-limit in the test.
     delivery['x' + i] = {status: 'delivered', ts: now};
   }
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now, seenIds: [],
     pendingSince: null, dropped: [], droppedOverflow: false, recoveryWatermark: now,
     delivery});
-  // Una nueva admisión de pending: delivered inmaduros NO se evictan
-  // (fail-closed) -> si está en el cap se rechaza; en todo caso el conteo
-  // sigue siendo coherente con el estado.
+  // A new pending admission: immature delivered are NOT evicted (fail-closed)
+  // -> if at the cap it is rejected; either way the count stays coherent with
+  // the state.
   const before = actualCount();
   const admitted = markDelivery('nuevo-1', 'pending');
   const after = actualCount();
-  // Si se admitió, hay una más; si no (cap), igual. En ambos casos no puede
-  // haber desincronización: after == before o after == before + 1.
+  // If admitted there is one more; if not (cap), equal. Either way there can
+  // be no desync: after == before or after == before + 1.
   assert.ok(after === before || after === before + 1,
-    'conteo coherente tras admisión en ledger lleno (' + before + ' -> ' + after + ')');
+    'coherent count after admission into a full ledger (' + before + ' -> ' + after + ')');
 });
 
-// Test 4: evicción por watermark (delivered expirable) reduce el conteo.
-t('evicción de delivered expirables reduce el conteo', () => {
+// Test 4: watermark eviction (expirable delivered) reduces the count.
+t('eviction of expirable delivered reduces the count', () => {
   _setBridgeStateForTest(freshState());
   const now = Math.floor(Date.now() / 1000);
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now, seenIds: [],
@@ -129,17 +128,17 @@ t('evicción de delivered expirables reduce el conteo', () => {
       'keep-1': {status: 'pending', ts: now - 10},    // no expira (TTL 24h)
     }});
   const before = actualCount();
-  // Una admisión dispara el sweep: exp-1 + exp-2 expiran (watermark), keep-1
-  // no. El conteo debe bajar en 2.
+  // An admission triggers the sweep: exp-1 + exp-2 expire (watermark), keep-1
+  // does not. The count must drop by 2.
   markDelivery('nuevo-1', 'pending');
   const after = actualCount();
-  const expected = before - 1; // borra 2 expirables, inserta 1 -> neto -1
+  const expected = before - 1; // removes 2 expirables, inserts 1 -> net -1
   assert.strictEqual(after, expected,
-    'conteo coherente tras evicción (' + before + ' -> ' + after + ', esperado ' + expected + ')');
+    'coherent count after eviction (' + before + ' -> ' + after + ', expected ' + expected + ')');
 });
 
-// Test 5: restart — el contador se reinicializa desde el estado cargado.
-t('tras carga de estado el conteo refleja el ledger persistido', () => {
+// Test 5: restart — the counter is reinitialized from the loaded state.
+t('after state load the count reflects the persisted ledger', () => {
   _setBridgeStateForTest(freshState());
   const now = Math.floor(Date.now() / 1000);
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now, seenIds: [],
@@ -149,34 +148,34 @@ t('tras carga de estado el conteo refleja el ledger persistido', () => {
       'p-2': {status: 'delivered', ts: now - 600},
       'p-3': {status: 'pending', ts: now - 10},
     }});
-  // Simula el arranque: el contador debe igualar el ledger cargado. Aquí
-  // validamos que el estado persistido (fuente de verdad) es el que se
-  // recontará — el código de loadState hace exactamente esto con
-  // Object.keys(delivery) una sola vez al arrancar.
-  assert.strictEqual(actualCount(), 3, '3 entradas cargadas del ledger persistido');
+  // Simulates startup: the counter must equal the loaded ledger. Here we
+  // validate that the persisted state (source of truth) is what will be
+  // recounted — loadState does exactly this with Object.keys(delivery) once
+  // at startup.
+  assert.strictEqual(actualCount(), 3, '3 entries loaded from the persisted ledger');
 });
 
-// Test 6: no quedan llamadas repetidas a Object.keys().length en los caminos
-// calientes de markDelivery / medición de progreso (verificación estática del
-// fuente — el contador las reemplaza).
-t('caminos calientes usan contador (sin Object.keys delivery repetido)', () => {
+// Test 6: no repeated Object.keys().length calls remain in the hot paths of
+// markDelivery / progress measurement (static source verification — the
+// counter replaces them).
+t('hot paths use the counter (no repeated Object.keys delivery)', () => {
   const src = fs.readFileSync(path.join(__dirname, 'bridge.js'), 'utf8').split('\n');
-  // Contamos SOLO llamadas de código (excluimos comentarios // y líneas que
-  // empiecen por // aunque tengan trim) — el regex crudo matchea también
-  // comentarios, dando falsos positivos.
+  // We count ONLY code calls (excluding // comments and lines that start with
+  // // even after trim) — the raw regex also matches comments, giving false
+  // positives.
   const calientes = src.filter(line => {
     const t = line.trim();
-    if (t.startsWith('//')) return false;       // comentario
+    if (t.startsWith('//')) return false;       // comment
     if (t.startsWith('/*') || t.startsWith('*')) return false;
     return /Object\.keys\(bridgeState\.delivery\)\.length/.test(line);
   });
-  // Solo debe quedar la inicialización de loadState (una vez al arrancar),
-  // que además está DENTRO de una expresión que asigna deliverySize.
+  // Only the loadState initialization should remain (once at startup), and it
+  // is also INSIDE an expression that assigns deliverySize.
   const loadStateInit = calientes.filter(l => /deliverySize =/.test(l));
   assert.ok(calientes.length <= 1,
-    'máx 1 llamada (loadState init), se encontró ' + calientes.length + ': ' + calientes.join(' | '));
+    'max 1 call (loadState init), found ' + calientes.length + ': ' + calientes.join(' | '));
   if (calientes.length === 1 && loadStateInit.length !== 1) {
-    assert.fail('la única llamada restante debe ser la init de loadState');
+    assert.fail('the only remaining call must be the loadState init');
   }
 });
 

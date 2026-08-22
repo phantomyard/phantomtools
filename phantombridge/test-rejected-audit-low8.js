@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// LOW-8 regression test (audit 462e62b): frames rechazados (p.ej. demasiado
-// grandes) deben marcarse en un caché SEPARADO (rejectedIds), NO en seenIds
-// (dedup de eventos PROCESABLES). El bug previo: subscribeIncoming marcaba
-// big[2].id con markSeen() antes de validar JSON/firma/kind, permitiendo que
-// un atacante inyectara hasta ~200 IDs arbitrarios por frame gigante y
-// degradara la dedup legítima de seenIds.
+// LOW-8 regression test (audit 462e62b): rejected frames (e.g. too large)
+// must be marked in a SEPARATE cache (rejectedIds), NOT in seenIds (dedup of
+// PROCESSABLE events). The previous bug: subscribeIncoming marked big[2].id
+// with markSeen() before validating JSON/signature/kind, allowing an attacker
+// to inject up to ~200 arbitrary IDs per giant frame and degrade the
+// legitimate seenIds dedup.
 //
-// Este test ejercita las funciones REALES exportadas del bridge
-// (markRejected / isRejected / rejectedIds), sin bootear relay.
+// This test exercises the REAL functions exported from the bridge
+// (markRejected / isRejected / rejectedIds), without booting a relay.
 const assert = require('assert');
 require('./testlib.js').setup();
 const bridge = require('./bridge.js');
@@ -20,39 +20,39 @@ function t(name, fn) {
 }
 function resetRejected() { rejectedIds.length = 0; }
 
-// Seed estado para markSeen (necesita bridgeState con seenIds).
+// Seed state for markSeen (needs a bridgeState with seenIds).
 _setBridgeStateForTest({
   relay: 'ws://test.local', lastSeen: 0, seenIds: [], pendingSince: null, dropped: [],
 });
 
-// 1. markRejected registra y isRejected lo ve.
+// 1. markRejected registers and isRejected sees it.
 t('markRejected -> isRejected true', () => {
   resetRejected();
   markRejected('id-rechazado-1');
   assert.strictEqual(isRejected('id-rechazado-1'), true);
 });
 
-// 2. No contamina seenIds (dedup de eventos procesables).
-t('markRejected NO marca seenIds (dedup intacta)', () => {
+// 2. Does not contaminate seenIds (dedup of processable events).
+t('markRejected does NOT mark seenIds (dedup intact)', () => {
   resetRejected();
   markRejected('id-gigante');
   assert.strictEqual(isRejected('id-gigante'), true);
-  // El id NO está en seenIds: un evento legítimo distinto no se ve afectado.
+  // The id is NOT in seenIds: a distinct legitimate event is not affected.
   assert.strictEqual(getBridgeState().seenIds.some(e => e.id === 'id-gigante'), false);
   assert.strictEqual(isSeen('id-gigante'), false);
 });
 
-// 3. Cap propio: >200 rechazados trunca el caché a 200.
-t('cap REJECTED_IDS_MAX (200) aplica', () => {
+// 3. Own cap: >200 rejected truncates the cache to 200.
+t('REJECTED_IDS_MAX (200) cap applies', () => {
   resetRejected();
   for (let i = 0; i < 250; i++) markRejected('rej-' + i);
   assert.ok(rejectedIds.length <= 200, 'rejectedIds.length=' + rejectedIds.length);
-  // los más recientes se conservan, los más viejos se evictan
+  // the most recent are kept, the oldest are evicted
   assert.strictEqual(isRejected('rej-249'), true);
 });
 
-// 4. Idempotente: marcar dos veces el mismo id no duplica entradas.
-t('markRejected idempotente (no duplica)', () => {
+// 4. Idempotent: marking the same id twice does not duplicate entries.
+t('markRejected idempotent (no duplicates)', () => {
   resetRejected();
   markRejected('dup');
   markRejected('dup');
@@ -60,18 +60,18 @@ t('markRejected idempotente (no duplica)', () => {
   assert.strictEqual(rejectedIds.filter(e => e.id === 'dup').length, 1);
 });
 
-// 5. TTL: una entrada con ts fuera de ventana no cuenta como rechazada.
-t('TTL: entrada vieja no es rechazada', () => {
+// 5. TTL: an entry with a ts out of window does not count as rejected.
+t('TTL: old entry is not rejected', () => {
   resetRejected();
   markRejected('viejo');
-  // envejecer manualmente la entrada más allá de la ventana
+  // manually age the entry beyond the window
   const now = Math.floor(Date.now() / 1000);
   const entry = rejectedIds.find(e => e.id === 'viejo');
-  entry.ts = now - (130 + 3600); // mucho más allá de STATE_OVERLAP_SECS+60
+  entry.ts = now - (130 + 3600); // well beyond STATE_OVERLAP_SECS+60
   assert.strictEqual(isRejected('viejo'), false);
 });
 
-// 6. Sin id -> no-op, no lanza.
+// 6. No id -> no-op, does not throw.
 t('markRejected(undefined) / (null) no-op', () => {
   resetRejected();
   markRejected(undefined);
@@ -79,16 +79,16 @@ t('markRejected(undefined) / (null) no-op', () => {
   assert.strictEqual(rejectedIds.length, 0);
 });
 
-// 7. El caché acepta ids arbitrarios pero con cap: un atacante no puede
-//    crecer rejectedIds sin límite (LOW-8: degradación acotada).
-t('flood de ids arbitrarios queda acotado por cap', () => {
+// 7. The cache accepts arbitrary ids but with a cap: an attacker cannot grow
+//    rejectedIds without limit (LOW-8: bounded degradation).
+t('flood of arbitrary ids stays bounded by the cap', () => {
   resetRejected();
   for (let i = 0; i < 500; i++) markRejected('evil-' + i);
   assert.ok(rejectedIds.length <= 200, 'length=' + rejectedIds.length);
 });
 
-// 8. markSeen sigue funcionando para eventos legítimos (sin romper ALTO-3).
-t('markSeen todavía registra seen normal (regresión ALTO-3)', () => {
+// 8. markSeen still works for legitimate events (without breaking ALTO-3).
+t('markSeen still records normal seen (ALTO-3 regression)', () => {
   markSeen('legitimo-1');
   assert.strictEqual(isSeen('legitimo-1'), true);
 });

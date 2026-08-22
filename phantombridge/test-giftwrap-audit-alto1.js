@@ -62,7 +62,7 @@ const senderPriv = generateSecretKey();
 
 console.log('ALTO-1 (NIP-17 auth):');
 
-t('wrap legítimo se autentica y devuelve el rumor', () => {
+t('legit wrap authenticates and returns the rumor', () => {
   const wrap = makeLegitWrap(senderPriv, bridgePk);
   const unwrapped = unwrapAndVerifyGiftWrap(wrap);
   assert.strictEqual(unwrapped.kind, 14);
@@ -72,7 +72,7 @@ t('wrap legítimo se autentica y devuelve el rumor', () => {
 
 // --- replay attempts: clone legit content, re-stamp, break the auth ---
 
-t('clone con nuevo created_at + sig arbitraria -> RECHAZADO (firma)', () => {
+t('clone with new created_at + arbitrary sig -> REJECTED (signature)', () => {
   const wrap = makeLegitWrap(senderPriv, bridgePk);
   const cloned = JSON.parse(JSON.stringify(wrap));
   cloned.created_at = Math.floor(Date.now() / 1000) + 1; // re-stamp
@@ -83,14 +83,14 @@ t('clone con nuevo created_at + sig arbitraria -> RECHAZADO (firma)', () => {
   assert.throws(() => unwrapAndVerifyGiftWrap(cloned), /invalid signature/);
 });
 
-t('clone con id arbitrario -> RECHAZADO (id no canónico)', () => {
+t('clone with arbitrary id -> REJECTED (non-canonical id)', () => {
   const wrap = makeLegitWrap(senderPriv, bridgePk);
   const cloned = JSON.parse(JSON.stringify(wrap));
   cloned.id = 'ab'.repeat(32); // arbitrary id, keeps created_at + sig
   assert.throws(() => unwrapAndVerifyGiftWrap(cloned), /id not canonical/);
 });
 
-t('kind!=1059 -> RECHAZADO', () => {
+t('kind!=1059 -> REJECTED', () => {
   const wrap = makeLegitWrap(senderPriv, bridgePk);
   const bad = JSON.parse(JSON.stringify(wrap));
   bad.kind = 14;
@@ -98,7 +98,7 @@ t('kind!=1059 -> RECHAZADO', () => {
   assert.throws(() => unwrapAndVerifyGiftWrap(bad), /kind != 1059/);
 });
 
-t('wrap con firma real pero contenido manipulado no descifra -> RECHAZADO', () => {
+t('wrap with real signature but tampered content does not decrypt -> REJECTED', () => {
   const wrap = makeLegitWrap(senderPriv, bridgePk);
   const tampered = JSON.parse(JSON.stringify(wrap));
   // keep sig/id/auth of the outer wrap valid, but corrupt the ciphertext
@@ -111,7 +111,7 @@ t('wrap con firma real pero contenido manipulado no descifra -> RECHAZADO', () =
 });
 
 // --- seal-chain enforcement ---
-t('seal con id no canónico -> RECHAZADO', () => {
+t('seal with non-canonical id -> REJECTED', () => {
   const senderPub = getPublicKey(senderPriv);
   const conv = nip44.getConversationKey(senderPriv, bridgePk);
   const rumor = {
@@ -135,7 +135,7 @@ t('seal con id no canónico -> RECHAZADO', () => {
   assert.throws(() => unwrapAndVerifyGiftWrap(wrap), /seal id not canonical/);
 });
 
-t('rumor con pubkey != seal.pubkey -> RECHAZADO (spoofing identidad)', () => {
+t('rumor with pubkey != seal.pubkey -> REJECTED (identity spoofing)', () => {
   const attackerPriv = generateSecretKey();
   const attackerPub = getPublicKey(attackerPriv);
   const conv = nip44.getConversationKey(attackerPriv, bridgePk);

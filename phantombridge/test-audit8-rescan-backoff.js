@@ -1,17 +1,16 @@
-// AUDIT-8 (MEDIO): el rescan de recuperación NO debe convertirse en un bucle
-// de reconexiones contra el relay/el proceso.
+// AUDIT-8 (MEDIO): the recovery rescan must NOT become a loop
+// of reconnections against the relay/process.
 //
-// Escenario del auditor: si el ledger permanece lleno (lastSeen no avanza) y
-// cada evento no admitido reinvoca requestDeliveryRescan(), tendríamos
-// connect/close/connect/close... indefinidamente — un DoS de reconexión
-// contra el relay y contra el propio proceso.
+// Auditor scenario: if the ledger stays full (lastSeen does not advance) and
+// every non-admitted event re-invokes requestDeliveryRescan(), we would get
+// connect/close/connect/close... indefinitely — a reconnection DoS against
+// the relay and against the process itself.
 //
-// El fix: backoff exponencial (RESCAN_MIN_INTERVAL_MS * 2^attempts, capado a
-// RESCAN_MAX_BACKOFF_MS) + límite duro de rescans por ventana de 60s
-// (RESCAN_MAX_PER_MINUTE). Cuando se alcanza el techo de la ventana, se
-// suprime el rescan (queda deliveryRescanNeeded=true pero NO se programa más
-// reconexión); el siguiente ciclo natural o un evento que libere espacio lo
-// rearma.
+// The fix: exponential backoff (RESCAN_MIN_INTERVAL_MS * 2^attempts, capped at
+// RESCAN_MAX_BACKOFF_MS) + a hard limit of rescans per 60s window
+// (RESCAN_MAX_PER_MINUTE). When the window cap is reached, the rescan is
+// suppressed (deliveryRescanNeeded stays true but NO more reconnection is
+// scheduled); the next natural cycle or an event that frees space re-arms it.
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -21,10 +20,10 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit8-'));
 const tmpState = path.join(tmpDir, 'state.json');
 const baseConfig = require('./testlib.js').baseConfig();
 baseConfig.stateFile = tmpState;
-// Reducir RESCAN_MAX_PER_MINUTE y acelerar el backoff para un test rápido.
+// Reduce RESCAN_MAX_PER_MINUTE and speed up the backoff for a fast test.
 baseConfig.rescanMaxPerMinute = 3;
-baseConfig.rescanMinIntervalMs = 100;   // espera mínima acelerada
-baseConfig.rescanMaxBackoffMs = 400;    // techo bajo
+baseConfig.rescanMinIntervalMs = 100;   // sped-up minimum wait
+baseConfig.rescanMaxBackoffMs = 400;    // low cap
 const tmpConfigPath = path.join(tmpDir, 'config.json');
 fs.writeFileSync(tmpConfigPath, JSON.stringify(baseConfig, null, 2));
 process.env.PHANTOMBRIDGE_CONFIG = tmpConfigPath;
@@ -44,51 +43,51 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 (async () => {
   let passed = 0, failed = 0;
-  // Test runner async: espera la promesa de cada test y cuenta.
+  // Async test runner: awaits each test's promise and counts.
   function run(name, promise) {
     return promise.then(() => { console.log('  ok:', name); passed++; })
       .catch(e => { console.error('  FAIL:', name, '-', e.message); failed++; });
   }
 
-  // Test 1: el techo de rescans/minuto suprime rescans adicionales — NO hay
-  // bucle. Tras RESCAN_MAX_PER_MINUTE no se programa más reconexión en la
-  // ventana (aunque deliveryRescanNeeded pueda quedar marcado).
-  await run('techo de rescans/minuto: no se programa bucle de reconexión', (async () => {
+  // Test 1: the rescans/minute cap suppresses additional rescans — NO
+  // loop. After RESCAN_MAX_PER_MINUTE no more reconnection is scheduled in the
+  // window (even though deliveryRescanNeeded may stay set).
+  await run('per-minute rescan cap: no reconnection loop is scheduled', (async () => {
     _setBridgeStateForTest(fresh());
     _resetRescanStateForTest();
     const t0 = Date.now();
-    // Ráfaga: 100 peticiones de rescan en el mismo tick (ledger lleno ->
-    // cada markDelivery fallido pide rescan). Solo la primera programa.
+    // Burst: 100 rescan requests in the same tick (full ledger ->
+    // each failed markDelivery asks for a rescan). Only the first schedules one.
     for (let i = 0; i < 100; i++) requestDeliveryRescan();
-    await sleep(700); // dejar que se ejecuten los timers de 100ms
+    await sleep(700); // let the 100ms timers run
     const windowCount = bridge.rescanWindowCount;
     assert.ok(windowCount <= baseConfig.rescanMaxPerMinute,
-      'no se programan más de RESCAN_MAX_PER_MINUTE rescans en la ventana (got ' + windowCount + ')');
-    console.log('    ventana: ' + windowCount + ' rescans emitidos de techo ' + baseConfig.rescanMaxPerMinute);
-    assert.ok(Date.now() - t0 < 5000, 'la ráfaga se resuelve rápido (sin esperas largas espúreas)');
+      'no more than RESCAN_MAX_PER_MINUTE rescans are scheduled in the window (got ' + windowCount + ')');
+    console.log('    window: ' + windowCount + ' rescans emitted out of cap ' + baseConfig.rescanMaxPerMinute);
+    assert.ok(Date.now() - t0 < 5000, 'the burst resolves fast (no spurious long waits)');
   })());
 
-  // Test 2: backoff — tras una ráfaga, los reintentos espaciados muestran
-  // el contador progresando (2 rescans) sin superar el techo.
-  await run('backoff: reintentos espaciados, nunca superan el techo de ventana', (async () => {
+  // Test 2: backoff — after a burst, the spaced retries show
+  // the counter progressing (2 rescans) without exceeding the cap.
+  await run('backoff: spaced retries, never exceed the window cap', (async () => {
     _setBridgeStateForTest(fresh());
     _resetRescanStateForTest();
-    // 1er rescan: arranque -> min interval (100ms).
+    // 1st rescan: start -> min interval (100ms).
     requestDeliveryRescan();
     await sleep(150);
-    // 2ª petición: entra en backoff (aproximadamente 200ms = 100*2).
+    // 2nd request: enters backoff (approximately 200ms = 100*2).
     requestDeliveryRescan();
     await sleep(500);
     const windowCount = bridge.rescanWindowCount;
-    assert.ok(windowCount >= 2, 'progresa al menos un segundo rescan (got ' + windowCount + ')');
-    assert.ok(windowCount <= baseConfig.rescanMaxPerMinute, 'nunca supera el techo');
-    console.log('    backoff: ' + windowCount + ' rescans en ventana tras ráfaga');
+    assert.ok(windowCount >= 2, 'at least a second rescan progresses (got ' + windowCount + ')');
+    assert.ok(windowCount <= baseConfig.rescanMaxPerMinute, 'never exceeds the cap');
+    console.log('    backoff: ' + windowCount + ' rescans in window after burst');
   })());
 
-  // Test 3: el escenario del auditor NO reconecta sin límite — con el ledger
-  // lleno y muchos markDelivery fallidos, el número de rescans emitidos queda
-  // acotado por el techo de ventana.
-  await run('escenario auditor: 200 fallidos generan <=MAX rescans (no bucle)', (async () => {
+  // Test 3: the auditor scenario does NOT reconnect without limit — with the
+  // ledger full and many failed markDelivery calls, the number of emitted
+  // rescans stays bounded by the window cap.
+  await run('auditor scenario: 200 failures generate <=MAX rescans (no loop)', (async () => {
     _setBridgeStateForTest(fresh());
     _resetRescanStateForTest();
     const now = Math.floor(Date.now() / 1000);
@@ -96,12 +95,12 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
     for (let i = 0; i < 20000; i++) entry['d-' + i] = {status: 'delivered', ts: now - 60};
     _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now, seenIds: [], pendingSince: null,
       dropped: [], droppedOverflow: false, delivery: entry});
-    // 200 eventos que no se admiten (fail-closed). Cada uno intenta rescan.
+    // 200 events that are not admitted (fail-closed). Each one attempts a rescan.
     for (let i = 0; i < 200; i++) markDelivery('E' + i, 'pending');
     await sleep(600);
     assert.ok(bridge.rescanWindowCount <= baseConfig.rescanMaxPerMinute,
-      '200 fallidos generan como mucho ' + baseConfig.rescanMaxPerMinute + ' rescans (got ' + bridge.rescanWindowCount + ')');
-    console.log('    200 fallidos -> ' + bridge.rescanWindowCount + ' rescans programados');
+      '200 failures generate at most ' + baseConfig.rescanMaxPerMinute + ' rescans (got ' + bridge.rescanWindowCount + ')');
+    console.log('    200 failures -> ' + bridge.rescanWindowCount + ' rescans scheduled');
   })());
 
   // cleanup

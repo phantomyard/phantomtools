@@ -1,9 +1,9 @@
-// AUDIT kaieriksen M05 (🔴 BLOQUEANTE): el download directo de recordings
-// estaba SIN autenticar — bind a 127.0.0.1 no es barrera de auth en host
-// compartido (cualquier proceso local que alcance el puerto leía cada MP4).
-// Fix: exige requireAdmin en GET /recordings/:name antes de servir el archivo.
+// AUDIT kaieriksen M05 (🔴 BLOCKING): direct download of recordings
+// was UNAUTHENTICATED — binding to 127.0.0.1 is not an auth barrier on a
+// shared host (any local process that reaches the port read each MP4).
+// Fix: require requireAdmin on GET /recordings/:name before serving the file.
 //
-// Verifica que el código aplicó el gate en la ruta de descarga directa.
+// Verifies that the code applied the gate on the direct-download path.
 const assert = require('assert');
 const fs = require('fs');
 const src = fs.readFileSync('./bridge.js', 'utf8');
@@ -11,40 +11,40 @@ let passed = 0, failed = 0;
 function t(n, fn){ try { fn(); console.log('  ok:', n); passed++; }
   catch(e){ console.error('  FAIL:', n, '-', e.message); failed++; } }
 
-t('ruta /recordings/:name exige requireAdmin antes de servir el archivo', () => {
+t('route /recordings/:name requires requireAdmin before serving the file', () => {
   const idx = src.indexOf("req.url.startsWith('/recordings/')");
-  assert.ok(idx > 0, 'ruta /recordings/:name no encontrada');
-  // Ventana desde el inicio de la ruta hasta el createReadStream (con margen).
+  assert.ok(idx > 0, 'route /recordings/:name not found');
+  // Window from route start to the createReadStream (with margin).
   const createIdx = src.indexOf('createReadStream', idx);
-  assert.ok(createIdx > idx, 'createReadStream no encontrado tras la ruta');
+  assert.ok(createIdx > idx, 'createReadStream not found after the route');
   const after = src.slice(idx, createIdx + 200);
   assert.ok(after.includes('requireAdmin'),
-    'requireAdmin debe estar entre el inicio de la ruta y el createReadStream');
-  // El gate debe preceder al createReadStream (denegar antes de abrir el fichero).
+    'requireAdmin must be between the route start and the createReadStream');
+  // The gate must precede the createReadStream (deny before opening the file).
   const adminIdx = after.indexOf('requireAdmin');
   const streamIdx = after.indexOf('createReadStream');
   assert.ok(adminIdx >= 0 && adminIdx < streamIdx,
-    'requireAdmin debe preceder al createReadStream');
+    'requireAdmin must precede the createReadStream');
 });
-t('anotación AUDIT M05 presente', () => {
-  assert.ok(src.includes('AUDIT kaieriksen M05'), 'falta anotación M05');
+t('AUDIT M05 annotation present', () => {
+  assert.ok(src.includes('AUDIT kaieriksen M05'), 'M05 annotation missing');
 });
-t('el listado /recordings TAMBIÉN exige admin (cierra bypass de signed URLs)', () => {
-  // AUDIT M05 BLOQUEANTE 1 (kaieriksen): el listado /recordings entregaba
-  // las signed URLs (mintDownloadUrl -> bearer 24h) de forma PÚBLICA, con lo
-  // que cualquier cliente saltaba el requireAdmin de /recordings/:name
-  // descargando via /dl/... . Fail-closed: el listado también debe exigir el
-  // admin token. El listado para agentes Nostr autenticados sigue cubierto
-  // por el DM `recordings` (gate M01 agentCanOperateRoom).
+t('the /recordings listing ALSO requires admin (closes signed-URL bypass)', () => {
+  // AUDIT M05 BLOCKING 1 (kaieriksen): the /recordings listing delivered
+  // the signed URLs (mintDownloadUrl -> 24h bearer) in a PUBLIC way, so
+  // any client bypassed the requireAdmin of /recordings/:name
+  // by downloading via /dl/... . Fail-closed: the listing must also require the
+  // admin token. Listing for authenticated Nostr agents remains covered
+  // by the `recordings` DM (M01 gate agentCanOperateRoom).
   const listIdx = src.indexOf("req.url === '/recordings'");
   const dlIdx = src.indexOf("req.url.startsWith('/recordings/')");
   assert.ok(listIdx > 0 && dlIdx > listIdx,
-    'el matcher del listado debe ir antes que el de descarga (orden del if/else)');
-  // Entre el matcher del listado y el del download debe haber un requireAdmin
-  // (el listado NO debe seguir público).
+    'the listing matcher must come before the download one (if/else order)');
+  // Between the listing matcher and the download matcher there must be a requireAdmin
+  // (the listing must NOT remain public).
   const window_ = src.slice(listIdx, dlIdx);
   assert.ok(window_.includes('requireAdmin'),
-    'el listado /recordings debe exigir requireAdmin (fail-closed, no signed URLs públicas)');
+    'the /recordings listing must require requireAdmin (fail-closed, no public signed URLs)');
 });
 console.log(`\nAUDIT M05 (recordings auth) Result: ${passed} ok, ${failed} fail`);
 process.exit(failed ? 1 : 0);

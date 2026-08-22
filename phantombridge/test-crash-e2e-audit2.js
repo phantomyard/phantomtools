@@ -67,7 +67,7 @@ function shouldSkipAsDelivered(id) {
 
 assert.strictEqual(STATE_FILE, tmpState, 'STATE_FILE debe apuntar al temp');
 
-console.log('E2E crash/restart/replay (punto 4 de la auditoría):');
+console.log('E2E crash/restart/replay (point 4 of the audit):');
 
 // ---- CASE (i): publish OK, crash, restart, replay -> NO dupe ----
 t('CASE-OK: receive -> pending fsync -> publish OK -> delivered durable', () => {
@@ -78,17 +78,17 @@ t('CASE-OK: receive -> pending fsync -> publish OK -> delivered durable', () => 
   // publish succeeds -> markDelivery(delivered) durable.
   markDelivery('wrap-ok-1', 'delivered');
   assert.strictEqual(deliveryStatus('wrap-ok-1'), 'delivered');
-  assert.ok(fs.existsSync(STATE_FILE), 'state durable presente tras publish');
+  assert.ok(fs.existsSync(STATE_FILE), 'durable state present after publish');
   const s = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-  assert.strictEqual(s.delivery['wrap-ok-1'].status, 'delivered', 'delivered en disco (fsync)');
+  assert.strictEqual(s.delivery['wrap-ok-1'].status, 'delivered', 'delivered on disk (fsync)');
 });
 
-t('CASE-OK: crash + restart -> replay NO duplica (skip por delivered)', () => {
+t('CASE-OK: crash + restart -> replay does NOT duplicate (skip by delivered)', () => {
   decideAndReproduceCrashRestart(() => {
-    // restart recargado -> el dedup real salta: no se procesa de nuevo.
-    assert.strictEqual(deliveryStatus('wrap-ok-1'), 'delivered', 'delivered restaurado');
-    assert.strictEqual(isSeen('wrap-ok-1'), true, 'seen restaurado');
-    assert.strictEqual(shouldSkipAsDelivered('wrap-ok-1'), true, 'replay -> SKIP (exactamente una vez)');
+    // restart reloaded -> the real dedup skips: it is not processed again.
+    assert.strictEqual(deliveryStatus('wrap-ok-1'), 'delivered', 'delivered restored');
+    assert.strictEqual(isSeen('wrap-ok-1'), true, 'seen restored');
+    assert.strictEqual(shouldSkipAsDelivered('wrap-ok-1'), true, 'replay -> SKIP (exactly once)');
   });
 });
 
@@ -113,39 +113,39 @@ t('CASE-FAIL: receive -> pending fsync -> publish FAIL (no delivered)', () => {
   markSeen('wrap-fail-1');
   markDelivery('wrap-fail-1', 'pending');
   // publish failed -> NEVER markDelivery(delivered). pending stays durable.
-  assert.strictEqual(deliveryStatus('wrap-fail-1'), 'pending', 'pendiente tras publicacion fallida');
+  assert.strictEqual(deliveryStatus('wrap-fail-1'), 'pending', 'pending after failed publish');
   const s = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-  assert.strictEqual(s.delivery['wrap-fail-1'].status, 'pending', 'pending en disco');
+  assert.strictEqual(s.delivery['wrap-fail-1'].status, 'pending', 'pending on disk');
 });
 
-t('CASE-FAIL: crash + restart -> replay RETRY (no tratado como entregado)', () => {
+t('CASE-FAIL: crash + restart -> replay RETRY (not treated as delivered)', () => {
   decideAndReproduceCrashRestart(() => {
-    assert.strictEqual(deliveryStatus('wrap-fail-1'), 'pending', 'pending restaurado tras crash');
-    // El dedup NO lo salta: se reintenta (shouldSkipAsDelivered == false).
+    assert.strictEqual(deliveryStatus('wrap-fail-1'), 'pending', 'pending restored after crash');
+    // The dedup does NOT skip it: it is retried (shouldSkipAsDelivered == false).
     assert.strictEqual(shouldSkipAsDelivered('wrap-fail-1'), false, 'replay -> RETRY (no dupe, no loss)');
-    assert.strictEqual(isSeen('wrap-fail-1'), true, 'seen restaurado');
+    assert.strictEqual(isSeen('wrap-fail-1'), true, 'seen restored');
   });
 });
 
-// ---- Cross-check: crash medio (despues de pending, antes de publish) ----
-t('CASE-MID: crash entre pending y publish -> replay RETRY (no loss)', () => {
+// ---- Cross-check: mid-crash (after pending, before publish) ----
+t('CASE-MID: crash between pending and publish -> replay RETRY (no loss)', () => {
   _setBridgeStateForTest(freshState());
   markSeen('wrap-mid-1');
   markDelivery('wrap-mid-1', 'pending');
-  // crash ANTES de publicar: nunca se llego a delivered.
+  // crash BEFORE publishing: delivered was never reached.
   _setBridgeStateForTest(freshState());
   restartFromDisk(1);
-  assert.strictEqual(deliveryStatus('wrap-mid-1'), 'pending', 'sigue pending tras crash medio');
-  assert.strictEqual(shouldSkipAsDelivered('wrap-mid-1'), false, 'replay -> RETRY (evita perdida silenciosa)');
+  assert.strictEqual(deliveryStatus('wrap-mid-1'), 'pending', 'still pending after mid-crash');
+  assert.strictEqual(shouldSkipAsDelivered('wrap-mid-1'), false, 'replay -> RETRY (avoids silent loss)');
 });
 
-// ---- Case: wrap sin registro de delivery -> se procesa (sin dedup) ----
-t('CASE-NORECORD: wrap sin delivery -> replay PROCESA (reintenta)', () => {
+// ---- Case: wrap with no delivery record -> gets processed (no dedup) ----
+t('CASE-NORECORD: wrap without delivery -> replay PROCESSES (retries)', () => {
   _setBridgeStateForTest(freshState());
   markSeen('wrap-none-1');
-  // sin markDelivery: no hay registro durable
+  // no markDelivery: no durable record
   assert.strictEqual(deliveryStatus('wrap-none-1'), null);
-  assert.strictEqual(shouldSkipAsDelivered('wrap-none-1'), false, 'sin delivered -> se procesa');
+  assert.strictEqual(shouldSkipAsDelivered('wrap-none-1'), false, 'no delivered -> gets processed');
 });
 
 // cleanup

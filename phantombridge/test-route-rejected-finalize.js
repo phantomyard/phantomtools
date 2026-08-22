@@ -1,13 +1,14 @@
-// 🟡 BAJO (auditoría): handleRoute() debe finalizar los rechazos DETERMINISTAS.
+// 🟡 BAJO (audit): handleRoute() must finalize DETERMINISTIC rejections.
 //
-// El evento ya fue admitido como `pending` por handleIncomingGiftWrap() antes
-// de llamar a handleRoute(). Si handleRoute() hace un `return` a secas en un
-// rechazo que el retry NUNCA cambiará (agente inexistente, sin permiso,
-// anti-loop bloqueado), la entrada `pending` queda consumiendo el ledger hasta
-// PENDING_TTL_SECS — retries inútiles que nunca van a cambiar de resultado.
+// The event was already admitted as `pending` by handleIncomingGiftWrap()
+// before calling handleRoute(). If handleRoute() does a bare `return` on a
+// rejection that the retry will NEVER change (non-existent agent, no
+// permission, blocked anti-loop), the `pending` entry keeps consuming the
+// ledger until PENDING_TTL_SECS — useless retries that will never change the
+// result.
 //
-// Corrección: en esos tres caminos se llama finishDelivery(giftWrapId, false,
-// true) (rejected=true) -> la entrada `pending` se elimina del ledger.
+// Fix: in those three paths finishDelivery(giftWrapId, false, true) is called
+// (rejected=true) -> the `pending` entry is removed from the ledger.
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -35,100 +36,104 @@ function t(name, fn) {
   });
 }
 
-// Estado base del ledger; admitimos un `pending` como haría
-// handleIncomingGiftWrap() antes de delegar en handleRoute().
+// Base ledger state; we admit a `pending` like
+// handleIncomingGiftWrap() would before delegating to handleRoute().
 function freshLedger() {
   return {relay: 'ws://test.local', lastSeen: 0, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false, recoveryWatermark: 0, delivery: {}};
 }
 
-// handleRoute lanza publishDM a agentes; no queremos red real. Vamos a probar
-// los TRES caminos de rechazo determinista que hacen `return` antes de llegar
-// al publishDM, así que no necesita mock de publishDM salvo que el camino
-// llegue al publish — que no es el caso. De todos modos atrapamos cualquier
-// fallo de red con try/catch en el harness (publishDM se captura con .catch).
+// handleRoute fires publishDM to agents; we do not want real network. We are
+// going to test the THREE deterministic rejection paths that `return` before
+// reaching publishDM, so no publishDM mock is needed unless the path reaches
+// the publish — which is not the case. We still trap any network failure with
+// try/catch in the harness (publishDM is caught with .catch).
 const UNKNOWN_FROM = 'remitente desconocido';
 
-console.log('🟡 handleRoute: rechazos deterministas finalizan el pending (rejected):');
+console.log('🟡 handleRoute: deterministic rejections finalize the pending (rejected):');
 
-// 1) Agente desconocido: route.to no existe en CONFIG.agents.
-t('agente inexistente -> finishDelivery rejected -> pending eliminado', async () => {
+// 1) Unknown agent: route.to does not exist in CONFIG.agents.
+t('non-existent agent -> finishDelivery rejected -> pending removed', async () => {
   _setBridgeStateForTest(freshLedger());
-  // Admitir el pending como haría el handler real.
-  assert.ok(markDelivery('gw-1', 'pending'), 'admitido pending');
+  // Admit the pending as the real handler would.
+  assert.ok(markDelivery('gw-1', 'pending'), 'admitted pending');
   const fromPk = 'abc'.padEnd(64, '0');
-  // @agente-inexistente: no existe en CONFIG.agents -> toPk undefined.
+  // @non-existent-agent: not in CONFIG.agents -> toPk undefined.
   const route = {to: 'agente-inexistente', text: 'hola'};
-  // Envolvemos para que un posible publishDM fallido no tumbe el assert.
+  // We wrap so a possible failed publishDM does not break the assert.
   await handleRoute(UNKNOWN_FROM, fromPk, route, 'gw-1').catch(() => {});
   assert.strictEqual(deliveryStatus('gw-1'), null,
-    'pending eliminado tras agente inexistente (rejected)');
+    'pending removed after non-existent agent (rejected)');
 });
 
-// 2) Sin permiso: routingAllowed() == false (default deny y sin regla).
-t('sin permiso (routingAllowed false) -> finishDelivery rejected -> pending eliminado', async () => {
+// 2) No permission: routingAllowed() == false (default deny and no rule).
+t('no permission (routingAllowed false) -> finishDelivery rejected -> pending removed', async () => {
   _setBridgeStateForTest(freshLedger());
-  // Elegimos un par sin regla de permisos y default deny: from -> to denegado.
-  // CONFIG.agents real tiene remitente y el @to; el from no está en
-  // routing.permissions y default deny -> routingAllowed false.
-  assert.ok(markDelivery('gw-2', 'pending'), 'admitido pending');
+  // We pick a pair with no permission rule and default deny: from -> to denied.
+  // The real CONFIG.agents has the sender and the @to; the from is not in
+  // routing.permissions and default deny -> routingAllowed false.
+  assert.ok(markDelivery('gw-2', 'pending'), 'admitted pending');
   const fromPk = 'def'.padEnd(64, '0');
-  // Tomamos un @to que SÍ existe pero cuyo from no tiene permiso.
+  // We take a @to that DOES exist but whose from has no permission.
   const toName = Object.keys(bridge.CONFIG.agents || {})[0] || 'dave';
   const route = {to: toName, text: 'hola'};
   await handleRoute(UNKNOWN_FROM, fromPk, route, 'gw-2').catch(() => {});
   assert.strictEqual(deliveryStatus('gw-2'), null,
-    'pending eliminado tras sin permiso (rejected)');
+    'pending removed after no permission (rejected)');
 });
 
-// 3) Anti-loop bloqueado: antiLoopCheck() == false (mismo contenido duplicado).
-t('anti-loop bloqueado -> finishDelivery rejected -> pending eliminado', async () => {
+// 3) Blocked anti-loop: antiLoopCheck() == false (same duplicated content).
+t('blocked anti-loop -> finishDelivery rejected -> pending removed', async () => {
   _setBridgeStateForTest(freshLedger());
-  assert.ok(markDelivery('gw-3', 'pending'), 'admitido pending');
+  assert.ok(markDelivery('gw-3', 'pending'), 'admitted pending');
   const fromPk = '123'.padEnd(64, '0');
   const toName = Object.keys(bridge.CONFIG.agents || {})[0] || 'dave';
   const route = {to: toName, text: '@' + toName + ' duplicado-para-antiloop'};
-  // Ejecutar dos veces el mismo texto: la segunda vez antiLoopCheck debe
-  // bloquear (content dedup) dentro de la ventana -> rejected.
+  // Run the same text twice: the second time antiLoopCheck must block (content
+  // dedup) within the window -> rejected.
   await handleRoute(UNKNOWN_FROM, fromPk, route, 'gw-3').catch(() => {});
-  // Admitir otro pending para el segundo intento con el MISMO contenido.
+  // Admit another pending for the second attempt with the SAME content.
   _setBridgeStateForTest(freshLedger());
-  assert.ok(markDelivery('gw-4', 'pending'), 'admitido pending 2');
+  assert.ok(markDelivery('gw-4', 'pending'), 'admitted pending 2');
   await handleRoute(UNKNOWN_FROM, fromPk, route, 'gw-4').catch(() => {});
   assert.strictEqual(deliveryStatus('gw-4'), null,
-    'pending eliminado tras anti-loop (rejected)');
+    'pending removed after anti-loop (rejected)');
 });
 
-// 4) CONTROL: un ruteo legítimo (con permiso) NO debe dejar pending ni borrar
-//    nada de forma incorrecta — al finalizar el publishDM falla por red pero el
-//    pending se conserva (retry legítimo) o se marca. Aquí solo verificamos que
-//    el rejected no se dispara en un camino NO determinista de denial (no
-//    interesa el publish real). Aseguramos que el fix no rompe el flujo normal:
-//    con un permiso otorgado, handleRoute NO llama finishDelivery(rejected).
-t('control: ruteo con permiso NO dispara rejected', async () => {
+// 4) CONTROL: a legitimate route (with permission) must NOT leave a pending nor
+//    delete anything incorrectly — when publishDM fails by network the
+//    pending is kept (legitimate retry) or marked. Here we only verify that
+//    rejected is NOT triggered on a NON-deterministic denial path (the real
+//    publish is not relevant). We ensure the fix does not break the normal
+//    flow: with a granted permission, handleRoute does NOT call
+//    finishDelivery(rejected).
+t('control: routing with permission does NOT trigger rejected', async () => {
   _setBridgeStateForTest(freshLedger());
   const toName = Object.keys(bridge.CONFIG.agents || {})[0] || 'dave';
-  // Asumimos que el primer agente permisivo puede escribir a si mismo no —
-  // mejor: usamos un from que SÍ tenga permiso (si existe en routing.perms).
+  // We assume the first permissive agent can write to itself no —
+  // better: we use a from that DOES have permission (if it exists in
+  // routing.perms).
   const perms = (bridge.CONFIG.routing && bridge.CONFIG.routing.permissions) || {};
   const grantedFrom = Object.keys(perms).find(f =>
     (perms[f] || []).some(t => t === toName || t === '*'));
   if (!grantedFrom) {
-    console.log('  (skip) no hay from con permiso en config para el control');
+    console.log('  (skip) no from with permission in config for the control');
     return;
   }
   const fromPk = bridge.CONFIG.agents[grantedFrom];
-  assert.ok(markDelivery('gw-5', 'pending'), 'admitido pending');
+  assert.ok(markDelivery('gw-5', 'pending'), 'admitted pending');
   const route = {to: toName, text: 'control legitimo'};
-  // publishDM fallará por red (sin relay) -> se captura; lo importante: NO se
-  // debe eliminar el pending por un rechazo determinista (sigue pending).
+  // publishDM will fail by network (no relay) -> it is caught; the important
+  // thing: the pending must NOT be removed by a deterministic rejection (stays
+  // pending).
   await handleRoute(grantedFrom, fromPk, route, 'gw-5').catch(() => {});
-  // Con permiso, el flujo llega al publishDM (falla por red) -> pending se
-  // conserva (retry legítimo) o pasa a rejected solo si el handler lo decidió.
+  // With permission, the flow reaches publishDM (fails by network) -> pending
+  // is kept (legitimate retry) or becomes rejected only if the handler decided
+  // so.
   const st = deliveryStatus('gw-5');
-  // Aceptamos 'pending' (retry legítimo, publish fallido) — nunca rechazo
-  // determinista por permiso.
-  assert.ok(st === 'pending', 'con permiso el pending se conserva (retry legítimo)');
+  // We accept 'pending' (legitimate retry, failed publish) — never a
+  // deterministic permission rejection.
+  assert.ok(st === 'pending', 'with permission the pending is kept (legitimate retry)');
 });
 
 _chain.then(() => {

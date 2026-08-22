@@ -26,7 +26,7 @@ function t(name, fn) {
 // isolated stateFile, so STATE_FILE lands on the temp path.
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'low9-'));
 const baseConfig = require('./testlib.js').baseConfig();
-// loadState() solo corre en modo nostr/both; forzamos nostr para ejercitarlo.
+// loadState() only runs in nostr/both mode; we force nostr to exercise it.
 baseConfig.mode = 'nostr';
 const tmpConfigPath = path.join(tmpDir, 'config.json');
 fs.writeFileSync(tmpConfigPath, JSON.stringify(baseConfig, null, 2));
@@ -37,67 +37,68 @@ function runChild(stateFile, writeStateBytes) {
   cfg.stateFile = stateFile;
   fs.writeFileSync(tmpConfigPath, JSON.stringify(cfg, null, 2));
   if (writeStateBytes !== null) fs.writeFileSync(stateFile, writeStateBytes);
-  // El módulo bridge deja handles activos (server/timers) que impiden a node
-  // salir solo, así que usamos timeout+killSignal para no colgar el test.
-  // Para los casos fail-closed, process.exit(1) termina ANTES del timeout.
+  // The bridge module leaves active handles (server/timers) that keep node
+  // from exiting on its own, so we use timeout+killSignal to avoid hanging.
+  // For the fail-closed cases, process.exit(1) terminates BEFORE the timeout.
   try {
     const out = execFileSync(process.execPath, ['-e',
       "require('./bridge.js'); console.log('LOADED_OK');"],
       {cwd: __dirname, encoding: 'utf8', timeout: 4000, killSignal: 'SIGTERM', env: {...process.env, PHANTOMBRIDGE_CONFIG: tmpConfigPath}});
     return {code: 0, out};
   } catch (e) {
-    // e.status: null si fue matado por el timeout (killSignal), o el exit code
-    // real si el proceso salió solo (p.ej. process.exit(1) de fail-closed).
+    // e.status: null if it was killed by the timeout (killSignal), or the real
+    // exit code if the process exited on its own (e.g. process.exit(1) from
+    // fail-closed).
     const code = e.status === null ? 'timeout-kill' : e.status;
     return {code, out: (e.stdout || '') + (e.stderr || '')};
   }
 }
 
 // 1. ENOENT: no state file → legitimate full backlog, loadState does NOT abort.
-t('ENOENT (sin archivo) -> carga normal, sin aborto', () => {
+t('ENOENT (missing file) -> normal load, no abort', () => {
   const noState = path.join(tmpDir, 'missing.json');
   const r = runChild(noState, null);
-  assert.ok(/LOADED_OK/.test(r.out), 'child no cargó: ' + r.out.slice(0, 200));
-  assert.ok(/no previous state file/.test(r.out), 'debe loguear init limpio: ' + r.out.slice(0, 200));
+  assert.ok(/LOADED_OK/.test(r.out), 'child did not load: ' + r.out.slice(0, 200));
+  assert.ok(/no previous state file/.test(r.out), 'must log clean init: ' + r.out.slice(0, 200));
 });
 
-// 2. JSON corrupto → fail-closed: aborta (exit 1) con motivo logueado.
-t('JSON corrupto -> ERROR FATAL + aborto (fail-closed, no backlog silencioso)', () => {
+// 2. Corrupt JSON → fail-closed: aborts (exit 1) with a logged reason.
+t('corrupt JSON -> FATAL ERROR + abort (fail-closed, no silent backlog)', () => {
   const badState = path.join(tmpDir, 'corrupt.json');
   const r = runChild(badState, '{no es json valido');
-  assert.ok(/ERROR FATAL loading state/.test(r.out), 'debe loguear ERROR FATAL: ' + r.out.slice(0, 300));
-  assert.ok(/Corrupt state/.test(r.out), 'debe mencionar corrupción: ' + r.out.slice(0, 300));
-  assert.ok(!/LOADED_OK/.test(r.out), 'NO debe cargar tras estado corrupto (abortó antes): ' + r.out.slice(0, 200));
+  assert.ok(/ERROR FATAL loading state/.test(r.out), 'must log ERROR FATAL: ' + r.out.slice(0, 300));
+  assert.ok(/Corrupt state/.test(r.out), 'must mention corruption: ' + r.out.slice(0, 300));
+  assert.ok(!/LOADED_OK/.test(r.out), 'must NOT load after (aborted before): ' + r.out.slice(0, 200));
 });
 
-// 3. JSON válido pero forma inválida (no relay) -> también fail-closed (no
-//    hay forma de saber qué se procesó). El objeto no tiene relay string.
-t('estado JSON válido pero forma inválida -> aborto fail-closed', () => {
+// 3. Valid JSON but invalid shape (no relay) -> also fail-closed (no way to
+//    know what was processed). The object has no relay string.
+t('valid JSON but invalid shape -> fail-closed abort', () => {
   const weirdState = path.join(tmpDir, 'weird.json');
   const r = runChild(weirdState, JSON.stringify({foo: 1, bar: 'x'}));
   assert.ok(/ERROR FATAL loading state/.test(r.out), ':: ' + r.out.slice(0, 300));
-  assert.ok(!/LOADED_OK/.test(r.out), 'NO debe cargar: ' + r.out.slice(0, 200));
+  assert.ok(!/LOADED_OK/.test(r.out), 'must NOT load: ' + r.out.slice(0, 200));
 });
 
-// 4. EACCES (permiso denegado) -> fail-closed también (no sabemos qué se
-//    procesó). Simulamos con un path que apunta a un directorio ilegible como
-//    archivo o a un archivo sin permiso de lectura.
-t('EACCES (estado ilegible) -> aborto fail-closed', () => {
+// 4. EACCES (permission denied) -> fail-closed too (we do not know what was
+//    processed). We simulate it with a path that points to an unreadable
+//    directory as a file, or to a file with no read permission.
+t('EACCES (unreadable state) -> fail-closed abort', () => {
   const blockedState = path.join(tmpDir, 'no-read.json');
   fs.writeFileSync(blockedState, JSON.stringify({relay: 'n', lastSeen: 1}));
-  fs.chmodSync(blockedState, 0o000); // sin permiso de lectura
+  fs.chmodSync(blockedState, 0o000); // no read permission
   try {
     const r = runChild(blockedState, null);
     assert.ok(/ERROR FATAL loading state/.test(r.out), ':: ' + r.out.slice(0, 300));
-    assert.ok(!/LOADED_OK/.test(r.out), 'NO debe cargar: ' + r.out.slice(0, 200));
+    assert.ok(!/LOADED_OK/.test(r.out), 'must NOT load: ' + r.out.slice(0, 200));
   } finally {
-    fs.chmodSync(blockedState, 0o600); // restaurar para poder limpiar
+    fs.chmodSync(blockedState, 0o600); // restore so we can clean up
   }
 });
 
-// 5. Estado VÁLIDO y completo → carga normal (sin regresión del happy path),
-//    y restaura el relay lastSeen.
-t('estado válido y completo -> carga normal sin aborto', () => {
+// 5. Valid and complete state → normal load (no happy-path regression), and it
+//    restores the relay lastSeen.
+t('valid and complete state -> normal load without abort', () => {
   const okState = path.join(tmpDir, 'ok.json');
   const r = runChild(okState, JSON.stringify({
     relay: 'ws://mirelay', lastSeen: Math.floor(Date.now() / 1000) - 10,

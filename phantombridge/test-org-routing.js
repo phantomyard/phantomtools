@@ -1,7 +1,7 @@
 process.umask(0o077);
-// Tests del mapeo org.yaml → agents + routing DM↔DM (norma v1.6).
-// Unit tests de org-routing.js + integración con bridge.js (HTTP /status).
-// Uso: node test-org-routing.js
+// Tests of the org.yaml → agents + routing DM↔DM mapping (norm v1.6).
+// Unit tests of org-routing.js + integration with bridge.js (HTTP /status).
+// Usage: node test-org-routing.js
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
@@ -53,9 +53,9 @@ escalation_matrix:
   - { from: "*", to: ceo, condition: "excepción Category 0" }
 `;
 
-// Resultado esperado de deriveRouting(ORG_AU):
-//   reports_to bidireccional: alice↔bob, alice↔carol, bob↔dave, bob↔erin
-//   escalation *→ceo: dave→alice, erin→alice (direccional)
+// Expected result of deriveRouting(ORG_AU):
+//   reports_to bidirectional: alice↔bob, alice↔carol, bob↔dave, bob↔erin
+//   escalation *→ceo: dave→alice, erin→alice (directional)
 const EXPECTED_ROUTING = {
   alice: ['bob', 'carol'],
   bob: ['alice', 'dave', 'erin'],
@@ -79,13 +79,13 @@ function t(name, fn) {
 // parseOrgYaml
 // ---------------------------------------------------------------------------
 console.log('parseOrgYaml:');
-t('flow-maps YAML parsean', () => {
+t('flow-maps YAML parse', () => {
   const org = parseOrgYaml(ORG_AU);
   assert.strictEqual(org.roles.length, 5);
   assert.strictEqual(org.roles[1].reports_to, 'ceo');
   assert.strictEqual(org.escalation_matrix[4].from, '*');
 });
-t('yaml inválido lanza', () => {
+t('invalid yaml throws', () => {
   assert.throws(() => parseOrgYaml('a: [unclosed'));
 });
 
@@ -93,25 +93,25 @@ t('yaml inválido lanza', () => {
 // deriveAgents
 // ---------------------------------------------------------------------------
 console.log('deriveAgents:');
-t('npubs de la org ficticia → hex exacto', () => {
+t('fictional org npubs -> exact hex', () => {
   const agents = deriveAgents(parseOrgYaml(ORG_AU));
   assert.deepStrictEqual(agents, HEX);
 });
-t('actor sin npub falla cerrado', () => {
+t('actor without npub fails closed', () => {
   const org = parseOrgYaml(ORG_AU);
   org.actors.push({id: 'fantasma', role: 'ceo'});
   assert.throws(() => deriveAgents(org), /requires id, role and npub/);
 });
-t('npub inválido falla cerrado', () => {
+t('invalid npub fails closed', () => {
   const org = parseOrgYaml(ORG_AU);
   org.actors.push({id: 'roto', role: 'ceo', npub: 'npub1noesvalido'});
   assert.throws(() => deriveAgents(org), /invalid npub/);
 });
 
-// MEDIO-6: FAIL-CLOSED ante identidades ambiguas (pubkey/actor.id duplicados).
-// MEDIO-6: FAIL-CLOSED ante identidades ambiguas (pubkey/actor.id duplicados).
+// MEDIO-6: FAIL-CLOSED on ambiguous identities (duplicated pubkey/actor.id).
+// MEDIO-6: FAIL-CLOSED on ambiguous identities (duplicated pubkey/actor.id).
 function freshNpub() { return nip19.npubEncode(getPublicKey(generateSecretKey())); }
-t('actor.id duplicado → FAIL-CLOSED (lanza)', () => {
+t('duplicated actor.id -> FAIL-CLOSED (throws)', () => {
   const org = parseOrgYaml(ORG_AU);
   org.actors = [
     {id: 'doble', role: 'ceo', npub: freshNpub()},
@@ -119,7 +119,7 @@ t('actor.id duplicado → FAIL-CLOSED (lanza)', () => {
   ];
   assert.throws(() => deriveAgents(org), /duplicate/i);
 });
-t('pubkey duplicado entre actores → FAIL-CLOSED (lanza)', () => {
+t('duplicated pubkey between actors -> FAIL-CLOSED (throws)', () => {
   const shared = freshNpub();
   const org = parseOrgYaml(ORG_AU);
   org.actors = [
@@ -128,7 +128,7 @@ t('pubkey duplicado entre actores → FAIL-CLOSED (lanza)', () => {
   ];
   assert.throws(() => deriveAgents(org), /duplicate/i);
 });
-t('loadOrgRouting ante pubkey duplicado → EINVALID (fail-closed, no fallback)', () => {
+t('loadOrgRouting with duplicated pubkey -> EINVALID (fail-closed, no fallback)', () => {
   const shared = freshNpub();
   const yaml = 'actors:\n  - id: a\n    role: ceo\n    npub: ' + shared +
     '\n  - id: b\n    role: worker\n    npub: ' + shared + '\n';
@@ -146,33 +146,33 @@ t('loadOrgRouting ante pubkey duplicado → EINVALID (fail-closed, no fallback)'
 // deriveRouting
 // ---------------------------------------------------------------------------
 console.log('deriveRouting:');
-t('jerarquía org → routing esperado', () => {
+t('org hierarchy -> expected routing', () => {
   const routing = deriveRouting(parseOrgYaml(ORG_AU));
   assert.deepStrictEqual(routing.permissions, EXPECTED_ROUTING);
   assert.strictEqual(routing.default, 'deny');
 });
-t('reports_to es bidireccional (alice↔carol)', () => {
+t('reports_to is bidirectional (alice↔carol)', () => {
   const {permissions} = deriveRouting(parseOrgYaml(ORG_AU));
   assert.ok(permissions.alice.includes('carol'));
   assert.ok(permissions.carol.includes('alice'));
 });
-t('escalada *→ceo es direccional (dave→alice, no alice→dave)', () => {
+t('escalation *→ceo is directional (dave→alice, not alice→dave)', () => {
   const {permissions} = deriveRouting(parseOrgYaml(ORG_AU));
   assert.ok(permissions.dave.includes('alice'));
   assert.ok(!permissions.alice.includes('dave'));
 });
-t('sin regla explícita → no hay arista (carol→erin)', () => {
+t('no explicit rule -> no edge (carol→erin)', () => {
   const {permissions} = deriveRouting(parseOrgYaml(ORG_AU));
   assert.ok(!permissions.carol.includes('erin'));
 });
-t('multi-actor por rol: todos los actores del rol reciben la arista', () => {
+t('multi-actor per role: all role actors receive the edge', () => {
   const org = parseOrgYaml(ORG_AU);
   org.actors.push({id: 'ayudante', role: 'project_lead', npub: nip19.npubEncode(getPublicKey(generateSecretKey()))});
   const {permissions} = deriveRouting(org);
-  assert.ok(permissions.ayudante.includes('bob')); // project_lead reporta a chief_of_staff
+  assert.ok(permissions.ayudante.includes('bob')); // project_lead reports to chief_of_staff
   assert.ok(permissions.bob.includes('ayudante'));
 });
-t('sin roles/actors → vacío con default deny', () => {
+t('no roles/actors -> empty with default deny', () => {
   const routing = deriveRouting({roles: [], actors: [], escalation_matrix: []});
   assert.deepStrictEqual(routing.permissions, {});
   assert.strictEqual(routing.default, 'deny');
@@ -187,30 +187,30 @@ fs.mkdirSync(TEST_DIR, {recursive: true});
 const ORG_FILE = path.join(TEST_DIR, 'org-example.yaml');
 fs.writeFileSync(ORG_FILE, ORG_AU);
 
-t('archivo válido → {agents, routing}', () => {
+t('valid file -> {agents, routing}', () => {
   const r = loadOrgRouting(ORG_FILE);
   assert.deepStrictEqual(r.agents, HEX);
   assert.deepStrictEqual(r.routing.permissions, EXPECTED_ROUTING);
 });
-t('archivo inexistente → EMISSING (legacy fallback legítimo)', () => {
+t('missing file -> EMISSING (legitimate legacy fallback)', () => {
   let err = null;
   try { loadOrgRouting(path.join(TEST_DIR, 'no-existe.yaml')); }
   catch (e) { err = e; }
-  assert.ok(err && err.code === 'EMISSING', 'debe lanzar Error con code EMISSING');
+  assert.ok(err && err.code === 'EMISSING', 'must throw Error with code EMISSING');
 });
-t('yaml roto → EINVALID (FAIL-CLOSED, no fallback silencioso)', () => {
+t('broken yaml -> EINVALID (FAIL-CLOSED, no silent fallback)', () => {
   const bad = path.join(TEST_DIR, 'roto.yaml');
   fs.writeFileSync(bad, 'roles: [unclosed');
   let err = null;
   try { loadOrgRouting(bad); }
   catch (e) { err = e; }
-  assert.ok(err && err.code === 'EINVALID', 'debe lanzar Error con code EINVALID');
+  assert.ok(err && err.code === 'EINVALID', 'must throw Error with code EINVALID');
 });
 
 // ---------------------------------------------------------------------------
-// Integración con bridge.js: el routing derivado sustituye al manual
+// Integration with bridge.js: the derived routing replaces the manual one
 // ---------------------------------------------------------------------------
-console.log('integración bridge.js:');
+console.log('bridge.js integration:');
 function getJson(port, p, token) {
   return new Promise((resolve, reject) => {
     const req = require('http').get({
@@ -234,16 +234,16 @@ process.env.PHANTOMBRIDGE_TEST_NSEC = nip19.nsecEncode(generateSecretKey());
 fs.writeFileSync(CFG, JSON.stringify({
   mode: 'nostr',
   nick: 'secretario',
-  httpPort: 0, // listen(0) lo asigna el test
+  httpPort: 0, // listen(0) assigns it in the test
   nostr: {relay: 'ws://127.0.0.1:19999', nsec: 'env:PHANTOMBRIDGE_TEST_NSEC'},
   orgFile: ORG_FILE,
-  // routing manual presente PERO debe ser ignorado (org.yaml manda)
+  // manual routing present BUT it must be ignored (org.yaml rules)
   agents: {extra: getPublicKey(generateSecretKey())},
   routing: {permissions: {extra: ['alice']}, default: 'deny'},
 }, null, 2));
 fs.chmodSync(CFG, 0o600);
 
-t('bridge usa routing derivado de org.yaml, no el manual', async () => {
+t('bridge uses the routing derived from org.yaml, not the manual one', async () => {
   delete require.cache[require.resolve('./bridge.js')];
   process.env.PHANTOMBRIDGE_CONFIG = CFG;
   const bridge = require('./bridge.js');
@@ -252,11 +252,11 @@ t('bridge usa routing derivado de org.yaml, no el manual', async () => {
   const status = await getJson(port, '/status', bridge.getAdminToken());
   assert.deepStrictEqual(status.routing.permissions, EXPECTED_ROUTING);
   assert.strictEqual(status.routing.default, 'deny');
-  assert.strictEqual(status.routing.permissions.extra, undefined, 'routing manual ignorado');
-  // MEDIO-5: agents del config NO se complementan — org.yaml es la ÚNICA
-  // fuente de verdad de identidad. Un 'extra' del config NO debe aparecer.
-  assert.strictEqual(status.agents.extra, undefined, 'agent extra del config IGNORADO (org.yaml manda)');
-  assert.ok(status.agents.alice, 'agent derivado presente');
+  assert.strictEqual(status.routing.permissions.extra, undefined, 'manual routing ignored');
+  // MEDIO-5: config agents are NOT complemented — org.yaml is the ONLY
+  // identity source of truth. A config 'extra' must NOT appear.
+  assert.strictEqual(status.agents.extra, undefined, 'config extra agent IGNORED (org.yaml rules)');
+  assert.ok(status.agents.alice, 'derived agent present');
   await new Promise(resolve => bridge.server.close(resolve));
 });
 

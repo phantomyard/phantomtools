@@ -20,20 +20,20 @@ function computeSince(bridgeState) {
 }
 
 console.log('H-NEW-01 (backpressure recovery):');
-t('sin descartes: since = lastSeen - overlap', () => {
+t('no drops: since = lastSeen - overlap', () => {
   assert.strictEqual(computeSince({lastSeen: 1000, pendingSince: null}), 880);
 });
-t('con descarte en t=500 (lastSeen=1000): since ancla a 500-overlap=380', () => {
+t('with a drop at t=500 (lastSeen=1000): since anchors to 500-overlap=380', () => {
   const since = computeSince({lastSeen: 1000, pendingSince: 500});
   assert.strictEqual(since, 380);
-  assert.ok(since <= 500, 'since <= descarte para recuperarlo');
+  assert.ok(since <= 500, 'since <= drop to recover it');
 });
-t('lastSeen avanzó, descarte antiguo sigue recuperable', () => {
+t('lastSeen advanced, old drop still recoverable', () => {
   const since = computeSince({lastSeen: 2000, pendingSince: 500});
   assert.strictEqual(since, 380);
-  assert.ok(since <= 500, 'se puede recuperar el descartado en t=500');
+  assert.ok(since <= 500, 'the drop at t=500 can still be recovered');
 });
-t('descarte reciente (990): since=870 cubre el overlap', () => {
+t('recent drop (990): since=870 covers the overlap', () => {
   assert.strictEqual(computeSince({lastSeen: 1000, pendingSince: 990}), 870);
 });
 
@@ -52,20 +52,20 @@ const isSeen = (bs, id, ts) => {
 
 console.log('');
 console.log('H-NEW-02 (time-based dedup):');
-t('250 eventos en <120s: ev0 sigue dentro del overlap (no expulsado por count)', () => {
+t('250 events in <120s: ev0 stays within the overlap (not evicted by count)', () => {
   const bs = {seenIds: []};
   const T = Math.floor(Date.now() / 1000);
   for (let i = 0; i < 250; i++) markSeen(bs, 'ev' + i, T + i * 0.5);
-  // ev0 ts=T, ahora T+124.5 -> 124.5 < 180 (overlap+60) -> sigue seen
+  // ev0 ts=T, now T+124.5 -> 124.5 < 180 (overlap+60) -> still seen
   assert.strictEqual(isSeen(bs, 'ev0', T + 124), true);
 });
-t('evento mas alla del overlap+60 ya no es seen (purga temporal)', () => {
+t('event beyond the overlap+60 is no longer seen (temporal purge)', () => {
   const T = Math.floor(Date.now() / 1000);
   const bs = {seenIds: [{id: 'a', ts: T}, {id: 'b', ts: T - 200}]};
   assert.strictEqual(isSeen(bs, 'a', T), true);
   assert.strictEqual(isSeen(bs, 'b', T), false);
 });
-t('migración: formato legacy (strings) funciona', () => {
+t('migration: legacy format (strings) works', () => {
   const T = Math.floor(Date.now() / 1000);
   const raw = ['x', 'y'];
   const seenIds = raw.map(e => (typeof e === 'string' ? {id: e, ts: 0} : e));
@@ -74,7 +74,7 @@ t('migración: formato legacy (strings) funciona', () => {
   // no matchean el rango temporal — con ts=0 y (now-0)>180, no cuentan
   assert.strictEqual(bs.seenIds.length, 2);
 });
-t('markSeen idempotente: no duplica id reciente', () => {
+t('markSeen idempotent: does not duplicate a recent id', () => {
   const T = Math.floor(Date.now() / 1000);
   const bs = {seenIds: []};
   markSeen(bs, 'dup', T);

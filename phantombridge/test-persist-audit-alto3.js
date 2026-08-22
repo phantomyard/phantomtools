@@ -61,14 +61,14 @@ t('markDelivery delivered -> deliveryStatus(id)==delivered', () => {
   assert.strictEqual(deliveryStatus('w-2'), 'delivered');
 });
 
-t('wrap delivered -> dedup lo salta (isSeen + delivered)', () => {
+t('wrap delivered -> dedup skips it (isSeen + delivered)', () => {
   resetState();
   markSeen('w-3');
   markDelivery('w-3', 'delivered');
   assert.strictEqual(isSeen('w-3') && deliveryStatus('w-3') === 'delivered', true);
 });
 
-t('wrap pending (publish falló) -> NO se trata como entregado (permite retry)', () => {
+t('wrap pending (publish failed) -> NOT treated as delivered (allows retry)', () => {
   resetState();
   markSeen('w-4');
   markDelivery('w-4', 'pending');
@@ -77,34 +77,34 @@ t('wrap pending (publish falló) -> NO se trata como entregado (permite retry)',
   assert.strictEqual(isSeen('w-4') && deliveryStatus('w-4') === 'delivered', false);
 });
 
-t('sin registro de delivery -> no entregado -> se procesa', () => {
+t('no delivery record -> not delivered -> gets processed', () => {
   resetState();
   markSeen('w-5');
   assert.strictEqual(deliveryStatus('w-5'), null);
   assert.strictEqual(isSeen('w-5') && deliveryStatus('w-5') === 'delivered', false);
 });
 
-t('markDelivery escribe el estado DURABLE (síncrono, fichero presente de inmediato)', () => {
+t('markDelivery writes the DURABLE state (sync, file present immediately)', () => {
   try {
     resetState();
     if (fs.existsSync(tmpState)) fs.unlinkSync(tmpState);
-    // Replicar el flujo real de handleIncomingGiftWrap: markSeen ANTES de
-    // marcar la entrega (línea 1208-1209), así seenIds + delivery quedan
-    // ambos durables.
+    // Replicate the real handleIncomingGiftWrap flow: markSeen BEFORE
+    // marking the delivery (lines 1208-1209), so seenIds + delivery both
+    // become durable.
     markSeen('dur-1');
     markDelivery('dur-1', 'delivered');
-    // markDelivery -> flushStateNow -> persistState() escribió + fsync + rename.
-    // Debe existir YA (síncrono), sin esperar el timer de 5s.
-    assert.ok(fs.existsSync(tmpState), 'state file escrito síncronamente tras markDelivery');
+    // markDelivery -> flushStateNow -> persistState() wrote + fsync + rename.
+    // It must exist ALREADY (sync), without waiting for the 5s timer.
+    assert.ok(fs.existsSync(tmpState), 'state file written synchronously after markDelivery');
     const parsed = JSON.parse(fs.readFileSync(tmpState, 'utf8'));
-    assert.strictEqual(parsed.delivery['dur-1'].status, 'delivered', 'ledger en disco');
+    assert.strictEqual(parsed.delivery['dur-1'].status, 'delivered', 'ledger on disk');
   } catch (e) {
     resetState();
     throw e;
   }
 });
 
-t('tras "crash/restart": delivered se restaura del disco y dedup salta', () => {
+t('after "crash/restart": delivered restored from disk and dedup skips it', () => {
   // Simulate restart: the file has dur-1 in BOTH seenIds and delivery[]. A
   // fresh in-memory state rebuilt as loadState() does must restore both and
   // treat it as delivered (so the dedup skips it on re-delivery).

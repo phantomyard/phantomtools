@@ -1,26 +1,26 @@
-// AUDIT-4/5 punto de revisión (🟡): ¿puede un backlog de eventos NO
-// autorizados avanzar `lastSeen` por delante de eventos legítimos y causar
-// PÉRDIDA tras restart?
+// AUDIT-4/5 review point (🟡): can a backlog of UNAUTHORIZED events advance
+// `lastSeen` ahead of legitimate events and cause LOSS after restart?
 //
-// Secuencia que el auditor quiere probar:
+// Sequence the auditor wants to test:
 //   unauthorized backlog + authorized event + queue overflow + restart
 //
-// Flujo real (handleIncomingGiftWrap):
+// Real flow (handleIncomingGiftWrap):
 //   isSeen/deliveryStatus -> updateLastSeen() -> markSeen() -> NIP-17 auth
-//   -> allowlist -> (solo autorizados) markDelivery(pending) -> ejecutar.
+//   -> allowlist -> (only authorized) markDelivery(pending) -> execute.
 //
-// El riesgo teórico: `updateLastSeen()` avanza `lastSeen` (reloj real) para
-// TODO evento recibido, incluidos los no autorizados. Si un flood de no
-// autorizados llena la cola y `lastSeen` avanza, y un legítimo posterior se
-// descarta por overflow -> ¿se pierde? El mecanismo de protección es
-// `pendingSince` + `recordDropped`: al descartar por overflow se ancla
-// `pendingSince` y se registra el drop; `since = pendingSince - 120` en la
-// siguiente suscripción nunca pasa ese punto -> el legítimo se re-entrega.
+// The theoretical risk: `updateLastSeen()` advances `lastSeen` (real clock)
+// for EVERY received event, including unauthorized ones. If a flood of
+// unauthorized events fills the queue and `lastSeen` advances, and a later
+// legitimate one is dropped by overflow -> is it lost? The protection
+// mechanism is `pendingSince` + `recordDropped`: when dropping by overflow it
+// anchors `pendingSince` and records the drop; `since = pendingSince - 120`
+// in the next subscription never passes that point -> the legitimate event is
+// re-delivered.
 //
-// Este test verifica que ESE mecanismo funciona: el cursor de recuperación
-// tras restart NUNCA avanza más allá de `pendingSince`, de modo que un
-// evento descartado por overflow (aunque sea tras/bajo un flood de no
-// autorizados que avanzó lastSeen) sigue siendo alcanzable.
+// This test verifies that THAT mechanism works: the recovery cursor after
+// restart NEVER advances past `pendingSince`, so an event dropped by overflow
+// (even after/under a flood of unauthorized events that advanced lastSeen)
+// remains reachable.
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -51,10 +51,10 @@ function fresh() {
     dropped: [], droppedOverflow: false, delivery: {}};
 }
 
-// Reproduce la lógica del subscription cursor en subscribeIncoming() (AUDIT-14/15).
-// El cursor de procesamiento es recoveryWatermark (rango confirmado como
-// recorrido al admitir/procesar), NO lastSeen (recepción local). pendingSince
-// (STICKY) es el ancla conservadora si hay drops pendientes.
+// Reproduces the subscription cursor logic in subscribeIncoming() (AUDIT-14/15).
+// The processing cursor is recoveryWatermark (the range confirmed as walked
+// when admitting/processing), NOT lastSeen (local reception). pendingSince
+// (STICKY) is the conservative anchor if there are pending drops.
 function subscriptionSince(state) {
   if (!state || !state.relay) return null; // full backlog
   const recovery = state.recoveryWatermark || 0;
@@ -67,97 +67,97 @@ function subscriptionSince(state) {
   return cursor - 120;
 }
 
-assert.strictEqual(STATE_FILE, tmpState, 'STATE_FILE temp, como en los otros tests');
+assert.strictEqual(STATE_FILE, tmpState, 'STATE_FILE temp, as in the other tests');
 
-console.log('AUDIT-4/5 🟡: lastSeen vs backlog no autorizado (¿pérdida tras restart?):');
+console.log('AUDIT-4/5 🟡: lastSeen vs unauthorized backlog (loss after restart?):');
 
-// 1. Flood de no autorizados avanza lastSeen (reloj real).
-t('flood de no autorizados avanza lastSeen (por diseño)', () => {
+// 1. Flood of unauthorized events advances lastSeen (real clock).
+t('flood of unauthorized events advances lastSeen (by design)', () => {
   _setBridgeStateForTest(fresh());
-  // Simular la recepción de muchos eventos (autorizados o no): updateLastSeen
-  // avanza lastSeen al reloj real en cada evento.
+  // Simulate receiving many events (authorized or not): updateLastSeen
+  // advances lastSeen to the real clock on each event.
   updateLastSeen(0);
   updateLastSeen(0);
-  // lastSeen avanzó por encima de 0.
-  assert.ok(getBridgeState().lastSeen > 0, 'lastSeen avanzó tras recibir eventos');
+  // lastSeen advanced above 0.
+  assert.ok(getBridgeState().lastSeen > 0, 'lastSeen advanced after receiving events');
 });
 
-// 2. Overflow: se descarta un evento legítimo -> se registra drop + pendingSince.
-t('overflow de cola ancla pendingSince + registra el drop (no se pierde)', () => {
+// 2. Overflow: a legitimate event is dropped -> drop + pendingSince are recorded.
+t('queue overflow anchors pendingSince + records the drop (not lost)', () => {
   _setBridgeStateForTest(fresh());
   const t0 = Math.floor(Date.now() / 1000);
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: t0, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false, delivery: {}});
-  // El legítimo se descarta por overflow: recordDropped + pendingSince anclado.
-  // (Simula exactamente lo que hace enqueueGiftWrap cuando la cola está llena.)
+  // The legitimate one is dropped by overflow: recordDropped + pendingSince anchored.
+  // (Simulates exactly what enqueueGiftWrap does when the queue is full.)
   recordDropped('legit-1');
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: t0, seenIds: [], pendingSince: t0,
     dropped: getBridgeState().dropped, droppedOverflow: false, delivery: {}});
-  // El cursor de la próxima suscripción se ancla a pendingSince, NO a lastSeen.
+  // The next subscription cursor anchors to pendingSince, NOT to lastSeen.
   const since = subscriptionSince(getBridgeState());
-  assert.ok(since <= t0 - 120 + 120, 'since anclado en pendingSince (no pasa el drop)');
-  assert.ok(getBridgeState().pendingSince != null, 'pendingSince activo');
-  assert.ok(getBridgeState().dropped.some(d => d.id === 'legit-1'), 'drop registrado');
+  assert.ok(since <= t0 - 120 + 120, 'since anchored to pendingSince (does not pass the drop)');
+  assert.ok(getBridgeState().pendingSince != null, 'pendingSince active');
+  assert.ok(getBridgeState().dropped.some(d => d.id === 'legit-1'), 'drop recorded');
 });
 
-// 3. Tras restart: el cursor NUNCA sobrepasa pendingSince mientras haya drops.
-t('restart: cursor no avanza por delante del drop pendiente (sin pérdida)', () => {
+// 3. After restart: the cursor NEVER passes pendingSince while there are drops.
+t('restart: cursor does not advance past the pending drop (no loss)', () => {
   _setBridgeStateForTest(fresh());
   const t0 = Math.floor(Date.now() / 1000);
-  // Estado persistido: lastSeen avanzó MUCHO por el flood de no autorizados,
-  // pero pendingSince está anclado al punto del drop del legítimo.
+  // Persisted state: lastSeen advanced a LOT due to the unauthorized flood,
+  // but pendingSince is anchored to the drop point of the legitimate one.
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: t0 + 5000, seenIds: [], pendingSince: t0,
     dropped: [{id: 'legit-2', ts: t0}], droppedOverflow: false, delivery: {}});
   const since = subscriptionSince(getBridgeState());
-  // pendingSince < lastSeen -> cursor usa pendingSince (no lastSeen).
-  assert.strictEqual(since, t0 - 120, 'since = pendingSince - 120 (el legítimo es alcanzable)');
-  assert.ok(since < t0 + 5000, 'el cursor NO se deja arrastrar por lastSeen del flood');
+  // pendingSince < lastSeen -> cursor uses pendingSince (not lastSeen).
+  assert.strictEqual(since, t0 - 120, 'since = pendingSince - 120 (the legitimate one is reachable)');
+  assert.ok(since < t0 + 5000, 'the cursor is NOT dragged by flood lastSeen');
 });
 
-// 4. Recuperación: cuando el legítimo se re-entrega (markSeen), el drop se
-//    limpia; solo entonces pendingSince se libera y el cursor vuelve al de
-//    PROCESAMIENTO (recoveryWatermark), no a lastSeen (recepción local).
-t('recovery: al re-ver el drop, pendingSince se libera y el cursor de procesamiento manda', () => {
+// 4. Recovery: when the legitimate one is re-delivered (markSeen), the drop is
+//    cleared; only then is pendingSince released and the cursor returns to the
+//    PROCESSING one (recoveryWatermark), not to lastSeen (local reception).
+t('recovery: when the drop is re-seen, pendingSince is released and the processing cursor wins', () => {
   _setBridgeStateForTest(fresh());
   const t0 = Math.floor(Date.now() / 1000);
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: t0 + 5000, seenIds: [], pendingSince: t0,
     dropped: [{id: 'legit-3', ts: t0}], droppedOverflow: false, recoveryWatermark: t0 + 5000, delivery: {}});
-  // El relay re-entrega legit-3 -> recoverDropped lo saca del ledger.
+  // The relay re-delivers legit-3 -> recoverDropped removes it from the ledger.
   recoverDropped('legit-3');
-  // Ya sin drops, releasePendingSinceIfRecovered libera el ancla.
+  // With no drops left, releasePendingSinceIfRecovered releases the anchor.
   releasePendingSinceIfRecovered();
-  assert.strictEqual(getBridgeState().pendingSince, null, 'pendingSince liberado al recuperar');
-  assert.strictEqual(getBridgeState().dropped.length, 0, 'ledger de drops vacío');
-  // Ahora el cursor vuelve al de PROCESAMIENTO (recoveryWatermark), que es la
-  // base correcta del `since` — NO lastSeen (recepción local manipulable).
+  assert.strictEqual(getBridgeState().pendingSince, null, 'pendingSince released upon recovery');
+  assert.strictEqual(getBridgeState().dropped.length, 0, 'drop ledger empty');
+  // Now the cursor returns to the PROCESSING one (recoveryWatermark), which is
+  // the correct basis for `since` — NOT lastSeen (manipulable local reception).
   const since = subscriptionSince(getBridgeState());
-  assert.strictEqual(since, (t0 + 5000) - 120, 'tras recuperar, since = recoveryWatermark - 120');
+  assert.strictEqual(since, (t0 + 5000) - 120, 'after recovery, since = recoveryWatermark - 120');
 });
 
-// 5. El caso que SÍ sería pérdida: si el cursor dependiera de lastSeen (recepción
-//    local manipulable por un flood de NO procesados), un evento recibido pero
-//    aún sin admitir podría quedar fuera del `since`. Con el cursor de
-//    PROCESAMIENTO (recoveryWatermark), un flood de recepción NO mueve el
-//    `since`, así que un legítimo pendiente sigue cubierto aunque lastSeen haya
-//    avanzado mucho por recepción cruda no-admitida.
-t('regresión: lastSeen (recepción) NO controla el since — recoveryWatermark (procesamiento) sí', () => {
+// 5. The case that WOULD be loss: if the cursor depended on lastSeen (local
+//    reception manipulable by a flood of UNPROCESSED events), an event received
+//    but not yet admitted could fall outside `since`. With the PROCESSING
+//    cursor (recoveryWatermark), a reception flood does NOT move `since`, so a
+//    legitimate pending event stays covered even though lastSeen advanced a
+//    lot via raw non-admitted reception.
+t('regression: lastSeen (reception) does NOT control since — recoveryWatermark (processing) does', () => {
   _setBridgeStateForTest(fresh());
   const t0 = Math.floor(Date.now() / 1000);
-  // Escenario: flood de recepción avanzó lastSeen MUCHO (t0+5000) pero NO se
-  // procesó nada (recoveryWatermark=0) -> el since NO debe saltar: queda null
-  // (full backlog) para que el relay re-entregue lo pendiente.
+  // Scenario: reception flood advanced lastSeen a LOT (t0+5000) but nothing
+  // was processed (recoveryWatermark=0) -> since must NOT jump: it stays null
+  // (full backlog) so the relay re-delivers what is pending.
   const stateNoProcess = {relay: 'ws://test.local', lastSeen: t0 + 5000, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false, recoveryWatermark: 0, delivery: {}};
   const sinceNoProcess = subscriptionSince(stateNoProcess);
   assert.strictEqual(sinceNoProcess, null,
-    'sin procesamiento confirmado, since=null (full backlog), lastSeen NO lo mueve');
-  // Escenario con procesamiento real: recoveryWatermark avanzó -> el since se
-  // ancla a él (el relay recorrió ese rango).
+    'without confirmed processing, since=null (full backlog), lastSeen does NOT move it');
+  // Scenario with real processing: recoveryWatermark advanced -> since anchors
+  // to it (the relay walked that range).
   const stateProcessed = {relay: 'ws://test.local', lastSeen: t0 + 5000, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false, recoveryWatermark: t0 + 5000, delivery: {}};
   const sinceProcessed = subscriptionSince(stateProcessed);
   assert.strictEqual(sinceProcessed, (t0 + 5000) - 120,
-    'con procesamiento confirmado, since = recoveryWatermark - 120');
+    'with confirmed processing, since = recoveryWatermark - 120');
 });
 
 // cleanup
