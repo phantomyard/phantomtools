@@ -249,7 +249,8 @@
                 "enum": [
                   "actor",
                   "role",
-                  "org"
+                  "org",
+                  "project"
                 ]
               },
               "owner": {
@@ -438,6 +439,10 @@
           }
         }
       }
+    },
+    "documents": {
+      "type": "object",
+      "description": "Opaque PhantomDocs namespace block (owned by phantomdocs, tolerated by PhantomOrg)"
     }
   }
 }
