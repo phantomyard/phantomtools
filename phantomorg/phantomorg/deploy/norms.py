@@ -101,7 +101,6 @@ def file_norms(
         if not lines:
             continue
         filed = 0
-        failed = False
         for line in lines:
             try:
                 proc = run(
@@ -117,17 +116,13 @@ def file_norms(
                     ]
                 )
             except (OSError, subprocess.SubprocessError, TimeoutError) as e:
-                result.errors.append(
-                    f"{actor_id}: could not run {phantombot_bin}: {e}"
-                )
-                failed = True
+                result.errors.append(f"{actor_id}: could not run {phantombot_bin}: {e}")
                 break
             if proc.returncode != 0:
                 err = (proc.stderr or proc.stdout or "").strip()
                 result.errors.append(
                     f"{actor_id}: norm filing failed ({proc.returncode}): {err}"
                 )
-                failed = True
                 break
             filed += 1
         if filed:

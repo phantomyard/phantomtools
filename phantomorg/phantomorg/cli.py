@@ -23,6 +23,7 @@ from .compiler import CompileError
 from .compiler import build as compiler_build
 from .compiler.phantomchat import verify_phantomchat
 from .compiler.telegram import TelegramError, verify_telegram
+from .deploy.norms import file_norms
 from .deploy.session import (
     ManifestError,
     RollbackError,
@@ -41,7 +42,6 @@ from .deploy.target import (
     default_personas_dir,
 )
 from .deploy.target import deploy as deploy_target
-from .deploy.norms import file_norms, NormFilingResult
 from .importer import audit_persona_dir, render_org_yaml_fragment, resolve_against_org
 from .spec.loader import OrgSpecError
 from .updater import run_update as run_updater

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from phantomorg.compiler import build
 from phantomorg.compiler.build import NORMS_FILENAME
-from phantomorg.deploy.norms import NormFilingResult, file_norms
+from phantomorg.deploy.norms import file_norms
 from phantomorg.validator import validate_org
 
 AU_ORG = Path(__file__).parent.parent / "organizations/verdant-aquaponics/org.yaml"
@@ -161,9 +161,7 @@ class TestFileNorms(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = _build_au(Path(tmp), only="dana")
             # Point at a binary that certainly does not exist.
-            result = file_norms(
-                out, phantombot_bin="definitely-not-a-real-binary-xyz"
-            )
+            result = file_norms(out, phantombot_bin="definitely-not-a-real-binary-xyz")
             self.assertEqual(result.filed, {})
             self.assertGreaterEqual(len(result.errors), 1)
             self.assertIn("definitely-not-a-real-binary-xyz", result.errors[0])
