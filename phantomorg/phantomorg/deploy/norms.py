@@ -23,7 +23,7 @@ module should pass ``--origin phantomorg``.
 from __future__ import annotations
 
 import json
-import subprocess
+import subprocess  # nosec B404 — fixed arg list, no shell (see _run_binary)
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
