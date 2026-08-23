@@ -158,6 +158,6 @@ def write_wrapper(path: str, content: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
     try:
-        os.chmod(path, 0o755)
+        os.chmod(path, 0o755)  # nosec B103 -- generated executable wrapper
     except OSError:
         pass
