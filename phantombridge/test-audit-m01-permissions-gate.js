@@ -58,7 +58,7 @@ t('HIGH FIX: permissions:{} (empty block) -> fail-closed, NOT legacy', () => {
   assert.strictEqual(evalP({}, 'alice', null), false, '{} room-agnostic denies');
 });
 
-t('full:[] -> deny (nadie tiene full)', () => {
+t('full:[] -> deny (nobody has full)', () => {
   assert.strictEqual(evalP({ full: [] }, 'alice', 'mia'), false);
   assert.strictEqual(evalP({ full: [] }, 'bob', null), false);
 });

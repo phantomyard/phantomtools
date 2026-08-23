@@ -65,7 +65,7 @@ function shouldSkipAsDelivered(id) {
   return isSeen(id) && deliveryStatus(id) === 'delivered';
 }
 
-assert.strictEqual(STATE_FILE, tmpState, 'STATE_FILE debe apuntar al temp');
+assert.strictEqual(STATE_FILE, tmpState, 'STATE_FILE must point to the temp');
 
 console.log('E2E crash/restart/replay (point 4 of the audit):');
 

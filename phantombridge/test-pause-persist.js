@@ -119,7 +119,7 @@ t('MIGRATION: missing PAUSE_FILE reads the legacy paused from the .bridge-state.
   const pauseFile = path.join(tmpDir, 'mig-pause.json'); // no existe
   const stateFile = path.join(tmpDir, 'mig-state.json');
   writeBridgeState(stateFile, {paused: {jitsi: true, nostr: false}});
-  const cfg = writeCfg(stateFile, pauseFile, 'jitsi'); // modo jitsi: bridgeState null
+  const cfg = writeCfg(stateFile, pauseFile, 'jitsi'); // jitsi mode: bridgeState null
   const out = runProbe(cfg, 'mig',
     "console.log('MIG nostr='+b.isPaused('nostr')+' jitsi='+b.isPaused('jitsi'));");
   assert.ok(out.includes('jitsi=true'), 'jitsi legacy must be migrated, got: ' + out.match(/MIG.*/));

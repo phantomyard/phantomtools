@@ -45,7 +45,7 @@ function resetState() {
 }
 
 // Guard: make sure the module actually loaded our temp path as STATE_FILE.
-assert.strictEqual(STATE_FILE, tmpState, 'STATE_FILE debe apuntar al temp para el test');
+assert.strictEqual(STATE_FILE, tmpState, 'STATE_FILE must point to the temp for the test');
 
 console.log('ALTO-3 + MEDIO-4 (delivery ledger transaccional):');
 

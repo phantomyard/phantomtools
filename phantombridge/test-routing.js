@@ -1,12 +1,12 @@
 process.umask(0o077);
-// Tests unitarios del routing DM↔DM (modo nostr) — sin relay, sin XMPP.
-// Uso: node test-routing.js
+// Unit tests for DM↔DM routing (nostr mode) — no relay, no XMPP.
+// Usage: node test-routing.js
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
 // The bridge.js module reads the config at require(). We create a test config
-// con nsec real para que nip19.decode no falle (modo nostr, sin XMPP).
+// with a real nsec so nip19.decode does not fail (nostr mode, no XMPP).
 const {generateSecretKey, getPublicKey, nip19} = require('nostr-tools');
 const TEST_NSEC = nip19.nsecEncode(generateSecretKey());
 process.env.PHANTOMBRIDGE_TEST_NSEC = TEST_NSEC;

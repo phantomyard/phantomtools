@@ -1,6 +1,6 @@
 process.umask(0o077);
-// E2E: bridge modo nostr (routing DM↔DM) — Carol -> bridge -> Dave
-// Uso: node e2e-nostr-test.js   (arranca relay local de prueba, corre todo, limpia)
+// E2E: bridge nostr mode (routing DM↔DM) — Carol -> bridge -> Dave
+// Usage: node e2e-nostr-test.js   (starts a local test relay, runs everything, cleans up)
 const {generateSecretKey, getPublicKey, nip19, SimplePool} = require('nostr-tools');
 const nip17 = require('nostr-tools/nip17');
 const fs = require('fs');

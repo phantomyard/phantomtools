@@ -177,7 +177,7 @@ function deriveRouting(org) {
 
 // Load + derive from orgFile.
 // Returns {agents, routing} on success, or throws a descriptive Error:
-//  - org.yaml AUSENTE  -> Error with .code='EMISSING' (legacy fallback to manual
+//  - org.yaml ABSENT   -> Error with .code='EMISSING' (legacy fallback to manual
 //    config.json routing is legitimate when the file simply isn't deployed).
 //  - org.yaml PRESENT but invalid/broken -> Error with .code='EINVALID'.
 //    This is FAIL-CLOSED: an invalid source of truth must NOT silently fall

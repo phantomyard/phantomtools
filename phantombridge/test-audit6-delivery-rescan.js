@@ -1,13 +1,13 @@
-// AUDIT-6 (MEDIO): el delivery ledger NO debe bloquear la admision para
-// siempre. Escenario del auditor: DELIVERY_MAX lleno de delivered protegidos
-// por watermark (lastSeen congelado por condicion de recuperacion) -> un
-// pending nuevo no puede entrar -> fail-closed correcto PERO si lastSeen no
-// avanza, es un DoS permanente de admision (aunque no haya perdida ni dup).
+// AUDIT-6 (MEDIUM): the delivery ledger must NOT block admission forever.
+// Auditor scenario: DELIVERY_MAX full of watermark-protected delivered entries
+// (lastSeen frozen by the recovery condition) -> a new pending cannot enter ->
+// correct fail-closed BUT if lastSeen never advances it is a permanent
+// admission DoS (even though nothing is lost or duplicated).
 //
-// El fix: DELIVERY_SOFT_LIMIT + requestDeliveryRescan() — al llegar al
-// soft-limit se fuerza limpieza agresiva y, si aun rechaza, se programa un
-// re-scan de la suscripcion para que el cursor avance y libere delivered ya
-// inalcanzables. Nunca se evicta delivered protegido ni pending vigente.
+// The fix: DELIVERY_SOFT_LIMIT + requestDeliveryRescan() — on reaching the
+// soft-limit an aggressive sweep is forced and, if still rejected, a
+// subscription re-scan is scheduled so the cursor advances and frees already
+// unreachable delivered entries. Protected delivered and live pending are never evicted.
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -76,8 +76,8 @@ t('re-scan: markDelivery rejected when full schedules re-scan (flag activates)',
 });
 
 t('re-scan: requestDeliveryRescan is invocable and does not throw if no connection', () => {
-  // En tests no hay subscribeIncoming corriendo -> reconnectIncoming sigue null;
-  // requestDeliveryRescan debe completar sin lanzar (warning, no crash).
+  // In tests no subscribeIncoming is running -> reconnectIncoming stays null;
+  // requestDeliveryRescan must complete without throwing (warning, no crash).
   requestDeliveryRescan();
   // We only require no exception; the flag marks that it was requested.
   assert.ok(true, 'requestDeliveryRescan does not throw without connection');

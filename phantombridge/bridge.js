@@ -74,9 +74,9 @@ const PAUSED = {
 const PAUSE_FILE = CONFIG.pauseFile || path.join(path.dirname(CONFIG_PATH), '.bridge-pause.json');
 
 // persistPause() — durable kill-switch. Same pattern as persistConfig():
-// escribir + fsync(fd) + close + rename + fsync del directorio padre.
-// DEVUELVE true/false para que setPaused() y el handler HTTP puedan
-// distinguir "pause aplicado y durable" de "pause solo en RAM".
+// write + fsync(fd) + close + rename + fsync of the parent directory.
+// RETURNS true/false so setPaused() and the HTTP handler can
+// distinguish "pause applied and durable" from "pause only in RAM".
 //
 // Key fix: the content is written with fs.writeSync(fd, ...) ON THE SAME
 // fd that was opened, so fs.fsyncSync(fd) syncs the descriptor that
@@ -828,13 +828,13 @@ function evictDeliveryLedger(aggressive) {
 const RESCAN_MIN_INTERVAL_MS = CONFIG.rescanMinIntervalMs || 5000;
 const RESCAN_MAX_BACKOFF_MS = CONFIG.rescanMaxBackoffMs || 60000;
 const RESCAN_MAX_PER_MINUTE = CONFIG.rescanMaxPerMinute || 6;
-// AUDIT-9 (MEDIO): el rescan debe DEMOSTRAR progreso. Un re-scan ciego que
+// AUDIT-9 (MEDIUM): a rescan must DEMONSTRATE progress. A blind re-scan that
 // reconnects without freeing the ledger (lastSeen does not advance / delivery
 // does not shrink) insists indefinitely on something that does not work. After
 // N consecutive rescans WITHOUT real progress, we enter BACKPRESSURE state
 // (rescanStalled=true): ALL rescans are suppressed until markDelivery / an
 // admitted event demonstrates real progress or a window cooldown expires.
-const RESCAN_MAX_STALLED = CONFIG.rescanMaxStalled || 3;   // rescans fallidos consecutivos -> BACKPRESSURE
+const RESCAN_MAX_STALLED = CONFIG.rescanMaxStalled || 3;   // consecutive failed rescans -> BACKPRESSURE
 const RESCAN_STALL_COOLDOWN_MS = CONFIG.rescanStallCooldownMs || (60 * 1000); // cooldown before retrying after stall
 let rescanStalled = false;          // explicit BACKPRESSURE: no progress, no more rescans
 let rescanStalledSince = 0;         // ms epoch when the stall was triggered (for the cooldown)
@@ -1087,7 +1087,7 @@ function deliveryStatus(id) {
 // promoted to `delivered` (idempotent, durable) exactly when the operation
 // completed, or stays `pending` (relay replay retries it) on failure, or is
 // removed (rejected=true) when the handler decided not to process it.
-// Without this, `status`/`help`/`join`/`leave`/`[sala]` etc. would leave a
+// Without this, `status`/`help`/`join`/`leave`/`[room]` etc. would leave a
 // permanent `pending` that is never deduplicated -> the same gift-wrap is
 // re-executed on every reconnect within the overlap window (spurious repeats;
 // state-mutating commands like join/leave run twice).
@@ -1216,7 +1216,7 @@ function listRecordings() {
   }
 }
 function formatRecordingsList(recs) {
-  if (Array.isArray(recs) && recs.length === 0) return 'No hay grabaciones en ' + RECORDINGS_DIR;
+  if (Array.isArray(recs) && recs.length === 0) return 'No recordings in ' + RECORDINGS_DIR;
   if (Array.isArray(recs)) {
     const lines = recs.map(r => {
       const mb = (r.size / 1048576).toFixed(1) + ' MB';
@@ -1224,9 +1224,9 @@ function formatRecordingsList(recs) {
       const url = mintDownloadUrl(r.name);
       return '- ' + r.name + ' (' + mb + ', ' + date + ')' + (url ? '\n  ' + url : '');
     });
-    return 'Grabaciones (' + recs.length + '):\n' + lines.join('\n');
+    return 'Recordings (' + recs.length + '):\n' + lines.join('\n');
   }
-  return 'Error leyendo grabaciones: ' + recs.error;
+  return 'Error reading recordings: ' + recs.error;
 }
 
 // ---------------------------------------------------------------------------
@@ -1408,8 +1408,8 @@ if (bridgeState && bridgeState.antiloop) {
   deserializeAntiloop(bridgeState.antiloop);
 }
 
-// --- Envelope de protocolo (norma v1.3) ------------------------------------
-// Formato: PRIMERA LÍNEA `[env] {json}` seguida del mensaje (F2-01: el
+// --- Protocol envelope (norma v1.3) ----------------------------------------
+// Format: FIRST LINE `[env] {json}` followed by the message (F2-01: the
 // bridge delivers the envelope as the real first line; the [from] goes after).
 // The bridge seals/validates it; the personas keep it when replying (norma).
 //
@@ -1465,10 +1465,10 @@ function renderEnvelope(env) {
   return ENVELOPE_MARKER + ' ' + JSON.stringify(env) + '\n';
 }
 
-// Extrae el request_id del texto (fallback best-effort para mensajes SIN
-// envelope; el rid del envelope tiene prioridad en antiLoopCheck — F2-04).
-// Misma regex que el cortocircuito. Solo para crear/rastrear, nunca para
-// autorizar: un rid de texto libre nunca debe poder contaminar el contador
+// Extracts the request_id from the text (best-effort fallback for messages WITHOUT
+// envelope; the envelope rid takes priority in antiLoopCheck — F2-04).
+// Same regex as the short-circuit. For create/track only, never for
+// authorizing: a free-text rid must never be able to pollute the counter
 // of a legitimate rid (that is why, if there is an envelope, ONLY env.rid is used).
 function extractRid(text) {
   const m = String(text).match(/([a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*-\d{8}-\d{4})/);
@@ -2183,7 +2183,7 @@ async function handleIncomingGiftWrap(giftWrap) {
     console.log('[nostr] DM from', senderName, ':', content.slice(0, 80));
     const cmd = content.trim().toLowerCase();
 
-    // --- Comandos comunes ---
+    // --- Common commands ---
     if (cmd === 'status' || cmd === 'help' || cmd === 'routes') {
       const ok = await publishDM(senderPk, buildHelp(senderName), 'Bridge').catch(err => { console.error('[bridge] DM failed:', err.message); return false; });
       // AUDIT-M01-OPCION2: status/help/routes are READ-only commands with
@@ -2209,7 +2209,7 @@ async function handleIncomingGiftWrap(giftWrap) {
       const recs = listRecordings();
       const reply = formatRecordingsList(recs);
       console.log('[recordings] listado pedido por', senderName, '->', reply.slice(0, 60));
-      const ok = await publishDM(senderPk, reply, 'Grabaciones').catch(err => { console.error('[recordings] DM failed:', err.message); return false; });
+      const ok = await publishDM(senderPk, reply, 'Recordings').catch(err => { console.error('[recordings] DM failed:', err.message); return false; });
       finishDelivery(giftWrap.id, !!ok, false);
       return;
     }
@@ -2280,19 +2280,19 @@ async function handleIncomingGiftWrap(giftWrap) {
 }
 
 function buildHelp(senderName) {
-  const lines = ['Bridge modo ' + MODE + '. Comandos:'];
+  const lines = ['Bridge mode ' + MODE + '. Commands:'];
   if (NOSTR_MODE) {
-    lines.push('  @agente texto        — enviar mensaje a otro agente');
+    lines.push('  @agent text          — send a message to another agent');
     const perms = routingPerms[senderName];
-    lines.push('  Puedes hablar con: ' + (perms ? perms.join(', ') : (routingDefault === 'allow' ? 'todos' : 'nadie (default deny)')));
+    lines.push('  You can talk to: ' + (perms ? perms.join(', ') : (routingDefault === 'allow' ? 'everyone' : 'nobody (default deny)')));
   }
   if (JITSI_MODE) {
     lines.push('  join [room]           — activate room');
     lines.push('  leave [room]          — deactivate room');
     lines.push('  [room] text           — send text to room');
-    lines.push('  grabaciones          — list recordings');
+    lines.push('  recordings           — list recordings');
   }
-  lines.push('  status                — este mensaje');
+  lines.push('  status                — this message');
   return lines.join('\n');
 }
 
@@ -2415,8 +2415,8 @@ for (const [room, agents] of Object.entries(CONFIG.roomAgents || {})) {
 //     (explicit allow-list, nothing else);
 //   - if NO `permissions` block is configured at all, fall back to the
 //     legacy behaviour (any authenticated agent) for backward compatibility.
-// AUDIT M01 (fail-closed, kaieriksen): distinguir "bloque permissions AUSENTE"
-// (legacy/open) de "bloque PRESENTE" (fail-closed por defecto). Un bloque
+// AUDIT M01 (fail-closed, kaieriksen): distinguish "permissions block ABSENT"
+// (legacy/open) from "block PRESENT" (fail-closed by default). A block
 // present but empty or malformed must NOT activate legacy: the operator who
 // wrote "permissions": {} expects "I granted nothing -> nobody operates",
 // and a "permissions" with an invalid shape (e.g. full: "alice" instead of
@@ -2995,7 +2995,7 @@ const server = http.createServer((req, res) => {
         const err = new Error('body too large (max ' + MAX_BODY + ' bytes)');
         err.statusCode = 413;
         reject(err);
-        req.pause(); // no destruir: la respuesta 413 debe llegar al cliente
+        req.pause(); // do not destroy: the 413 response must reach the client
         return;
       }
       body += c;
@@ -3073,7 +3073,7 @@ const server = http.createServer((req, res) => {
     const recs = listRecordings();
     if (!Array.isArray(recs)) {
       res.statusCode = 500;
-      return res.end(JSON.stringify({ok: false, error: (recs && recs.error) || 'error listando grabaciones'}));
+      return res.end(JSON.stringify({ok: false, error: (recs && recs.error) || 'error listing recordings'}));
     }
     recs.forEach(r => { r.url = mintDownloadUrl(r.name); });
     res.end(JSON.stringify({ok: true, recordings: recs}));
@@ -3116,7 +3116,7 @@ const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Content-Disposition', 'attachment; filename="' + name + '"');
     const stream = fs.createReadStream(full);
-    stream.on('error', () => { res.statusCode = 500; res.end('error leyendo archivo'); });
+    stream.on('error', () => { res.statusCode = 500; res.end('error reading file'); });
     stream.pipe(res);
   } else if (req.method === 'POST' && req.url === '/register') {
     if (!requireAdmin(req, res)) { req.pause(); return; }
@@ -3140,9 +3140,9 @@ const server = http.createServer((req, res) => {
         previousConfigAgents = CONFIG.roomAgents && Object.prototype.hasOwnProperty.call(CONFIG.roomAgents, room)
           ? [...CONFIG.roomAgents[room]] : null;
         previousTimeout = roomTimeouts.has(room) ? roomTimeouts.get(room) : null;
-        // agents=[] = modo broadcast (responder a todos): se borra del Map en
+        // agents=[] = broadcast mode (reply to all): removed from the Map at
         // runtime, but the empty entry IS PERSISTED in CONFIG so the
-        // broadcast sobreviva reinicios (comportamiento intencional).
+        // broadcast survives restarts (intentional behavior).
         if (agents.length === 0) roomAgents.delete(room);
         else roomAgents.set(room, agents);
         CONFIG.roomAgents = CONFIG.roomAgents || {};

@@ -125,25 +125,25 @@ t('pending reciente (dentro de TTL) NO expira', () => {
 });
 
 // ---- 🟠: cap fail-closed ----
-t('cap: no evicta delivered inmaduros y rechaza la admision (fail-closed)', () => {
+t('cap: immature delivered are not evicted and admission is rejected (fail-closed)', () => {
   _setBridgeStateForTest(freshState());
   const now = Math.floor(Date.now() / 1000);
-  // Llenar delivery solo con delivered INMADUROS (lastSeen==their ts, no avanzado)
+  // Fill delivery with IMMATURE delivered only (lastSeen==their ts, not advanced)
   const entry = {};
-  const t0 = now - 60; // todos recientes
+  const t0 = now - 60; // all recent
   for (let i = 0; i < 20000; i++) entry['d-' + i] = {status: 'delivered', ts: t0 + i};
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false, delivery: entry});
-  // Al admitir un nuevo pending: NO se evicta delivered inmaduro; en su lugar
-  // la admision se RECHAZA (fail-closed). El caller debe abortar el comando.
+  // On admitting a new pending: immature delivered is NOT evicted; instead
+  // admission is REJECTED (fail-closed). The caller must abort the command.
   const admitted = markDelivery('fresh', 'pending');
-  assert.strictEqual(admitted, false, 'admision rechazada cuando el ledger esta lleno de delivered inmaduros');
-  assert.strictEqual(deliveryStatus('fresh'), null, 'NO se admitio fresh (no hay entrada durable pending)');
-  // Los delivered inmaduros NO se evictan masivamente (fail-closed).
+  assert.strictEqual(admitted, false, 'admission rejected when the ledger is full of immature delivered');
+  assert.strictEqual(deliveryStatus('fresh'), null, 'fresh was NOT admitted (no durable pending entry)');
+  // Immature delivered is NOT mass-evicted (fail-closed).
   const st = bridge.getBridgeState().delivery;
   const delivCount = Object.keys(st).filter(k => st[k] && st[k].status === 'delivered').length;
-  assert.ok(delivCount > 10000, 'no se evictaron delivered inmaduros en masa (fail-closed), quedan ' + delivCount);
-  // Un delivered es admisible explicitamente aun lleno (replayer de delivered no bloquea).
+  assert.ok(delivCount > 10000, 'immature delivered was not mass-evicted (fail-closed), remaining ' + delivCount);
+  // A delivered is explicitly admissible even when full (delivered replayer does not block).
   const admittedDel = markDelivery('admin-1', 'delivered');
   assert.strictEqual(admittedDel, true, 'marcar delivered (finishDelivery) si se admite incluso sobre el cap');
 });
