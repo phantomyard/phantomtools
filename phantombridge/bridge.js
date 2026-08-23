@@ -1274,7 +1274,7 @@ if (DERIVED) {
 }
 
 // ---------------------------------------------------------------------------
-// Estado compartido
+// Shared state
 // ---------------------------------------------------------------------------
 const agentByName = new Map();    // name -> pubkey hex
 const agentByPubkey = new Map();  // pubkey hex -> name

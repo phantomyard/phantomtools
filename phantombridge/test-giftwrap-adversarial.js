@@ -18,7 +18,7 @@ const attackerPub = getPublicKey(attackerPriv);
 
 console.log('bridgePub      :', bridgePub.slice(0, 12) + '...');
 console.log('legit agent:', legitAgentPub.slice(0, 12) + '... (rumor will declare this one)');
-console.log('atacante       :', attackerPub.slice(0, 12) + '... (firma el seal/wrap)\n');
+console.log('attacker       :', attackerPub.slice(0, 12) + '... (signs the seal/wrap)\n');
 
 // 1) Rumor: kind 14, pubkey DECLARES being the legit agent
 const rumor = {
