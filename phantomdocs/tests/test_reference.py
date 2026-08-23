@@ -79,12 +79,19 @@ def test_add_by_reference_no_local_copy(tmp_path):
 
     r = _run(
         [
-            "add", "--ref", f"file://{ext}",
-            "--slug", "external.pdf",
-            "--category", "1",
-            "--owners", "ceo",
-            "--org-yaml", str(org),
-            "--root", root,
+            "add",
+            "--ref",
+            f"file://{ext}",
+            "--slug",
+            "external.pdf",
+            "--category",
+            "1",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--root",
+            root,
         ]
     )
     assert r.exit_code == 0, r.output

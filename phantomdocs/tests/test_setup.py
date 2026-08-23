@@ -165,7 +165,7 @@ def test_setup_unknown_actor_fails_closed(tmp_path, org_file):
 def test_setup_actor_without_inbox_renders_local_note(tmp_path):
     org_file = tmp_path / "org.yaml"
     no_inbox = ORG.replace(
-        "    alma: { name: \"AU Inbox/ALMAPONIA\", id: \"drive-id-123\" }\n",
+        '    alma: { name: "AU Inbox/ALMAPONIA", id: "drive-id-123" }\n',
         "",
     )
     org_file.write_text(no_inbox)

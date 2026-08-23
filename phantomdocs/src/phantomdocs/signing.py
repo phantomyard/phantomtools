@@ -53,7 +53,9 @@ def _bech32_expand(hrp: str) -> list[int]:
     return [ord(x) >> 5 for x in hrp] + [0] + [ord(x) & 31 for x in hrp]
 
 
-def _convertbits(data: list[int], frombits: int, tobits: int, pad: bool = True) -> list[int] | None:
+def _convertbits(
+    data: list[int], frombits: int, tobits: int, pad: bool = True
+) -> list[int] | None:
     acc = 0
     bits = 0
     ret: list[int] = []

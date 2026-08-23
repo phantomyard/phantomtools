@@ -249,7 +249,9 @@ def _gdrive_download(workspace_py: str, file_id: str) -> bytes:
         if proc.returncode != 0:
             detail = proc.stderr.strip()
             raise StorageError(
-                f"gdrive download failed: {detail}" if detail else "gdrive download failed"
+                f"gdrive download failed: {detail}"
+                if detail
+                else "gdrive download failed"
             )
         with open(tmp, "rb") as f:
             return f.read()
@@ -278,11 +280,11 @@ def read_reference(uri: str, workspace_py: str | None = None) -> tuple[bytes, di
     if workspace_py is None:
         workspace_py = os.environ.get("PHANTOMDOCS_WORKSPACE_PY", "workspace.py")
     if uri.startswith("gdrive://"):
-        file_id = uri[len("gdrive://"):]
+        file_id = uri[len("gdrive://") :]
         data = _gdrive_download(workspace_py, file_id)
         return data, {"backend": "gdrive", "ref": file_id}
     if uri.startswith("file://"):
-        path = uri[len("file://"):]
+        path = uri[len("file://") :]
         with open(path, "rb") as f:
             data = f.read()
         return data, {"backend": "file", "ref": path}
@@ -296,9 +298,15 @@ def read_reference(uri: str, workspace_py: str | None = None) -> tuple[bytes, di
         remote = parsed.path or ""
         proc = _run_checked(
             [
-                "ssh", "-p", str(parsed.port or 22),
-                "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                target, f"cat {remote}",
+                "ssh",
+                "-p",
+                str(parsed.port or 22),
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=10",
+                target,
+                f"cat {remote}",
             ]
         )
         if proc.returncode != 0:

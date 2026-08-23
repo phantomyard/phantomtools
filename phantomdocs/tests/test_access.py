@@ -57,11 +57,21 @@ def test_resolved_categories(tmp_path):
     org = _org(tmp_path)
     assert resolved_categories(org, "roberto") == ["category-1", "category-2"]
     assert resolved_categories(org, "elena") == [
-        "category-1", "category-2", "category-3"]
+        "category-1",
+        "category-2",
+        "category-3",
+    ]
     assert resolved_categories(org, "pepa") == [
-        "category-1", "category-2", "category-3", "category-4"]
+        "category-1",
+        "category-2",
+        "category-3",
+        "category-4",
+    ]
     assert resolved_categories(org, "alma") == [
-        "category-1", "category-2", "category-4-almaponia"]
+        "category-1",
+        "category-2",
+        "category-4-almaponia",
+    ]
     assert resolved_categories(org, "unknown") == []
 
 

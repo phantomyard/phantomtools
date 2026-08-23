@@ -166,8 +166,14 @@ def _require_acl(org_yaml: str | None, actor: str | None = None):
 
 
 def _audit(
-    root: str, actor: str, action: str, urn: str, mac: str, ch: str | None,
-    sig: str | None = None, sig_pubkey: str | None = None,
+    root: str,
+    actor: str,
+    action: str,
+    urn: str,
+    mac: str,
+    ch: str | None,
+    sig: str | None = None,
+    sig_pubkey: str | None = None,
 ) -> None:
     audit_append(root, actor, action, urn, mac, ch, sig, sig_pubkey)
 
@@ -245,7 +251,9 @@ def init(org: str, namespace: str, org_pubkey: str, root: str) -> None:
 )
 @click.option("--actor", default=None, help=_ACTOR_HELP)
 @click.option(
-    "--nsec-file", default=None, help="File containing the actor's nsec (issue #30 v2 signing)."
+    "--nsec-file",
+    default=None,
+    help="File containing the actor's nsec (issue #30 v2 signing).",
 )
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
 def mkdir(name, parent, category, owners, org_yaml, actor, nsec_file, root):
@@ -257,9 +265,7 @@ def mkdir(name, parent, category, owners, org_yaml, actor, nsec_file, root):
     actor_id, org = _require_acl(org_yaml, actor)
     category = normalize_category(category)
     if not can_write(org, actor_id, category, list(owners)):
-        raise click.ClickException(
-            f"denied: {actor_id} cannot write {category}"
-        )
+        raise click.ClickException(f"denied: {actor_id} cannot write {category}")
 
     # Load-modify-save under the inter-process lock: a concurrent `pd` must
     # not be able to interleave its load between our load and save (which
@@ -297,8 +303,14 @@ def mkdir(name, parent, category, owners, org_yaml, actor, nsec_file, root):
         manifest["nodes"].append(node)
         save(_manifest_path(root), manifest)
     _audit(
-        root, actor_id, "mkdir", urn, mac, None,
-        node.get("sig"), node.get("sigPubkey"),
+        root,
+        actor_id,
+        "mkdir",
+        urn,
+        mac,
+        None,
+        node.get("sig"),
+        node.get("sigPubkey"),
     )
     click.echo(f"created {path}")
     click.echo(f"  urn  {urn}")
@@ -325,17 +337,22 @@ def mkdir(name, parent, category, owners, org_yaml, actor, nsec_file, root):
     "--backend", default=None, help="Backend URI (local:// ssh:// gdrive://)."
 )
 @click.option(
-    "--ref", default=None,
+    "--ref",
+    default=None,
     help="Index an existing external object by reference "
     "(gdrive://<file_id>, file:///path, ssh://host/path) instead of "
     "ingesting a local file. Read to hash, but NOT copied.",
 )
 @click.option("--actor", default=None, help=_ACTOR_HELP)
 @click.option(
-    "--nsec-file", default=None, help="File containing the actor's nsec (issue #30 v2 signing)."
+    "--nsec-file",
+    default=None,
+    help="File containing the actor's nsec (issue #30 v2 signing).",
 )
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def add(path, ref, slug, category, folder, owners, org_yaml, actor, nsec_file, backend, root):
+def add(
+    path, ref, slug, category, folder, owners, org_yaml, actor, nsec_file, backend, root
+):
     """Ingest a document: compute MAC chain, store blob, register node.
 
     Access-controlled: requires --org-yaml + an authenticated OS identity; the
@@ -388,11 +405,9 @@ def add(path, ref, slug, category, folder, owners, org_yaml, actor, nsec_file, b
         # downgrade a document by passing a lower --category.
         if existing is not None:
             effective_category = existing["category"]
-            if (
-                category is not None
-                and normalize_category(category)
-                != normalize_category(effective_category)
-            ):
+            if category is not None and normalize_category(
+                category
+            ) != normalize_category(effective_category):
                 raise click.ClickException(
                     f"denied: cannot reclassify {urn} from "
                     f"{normalize_category(effective_category)} to "
@@ -420,7 +435,9 @@ def add(path, ref, slug, category, folder, owners, org_yaml, actor, nsec_file, b
             locations = [ref_location]
         else:
             location = _resolve_store(root, backend).put(ch, content)
-            scheme = backend.split("://")[0] if backend and "://" in backend else "local"
+            scheme = (
+                backend.split("://")[0] if backend and "://" in backend else "local"
+            )
             locations = [{"backend": scheme, "path": location}]
 
         node = {
@@ -444,8 +461,14 @@ def add(path, ref, slug, category, folder, owners, org_yaml, actor, nsec_file, b
         manifest["nodes"].append(node)
         save(_manifest_path(root), manifest)
     _audit(
-        root, actor_id, "add" if previous is None else "version", urn, mac, ch,
-        node.get("sig"), node.get("sigPubkey"),
+        root,
+        actor_id,
+        "add" if previous is None else "version",
+        urn,
+        mac,
+        ch,
+        node.get("sig"),
+        node.get("sigPubkey"),
     )
 
     verb = "added" if previous is None else "versioned"
@@ -574,7 +597,8 @@ def search(query, org_yaml, actor, root):
     "--backend", default=None, help="Backend URI (local:// ssh:// gdrive://)."
 )
 @click.option(
-    "--org-yaml", default=None,
+    "--org-yaml",
+    default=None,
     help="Optional PhantomOrg org.yaml to also check mutation signatures "
     "against declared actor npubs (issue #30 v2).",
 )
@@ -695,7 +719,9 @@ def verify(backend, org_yaml, root):
 )
 @click.option("--actor", default=None, help=_ACTOR_HELP)
 @click.option(
-    "--nsec-file", default=None, help="File containing the actor's nsec (issue #30 v2 signing)."
+    "--nsec-file",
+    default=None,
+    help="File containing the actor's nsec (issue #30 v2 signing).",
 )
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
 def tag(name, ref, org_yaml, actor, nsec_file, root):
@@ -719,8 +745,14 @@ def tag(name, ref, org_yaml, actor, nsec_file, root):
         save(_manifest_path(root), manifest)
     sig_fields = _sign_fields(_signing_key(nsec_file), node["mac"])
     _audit(
-        root, actor_id, "tag", node["urn"], node["mac"], node.get("contentHash"),
-        sig_fields.get("sig"), sig_fields.get("sigPubkey"),
+        root,
+        actor_id,
+        "tag",
+        node["urn"],
+        node["mac"],
+        node.get("contentHash"),
+        sig_fields.get("sig"),
+        sig_fields.get("sigPubkey"),
     )
     click.echo(f"{name} -> {display_id(node['mac'])}  ({node['urn']})")
 
@@ -802,7 +834,9 @@ def status(root):
 
 @main.command()
 @click.option(
-    "--org-yaml", required=True, help="PhantomOrg org.yaml (authoritative ACL + inboxes)."
+    "--org-yaml",
+    required=True,
+    help="PhantomOrg org.yaml (authoritative ACL + inboxes).",
 )
 @click.option(
     "--actor", required=True, help="Persona id to render the update package for."
@@ -813,7 +847,9 @@ def status(root):
     help="Persona installation root (contains kb/, MEMORY.md, tools/).",
 )
 @click.option("--namespace", default="docs", show_default=True, help="Namespace name.")
-@click.option("--org-pubkey", default="", help="Org Nostr pubkey (documented in Documents.md).")
+@click.option(
+    "--org-pubkey", default="", help="Org Nostr pubkey (documented in Documents.md)."
+)
 def setup(org_yaml, actor, persona_dir, namespace, org_pubkey):
     """Apply the §13 update package onto a persona installation.
 

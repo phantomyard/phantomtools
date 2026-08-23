@@ -102,7 +102,9 @@ def test_add_signs_node_and_verify_accepts(tmp_path, nsec_file):
 
     nsec_path, pubkey, _secret = nsec_file
     org = tmp_path / "org.yaml"
-    org.write_text(ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey))))
+    org.write_text(
+        ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey)))
+    )
 
     doc = tmp_path / "report.txt"
     doc.write_text("quarterly report")
@@ -110,16 +112,38 @@ def test_add_signs_node_and_verify_accepts(tmp_path, nsec_file):
     runner = CliRunner()
     # init
     r = runner.invoke(
-        main, ["init", "--org", "example-org", "--namespace", "docs", "--root", str(tmp_path)]
+        main,
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--root",
+            str(tmp_path),
+        ],
     )
     assert r.exit_code == 0, r.output
     # add (signed)
     r = runner.invoke(
         main,
         [
-            "add", str(doc), "--slug", "report", "--category", "category-2",
-            "--owners", "ceo", "--org-yaml", str(org), "--actor", "paco",
-            "--nsec-file", nsec_path, "--root", str(tmp_path),
+            "add",
+            str(doc),
+            "--slug",
+            "report",
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
         ],
     )
     assert r.exit_code == 0, r.output
@@ -131,9 +155,7 @@ def test_add_signs_node_and_verify_accepts(tmp_path, nsec_file):
     r = runner.invoke(main, ["verify", "--root", str(tmp_path)])
     assert r.exit_code == 0, r.output
     # verify with org-yaml -> declared-key check passes
-    r = runner.invoke(
-        main, ["verify", "--org-yaml", str(org), "--root", str(tmp_path)]
-    )
+    r = runner.invoke(main, ["verify", "--org-yaml", str(org), "--root", str(tmp_path)])
     assert r.exit_code == 0, r.output
 
 
@@ -144,30 +166,60 @@ def test_verify_flags_undeclared_signing_key(tmp_path, nsec_file):
     # org.yaml declares a DIFFERENT actor npub than the signing key
     other_pubkey = coincurve.PrivateKey().public_key.format()[1:33].hex()
     org = tmp_path / "org.yaml"
-    org.write_text(ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(other_pubkey))))
+    org.write_text(
+        ORG.replace(
+            "NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(other_pubkey))
+        )
+    )
 
     doc = tmp_path / "report.txt"
     doc.write_text("quarterly report")
 
     runner = CliRunner()
-    assert runner.invoke(
-        main, ["init", "--org", "example-org", "--namespace", "docs", "--root", str(tmp_path)]
-    ).exit_code == 0
-    assert runner.invoke(
-        main,
-        [
-            "add", str(doc), "--slug", "report", "--category", "category-2",
-            "--owners", "ceo", "--org-yaml", str(org), "--actor", "paco",
-            "--nsec-file", nsec_path, "--root", str(tmp_path),
-        ],
-    ).exit_code == 0
+    assert (
+        runner.invoke(
+            main,
+            [
+                "init",
+                "--org",
+                "example-org",
+                "--namespace",
+                "docs",
+                "--root",
+                str(tmp_path),
+            ],
+        ).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(
+            main,
+            [
+                "add",
+                str(doc),
+                "--slug",
+                "report",
+                "--category",
+                "category-2",
+                "--owners",
+                "ceo",
+                "--org-yaml",
+                str(org),
+                "--actor",
+                "paco",
+                "--nsec-file",
+                nsec_path,
+                "--root",
+                str(tmp_path),
+            ],
+        ).exit_code
+        == 0
+    )
 
     # verify without org-yaml: signature is cryptographically valid -> passes
     assert runner.invoke(main, ["verify", "--root", str(tmp_path)]).exit_code == 0
     # verify with org-yaml: signing key is NOT a declared actor -> fails
-    r = runner.invoke(
-        main, ["verify", "--org-yaml", str(org), "--root", str(tmp_path)]
-    )
+    r = runner.invoke(main, ["verify", "--org-yaml", str(org), "--root", str(tmp_path)])
     assert r.exit_code != 0
     assert "undeclared key" in r.output
 
@@ -175,23 +227,53 @@ def test_verify_flags_undeclared_signing_key(tmp_path, nsec_file):
 def test_unsigned_nodes_still_verify(tmp_path):
     """Without a nsec, mutations are unsigned and verify still passes (v1)."""
     org = tmp_path / "org.yaml"
-    org.write_text(ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex("ab" * 32))))
+    org.write_text(
+        ORG.replace(
+            "NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex("ab" * 32))
+        )
+    )
 
     doc = tmp_path / "report.txt"
     doc.write_text("quarterly report")
 
     runner = CliRunner()
-    assert runner.invoke(
-        main, ["init", "--org", "example-org", "--namespace", "docs", "--root", str(tmp_path)]
-    ).exit_code == 0
-    assert runner.invoke(
-        main,
-        [
-            "add", str(doc), "--slug", "report", "--category", "category-2",
-            "--owners", "ceo", "--org-yaml", str(org), "--actor", "paco",
-            "--root", str(tmp_path),
-        ],
-    ).exit_code == 0
+    assert (
+        runner.invoke(
+            main,
+            [
+                "init",
+                "--org",
+                "example-org",
+                "--namespace",
+                "docs",
+                "--root",
+                str(tmp_path),
+            ],
+        ).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(
+            main,
+            [
+                "add",
+                str(doc),
+                "--slug",
+                "report",
+                "--category",
+                "category-2",
+                "--owners",
+                "ceo",
+                "--org-yaml",
+                str(org),
+                "--actor",
+                "paco",
+                "--root",
+                str(tmp_path),
+            ],
+        ).exit_code
+        == 0
+    )
     r = runner.invoke(main, ["verify", "--root", str(tmp_path)])
     assert r.exit_code == 0, r.output
 
@@ -203,21 +285,46 @@ def test_sign_mutation_from_env(tmp_path):
     secret = coincurve.PrivateKey().secret.hex()
     pubkey = signing.pubkey_from_nsec(secret)
     org = tmp_path / "org.yaml"
-    org.write_text(ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey))))
+    org.write_text(
+        ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey)))
+    )
     doc = tmp_path / "report.txt"
     doc.write_text("quarterly report")
 
     runner = CliRunner()
-    assert runner.invoke(
-        main, ["init", "--org", "example-org", "--namespace", "docs", "--root", str(tmp_path)]
-    ).exit_code == 0
+    assert (
+        runner.invoke(
+            main,
+            [
+                "init",
+                "--org",
+                "example-org",
+                "--namespace",
+                "docs",
+                "--root",
+                str(tmp_path),
+            ],
+        ).exit_code
+        == 0
+    )
     env = dict(os.environ, PHANTOMDOCS_NSEC=secret)
     r = runner.invoke(
         main,
         [
-            "add", str(doc), "--slug", "report", "--category", "category-2",
-            "--owners", "ceo", "--org-yaml", str(org), "--actor", "paco",
-            "--root", str(tmp_path),
+            "add",
+            str(doc),
+            "--slug",
+            "report",
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--root",
+            str(tmp_path),
         ],
         env=env,
     )
