@@ -115,9 +115,9 @@ t('deliveryCount decreases -> progress -> rescan does not stall', async () => {
     pendingSince: now - 5, dropped: [], droppedOverflow: false,
     recoveryWatermark: now - 600,
     delivery: {
-      'X': {status: 'delivered', ts: now - 3600},   // expirable (watermark avanzado)
+      'X': {status: 'delivered', ts: now - 3600},   // expirable (advanced watermark)
       'Y': {status: 'delivered', ts: now - 3600},   // expirable
-      'Z': {status: 'pending', ts: now - 30},       // queda
+      'Z': {status: 'pending', ts: now - 30},       // stays
     }});
   requestDeliveryRescan();
   // The rescan frees 2 expirable delivered -> deliveryCount drops from 3 to 1.

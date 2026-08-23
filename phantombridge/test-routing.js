@@ -43,7 +43,7 @@ function t(name, fn) {
   catch (e) { failed++; console.error('  FAIL:', name, '-', e.message); }
 }
 
-// Permisos de prueba: carol puede hablar con dave/alice/bob; dave solo con carol
+// Test permissions: carol can talk to dave/alice/bob; dave only to carol
 const PERMS = {
   carol: ['dave', 'alice', 'bob'],
   dave: ['carol'],
@@ -51,52 +51,52 @@ const PERMS = {
 };
 
 console.log('parseRouteTarget:');
-t('"@dave texto" -> {to: dave, text: texto}', () => {
+t('"@dave text" -> {to: dave, text: text}', () => {
   const r = parseRouteTarget('@dave REQUEST example-org-20250101-0003');
   assert.strictEqual(r.to, 'dave');
   assert.strictEqual(r.text, 'REQUEST example-org-20250101-0003');
 });
-t('"@bob hola" -> to bob', () => {
+t('"@bob hello" -> to bob', () => {
   const r = parseRouteTarget('@bob hola mundo');
   assert.strictEqual(r.to, 'bob');
   assert.strictEqual(r.text, 'hola mundo');
 });
-t('"texto sin @ no es ruta"', () => {
+t('"text without @ is not a route"', () => {
   assert.strictEqual(parseRouteTarget('hola mundo'), null);
 });
-t('"@dave" sin texto no es ruta', () => {
+t('"@dave" without text is not a route', () => {
   assert.strictEqual(parseRouteTarget('@dave'), null);
 });
-t('"@DAVE texto" case-insensitive', () => {
+t('"@DAVE text" case-insensitive', () => {
   const r = parseRouteTarget('@DAVE texto');
   assert.strictEqual(r.to, 'dave');
 });
-t('"@dave texto con [sala] dentro"', () => {
+t('"@dave text with [room] inside"', () => {
   const r = parseRouteTarget('@dave [sala] hola');
   assert.strictEqual(r.to, 'dave');
   assert.strictEqual(r.text, '[sala] hola');
 });
 
 console.log('routingAllowed:');
-t('carol -> dave permitido', () => {
+t('carol -> dave allowed', () => {
   assert.strictEqual(routingAllowed('carol', 'dave', PERMS, 'deny'), true);
 });
-t('carol -> erin NO permitido (sin regla, default deny)', () => {
+t('carol -> erin NOT allowed (no rule, default deny)', () => {
   assert.strictEqual(routingAllowed('carol', 'erin', PERMS, 'deny'), false);
 });
-t('dave -> carol permitido', () => {
+t('dave -> carol allowed', () => {
   assert.strictEqual(routingAllowed('dave', 'carol', PERMS, 'deny'), true);
 });
-t('dave -> alice NO permitido', () => {
+t('dave -> alice NOT allowed', () => {
   assert.strictEqual(routingAllowed('dave', 'alice', PERMS, 'deny'), false);
 });
-t('alice -> cualquiera permitido (wildcard *)', () => {
+t('alice -> anyone allowed (wildcard *)', () => {
   assert.strictEqual(routingAllowed('alice', 'erin', PERMS, 'deny'), true);
 });
-t('self -> self siempre denegado', () => {
+t('self -> self always denied', () => {
   assert.strictEqual(routingAllowed('carol', 'carol', PERMS, 'allow'), false);
 });
-t('sin regla + default allow -> permitido', () => {
+t('no rule + default allow -> allowed', () => {
   assert.strictEqual(routingAllowed('erin', 'dave', PERMS, 'allow'), true);
 });
 t('empty permissions + default deny -> denied', () => {

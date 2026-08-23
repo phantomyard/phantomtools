@@ -1,14 +1,14 @@
-// Test adversarial M-NEW: gift-wrap con rumor.pubkey != seal.pubkey
-// nostr-tools 2.24.1: unwrapEvent descifra el seal con la clave de conversacion
-// derivada de seal.pubkey y devuelve el rumor con su pubkey interno SIN compararlo
-// con quien firmo el seal. Verificamos si el bridge aceptaria un DM suplantado.
+// Test adversarial M-NEW: gift-wrap with rumor.pubkey != seal.pubkey
+// nostr-tools 2.24.1: unwrapEvent decrypts the seal with the conversation key
+// derived from seal.pubkey and returns the rumor with its internal pubkey WITHOUT comparing it
+// against whoever signed the seal. We verify whether the bridge would accept an impersonated DM.
 const {generateSecretKey, getPublicKey, finalizeEvent} = require('nostr-tools');
 const nip44 = require('nostr-tools/nip44');
 const {unwrapEvent} = require('nostr-tools/nip17');
 
 console.log('nostr-tools 2.24.1 — test adversarial rumor.pubkey != seal.pubkey\n');
 
-// Claves
+// Keys
 const bridgePriv = generateSecretKey();
 const bridgePub = getPublicKey(bridgePriv);
 const legitAgentPriv = generateSecretKey();
@@ -50,7 +50,7 @@ const wrap = finalizeEvent({
 console.log('seal.pubkey (firmante real del seal):', seal.pubkey.slice(0, 12) + '...');
 console.log('wrap.pubkey (firmante del wrap)     :', wrap.pubkey.slice(0, 12) + '...');
 
-// 4) El bridge descifra con bridgePriv (lo que hace handleIncomingGiftWrap)
+// 4) The bridge decrypts with bridgePriv (what handleIncomingGiftWrap does)
 let unwrapped;
 try {
   unwrapped = unwrapEvent(wrap, bridgePriv);

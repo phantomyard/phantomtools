@@ -70,8 +70,8 @@ t('migration: legacy format (strings) works', () => {
   const raw = ['x', 'y'];
   const seenIds = raw.map(e => (typeof e === 'string' ? {id: e, ts: 0} : e));
   const bs = {seenIds};
-  // legacy entries ts=0: isSeen los trata via includes() fallback solo si
-  // no matchean el rango temporal — con ts=0 y (now-0)>180, no cuentan
+  // legacy entries ts=0: isSeen handles them via the includes() fallback only if
+  // they do not match the temporal range — with ts=0 and (now-0)>180, they do not count
   assert.strictEqual(bs.seenIds.length, 2);
 });
 t('markSeen idempotent: does not duplicate a recent id', () => {

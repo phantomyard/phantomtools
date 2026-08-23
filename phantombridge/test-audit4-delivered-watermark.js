@@ -84,7 +84,7 @@ t('delivered only expires by watermark (recoveryWatermark advanced past it)', ()
   const tX = now - 3600;
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now - 600, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false,
-    recoveryWatermark: now - 600, // procesado hasta hace 10 min
+    recoveryWatermark: now - 600, // processed up to 10 min ago
     delivery: {'X': {status: 'delivered', ts: tX}}});
   markDelivery('Y', 'pending');
   assert.strictEqual(deliveryStatus('X'), null, 'delivered with recoveryWatermark far ahead -> expires (watermark met)');
@@ -111,17 +111,17 @@ t('pending expires by TTL wall-clock (PENDING_TTL_SECS)', () => {
     dropped: [], droppedOverflow: false,
     delivery: {'P': {status: 'pending', ts: now - 25 * 3600}}});
   markDelivery('Y', 'delivered');
-  assert.strictEqual(deliveryStatus('P'), null, 'pending viejo (>TTL) expira');
+  assert.strictEqual(deliveryStatus('P'), null, 'old pending (>TTL) expires');
 });
 
-t('pending reciente (dentro de TTL) NO expira', () => {
+t('recent pending (within TTL) does NOT expire', () => {
   _setBridgeStateForTest(freshState());
   const now = Math.floor(Date.now() / 1000);
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now, seenIds: [], pendingSince: null,
     dropped: [], droppedOverflow: false,
     delivery: {'P2': {status: 'pending', ts: now - 3600}}});
   markDelivery('Y', 'delivered');
-  assert.strictEqual(deliveryStatus('P2'), 'pending', 'pending reciente se conserva');
+  assert.strictEqual(deliveryStatus('P2'), 'pending', 'recent pending is kept');
 });
 
 // ---- 🟠: cap fail-closed ----

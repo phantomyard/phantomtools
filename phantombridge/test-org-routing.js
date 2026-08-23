@@ -10,7 +10,7 @@ const os = require('os');
 const {generateSecretKey, getPublicKey, nip19} = require('nostr-tools');
 
 // ---------------------------------------------------------------------------
-// Fixture: estructura de Example Org (flow-maps YAML como org.yaml real)
+// Fixture: Example Org structure (flow-maps YAML like a real org.yaml)
 // ---------------------------------------------------------------------------
 const HEX = {
   alice: '1111111111111111111111111111111111111111111111111111111111111111',

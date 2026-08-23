@@ -28,7 +28,7 @@ versioned: the `config.json.bak` files contain secrets).
   - `POST /pause {side: jitsi|nostr|both, paused: bool}` — **per-side kill-switch**: pause/resume the Jitsi and/or Nostr side independently. nostr paused = agent DMs are silently ignored (bots get no replies → no token burn); jitsi paused = rooms are left and commands answer "paused". `config.paused` sets the initial state at startup.
   - `GET /status` — rooms, nicks, agents, XMPP state, **paused state**
   - `GET /recordings` / `GET /recordings/:name` — list/download recordings
-    (both require the **admin token** — AUDIT M05 BLOQUEANTE 1; the listing no
+    (both require the **admin token** — AUDIT M05 BLOCKING 1; the listing no
     longer hands out signed download URLs anonymously; path-traversal guarded).
 - **Agent DMs** (NIP-17 gift-wrap to the bridge): `join [room]`,
   `leave [room]`, `[room] text` (injects the message into the room),
@@ -565,20 +565,20 @@ Test: `node test-org-routing.js` (15 tests: unit + bridge integration).
     NOT legacy — only an *absent* block keeps legacy behaviour. New pure
     `evalRoomPermission(permConfig, sender, room)` export makes the permission
     matrix directly testable.
-  - **M01 BLOQUEANTE 2 (no-loss)**: `recoveryWatermark` no longer advances
+  - **M01 BLOCKING 2 (no-loss)**: `recoveryWatermark` no longer advances
     before the M01 authorization gate. It now moves only inside
     `finishDelivery(ok=true)` / routing-success, i.e. after a command passed
     auth + M01 + succeeded. A `created_at` more than 24h ahead of the local
     clock is ignored (fail-safe against fabricated future stamps that could
     evict still-recoverable delivered messages).
-  - **M04 cola envenenada (ALTO)**: `persistConfig()` no longer leaves
+  - **M04 poisoned queue (ALTO)**: `persistConfig()` no longer leaves
     `writeConfigChain` permanently rejected after one I/O failure — the caller
     gets the real promise (can act on the error) while the chain stays
     recoverable via `.catch(() => {})`.
-  - **M04 durabilidad (fsync)**: config writes now fsync the file contents
+  - **M04 durability (fsync)**: config writes now fsync the file contents
     AND the parent directory after rename, so the write survives crash/
     power-loss (not just atomic rename).
-  - **M05 BLOQUEANTE 1**: `GET /recordings` now requires the admin token
+  - **M05 BLOCKING 1**: `GET /recordings` now requires the admin token
     (fail-closed) — it no longer hands out anonymous expiring signed download
     URLs that bypassed the `/recordings/:name` admin gate.
   - **Tests adversariales reales**: `test-audit-m01-blocker2-watermark-gate.js`

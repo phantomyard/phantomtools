@@ -116,7 +116,7 @@ t('NOSTR: pause restored from PAUSE_FILE in nostr mode', () => {
 
 // --- Legacy migration: v1 wrote paused inside .bridge-state.json (without PAUSE_FILE) ---
 t('MIGRATION: missing PAUSE_FILE reads the legacy paused from the .bridge-state.json', () => {
-  const pauseFile = path.join(tmpDir, 'mig-pause.json'); // no existe
+  const pauseFile = path.join(tmpDir, 'mig-pause.json'); // does not exist
   const stateFile = path.join(tmpDir, 'mig-state.json');
   writeBridgeState(stateFile, {paused: {jitsi: true, nostr: false}});
   const cfg = writeCfg(stateFile, pauseFile, 'jitsi'); // jitsi mode: bridgeState null
@@ -133,7 +133,7 @@ t('MIGRATION: missing PAUSE_FILE reads the legacy paused from the .bridge-state.
 t('without PAUSE_FILE nor legacy paused -> both sides unpaused (default)', () => {
   const pauseFile = path.join(tmpDir, 'none-pause.json');
   const stateFile = path.join(tmpDir, 'none-state.json');
-  writeBridgeState(stateFile); // sin campo paused
+  writeBridgeState(stateFile); // no paused field
   const cfg = writeCfg(stateFile, pauseFile, 'nostr');
   const out = runProbe(cfg, 'none');
   assert.ok(out.includes('nostr=false jitsi=false'), 'both unpaused, got: ' + out.match(/PROBE.*/));
@@ -236,13 +236,13 @@ t('fsync(dir) injection: if the directory fsync fails, persistPause()=false and 
   assert.ok(out.includes('ramNostr=true'), 'the side stays paused in RAM (fail-closed), got: ' + out.match(/DIRSYNC.*/));
 });
 
-// --- [1 BLOQUEANTE] Fail-closed on a corrupt PAUSE_FILE: a file that EXISTS
+// --- [1 BLOCKING] Fail-closed on a corrupt PAUSE_FILE: a file that EXISTS
 // but is unreadable/broken JSON/invalid schema must ABORT startup (throw),
 // NEVER start unpaused assuming CONFIG.paused default. ---
-t('[BLOQUEANTE] corrupt PAUSE_FILE (invalid JSON) -> loadPause() throws, the bridge does NOT start unpaused', () => {
+t('[BLOCKING] corrupt PAUSE_FILE (invalid JSON) -> loadPause() throws, the bridge does NOT start unpaused', () => {
   const pauseFile = path.join(tmpDir, 'corrupt-pause.json');
   const stateFile = path.join(tmpDir, 'corrupt-state.json');
-  fs.writeFileSync(pauseFile, '{esto no es json'); // existente pero corrupto
+  fs.writeFileSync(pauseFile, '{esto no es json'); // existing but corrupt
   writeBridgeState(stateFile);
   const cfg = writeCfg(stateFile, pauseFile, 'nostr');
   // The bridge require invokes loadPause() at startup; we expect it to blow up.
@@ -255,8 +255,8 @@ t('[BLOQUEANTE] corrupt PAUSE_FILE (invalid JSON) -> loadPause() throws, the bri
     'the error must be unambiguous, got: ' + String(loadError.stderr || loadError.message).split('\n')[0]);
 });
 
-// --- [1 BLOQUEANTE] Invalid schema but valid JSON -> equally fatal. ---
-t('[BLOQUEANTE] PAUSE_FILE with invalid schema (missing jitsi/nostr boolean) -> throws', () => {
+// --- [1 BLOCKING] Invalid schema but valid JSON -> equally fatal. ---
+t('[BLOCKING] PAUSE_FILE with invalid schema (missing jitsi/nostr boolean) -> throws', () => {
   const pauseFile = path.join(tmpDir, 'schema-pause.json');
   const stateFile = path.join(tmpDir, 'schema-state.json');
   fs.writeFileSync(pauseFile, JSON.stringify({jitsi: 'true', nostr: 0}, null, 2)); // tipos incorrectos

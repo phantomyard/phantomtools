@@ -109,7 +109,7 @@ function persistPause() {
       const dirFd = fs.openSync(path.dirname(PAUSE_FILE), 'r');
       try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
     } catch (e) {
-      // Fail-closed: el contrato de persistPause() es `true = pause
+      // Fail-closed: the persistPause() contract is `true = pause
       // durable`. If the directory fsync could not be performed (FS that does
       // not support syncing directories: Windows, certain overlays), the rename
       // might not be durable on an immediate crash -> we CANNOT claim
@@ -306,7 +306,7 @@ const DELIVERED_WATERMARK_MARGIN_SECS = 120; // extra margin over STATE_OVERLAP_
 // it stays consistent with the replay overlap (STATE_OVERLAP_SECS).
 const RECOVERY_WATERMARK_STEP_SECS = CONFIG.recoveryWatermarkStepSecs || 300; // 5 min per processed event
 const DELIVERY_MAX = 10000;             // hard cap of the durable delivery ledger
-const DELIVERY_SOFT_LIMIT = Math.floor(DELIVERY_MAX * 0.9); // AUDIT-6: umbral de limpieza agresiva + re-scan
+const DELIVERY_SOFT_LIMIT = Math.floor(DELIVERY_MAX * 0.9); // AUDIT-6: aggressive cleanup threshold + re-scan
 let backpressureRejected = 0;           // AUDIT-5: rejected-admission counter (fail-closed)
 const nostrQueue = [];          // gift-wraps waiting to be processed
 let nostrInflight = 0;          // gift-wraps mid-handleIncomingGiftWrap
@@ -442,7 +442,7 @@ function loadState() {
       const raw = Array.isArray(s.seenIds) ? s.seenIds : [];
       const seenIds = raw.map(e => (typeof e === 'string' ? {id: e, ts: 0} : e));
       bridgeState = {relay: s.relay, lastSeen: s.lastSeen, seenIds, antiloop: s.antiloop || null, pendingSince: (typeof s.pendingSince === 'number' ? s.pendingSince : null), dropped: Array.isArray(s.dropped) ? s.dropped.filter(d => d && d.id) : [], droppedOverflow: !!s.droppedOverflow, recoveryWatermark: (typeof s.recoveryWatermark === 'number' ? s.recoveryWatermark : s.lastSeen), delivery: (s.delivery && typeof s.delivery === 'object') ? s.delivery : {}};
-      // AUDIT-13: contador incremental — inicializar al cargar estado (tras
+      // AUDIT-13: incremental counter — initialize on state load (after
       // restart, without this deliverySize would stay 0 and markDelivery would use a
       // wrong size for the soft-limit/cap).
       deliverySize = bridgeState.delivery ? Object.keys(bridgeState.delivery).length : 0;
@@ -695,7 +695,7 @@ function nowSec() {
 // expire by wall clock (PENDING_TTL_SECS): a pending that never finishes
 // indicates a crash mid-operation, and the relay re-delivers it on
 // resume (no replay risk as with delivered). The guarantee is
-// distinta y por eso el TTL es distinto.
+// different, which is why the TTL is different.
 //
 // Fail-closed cap (AUDIT-4, MEDIUM): DELIVERY_MAX bounds the state against the
 // I/O DoS, but NEVER silently evicts a `delivered` still
@@ -808,7 +808,7 @@ function evictDeliveryLedger(aggressive) {
 // though there is NO duplicate message or loss. This flag activates when normal
 // cleanup does not free enough space and we are in backpressure, requesting a
 // re-scan/retry so the cursor advances and frees already-unreachable delivered.
-// libere delivered ya inalcanzables.
+// frees already-unreachable delivered entries.
 // AUDIT-8 (MEDIUM): the recovery rescan must NOT become a reconnection loop
 // against the relay/process. If the ledger stays full (lastSeen does not advance)
 // and every rejected event re-invokes requestDeliveryRescan(), we would get
@@ -917,7 +917,7 @@ function requestDeliveryRescan() {
   // which recomputes the cursor (anchored to pendingSince if there are drops) and re-scans.
   // AUDIT-9 (MEDIUM): record state BEFORE emitting, so we can measure
   // progress after reconnection: recoveryWatermark, ledger size and the
-  // conjunto de drops pendientes.
+  // set of pending drops.
   const beforeWatermark = bridgeState ? (bridgeState.recoveryWatermark || 0) : 0;
   const beforeDeliveryCount = bridgeState ? deliverySize : 0;
   const beforeDropped = new Set((bridgeState && bridgeState.dropped)
@@ -940,7 +940,7 @@ function requestDeliveryRescan() {
       reconnectIncoming();
       reconnected = true;
     } else {
-      console.warn('[nostr] re-scan solicitado pero la conexion de suscripcion no esta iniciada');
+      console.warn('[nostr] re-scan requested but the subscription connection is not started');
     }
     // AUDIT-9 (MEDIUM): the subscription restart processes the backlog
     // asynchronously (onmessage -> enqueue/markDelivery). Real progress is
@@ -1071,7 +1071,7 @@ function markDelivery(id, status, createdAt) {
   if (rescanStalled) {
     rescanStalled = false;
     rescanStalledSince = 0;
-    console.log('[nostr] BACKPRESSURE levantado: admision en el ledger (progreso real)');
+    console.log('[nostr] BACKPRESSURE lifted: admission in the ledger (real progress)');
   }
   rescanAttempts = 0;
   return true;
@@ -1542,7 +1542,7 @@ function traceHasEdge(trace, from, to) {
   return false;
 }
 
-// --- Huella de contenido (F2-05) --------------------------------------------
+// --- Content fingerprint (F2-05) --------------------------------------------
 // The classic dedup (djb2 of exact text) dies against a non-cooperative bot
 // that STRIPS the envelope and re-publishes with a new rid and slightly
 // reformatted/paraphrased text: the hash changes even though the content is
@@ -1558,8 +1558,8 @@ function traceHasEdge(trace, from, to) {
 //      LLM loop rewriting the message). Unigrams: robust to reordering
 //      and light rewording in short messages (bigrams dropped to
 //      Jaccard < 0.5 by just reordering two words). Conservative default
-//      threshold (0.85): "confirma la reunion manana" vs "confirma la
-//      reunion hoy" give 0.6 -> not dropped.
+//      threshold (0.85): "confirm the meeting tomorrow" vs "confirm the
+//      meeting today" give 0.6 -> not dropped.
 //
 // IMPORTANT: the fingerprint is computed over the CONTENT (envelope rest if
 // present) with request_ids REMOVED (they are protocol metadata, not
@@ -1665,11 +1665,11 @@ function antiLoopCheck(fromName, toName, text) {
     const env = parsed.env;
     if (env.expires && now > env.expires) {
       ANTILOOP.dropped.expired++;
-      return {ok: false, reason: 'expired', detail: 'envelope caducado (' + new Date(env.expires).toISOString() + ')'};
+      return {ok: false, reason: 'expired', detail: 'envelope expired (' + new Date(env.expires).toISOString() + ')'};
     }
     if (env.hops >= ANTILOOP.maxHops) {
       ANTILOOP.dropped.hops++;
-      return {ok: false, reason: 'hops', detail: 'envelope supera max_hops=' + ANTILOOP.maxHops + ' (hops=' + env.hops + ')'};
+      return {ok: false, reason: 'hops', detail: 'envelope exceeds max_hops=' + ANTILOOP.maxHops + ' (hops=' + env.hops + ')'};
     }
     if (traceHasEdge(env.trace, fromName, toName)) {
       ANTILOOP.dropped.cycle++;
@@ -1940,7 +1940,7 @@ async function publishDMWithKey(secretKey, recipientPk, content, title) {
     };
     ws.onopen = () => {
       // Do not send the EVENT here: wait to see if the relay asks for AUTH.
-      // Si en 800ms no llega AUTH, publicar directo (relay abierto).
+      // If no AUTH arrives within 800ms, publish directly (open relay).
       setTimeout(() => { if (!sent) sendEvent(); }, 800);
     };
     ws.onmessage = (e) => {
@@ -2027,7 +2027,7 @@ function subscribeIncoming() {
         const batch = droppedIds.slice(i, i + BATCH);
         ws.send(JSON.stringify(['REQ', 'bridge-in-byid-' + i, {ids: batch, kinds: [1059]}]));
       }
-      console.log('[nostr] fetch puntual por id de', droppedIds.length, 'drop(s) pendiente(s)');
+      console.log('[nostr] point fetch by id of', droppedIds.length, 'pending drop(s)');
     }
   };
   let authSent = false;
@@ -2235,7 +2235,7 @@ async function handleIncomingGiftWrap(giftWrap) {
       const leaveM = content.match(/^leave(?:\s+(\[[^\]]+\]|\S+))?/i);
       if (joinM || leaveM) {
         if (!handleJoinLeaveFn) {
-          console.log('[nostr] handleJoinLeave no disponible (jitsi no iniciado)');
+          console.log('[nostr] handleJoinLeave unavailable (jitsi not started)');
           finishDelivery(giftWrap.id, false, true);
           return;
         }
@@ -2594,7 +2594,7 @@ if (JITSI_MODE) {
         roomOccupants.set(room, occ);
       }
       if (stanza.attrs.type === 'error') {
-        console.error('[xmpp] ERROR presence en', from, '->', (stanza.getChild('error')||{}).getChildText ? '' : '');
+        console.error('[xmpp] ERROR presence at', from, '->', (stanza.getChild('error')||{}).getChildText ? '' : '');
         const errEl = stanza.getChild('error');
         if (errEl) console.error('[xmpp]   condition:', errEl.getChildText && (errEl.getChildText('item-not-found') || errEl.getChildText('not-allowed') || errEl.getChildText('forbidden') || errEl.getChildText('conflict')) || '(see stanza)');
         if (rooms.has(room)) {
@@ -2752,7 +2752,7 @@ if (JITSI_MODE) {
 // ---------------------------------------------------------------------------
 // persistConfig — serialized atomic writer for the config file.
 // ---------------------------------------------------------------------------
-// AUDIT kaieriksen M04 (🔴 BLOQUEANTE): `/register` y `persistRoomTimeout`
+// AUDIT kaieriksen M04 (🔴 BLOCKING): `/register` and `persistRoomTimeout`
 // wrote CONFIG_PATH+'.tmp' with writeFileSync+renameSync WITHOUT serializing.
 // Two concurrent HTTP requests (or /register + a join with timeout) could use
 // the same `.tmp`, and a rename of one overwrote the other's temp/destination
@@ -2985,7 +2985,7 @@ function requireAdmin(req, res) {
 
 const server = http.createServer((req, res) => {
   res.setHeader('Content-Type', 'application/json');
-  const MAX_BODY = 64 * 1024; // 64KB: payloads diminutos ({room,nick,...}) — evita DoS por cuerpo grande (hallazgo Copilot 5)
+  const MAX_BODY = 64 * 1024; // 64KB: tiny payloads ({room,nick,...}) — avoids DoS from an oversized body (Copilot finding 5)
   const readBody = () => new Promise((resolve, reject) => {
     let body = '';
     let size = 0;
@@ -3003,8 +3003,8 @@ const server = http.createServer((req, res) => {
     req.on('error', (err) => { err.statusCode = 400; reject(err); });
     req.on('end', () => resolve(body));
   });
-  // Cierra la promesa de readBody ante error de stream/oversize: sin esto, un
-  // reject quedaba como unhandled rejection y mataba el proceso.
+  // Close the readBody promise on stream/oversize error: without this, a
+  // reject would linger as an unhandled rejection and kill the process.
   const handleBody = (fn) => {
     readBody().then(fn).catch(err => {
       res.statusCode = err.statusCode || 400;
@@ -3107,11 +3107,11 @@ const server = http.createServer((req, res) => {
     try { st = fs.lstatSync(full); } catch (_) { st = null; }
     if (!st) {
       res.statusCode = 404;
-      return res.end(JSON.stringify({ok: false, error: 'no existe'}));
+      return res.end(JSON.stringify({ok: false, error: 'not found'}));
     }
     if (!st.isFile()) {
       res.statusCode = 404;
-      return res.end(JSON.stringify({ok: false, error: 'no existe'}));
+      return res.end(JSON.stringify({ok: false, error: 'not found'}));
     }
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Content-Disposition', 'attachment; filename="' + name + '"');
@@ -3324,7 +3324,7 @@ module.exports = {
   // Test-only: seed the module-level state so ALTO-2 regression tests can
   // exercise the real functions without booting a relay. Not used in prod.
   _setBridgeStateForTest: (bs) => { bridgeState = bs; if (bs && bs.delivery) deliverySize = Object.keys(bs.delivery).length; else deliverySize = 0; },
-  server,   // HTTP API (para tests: server.listen(0) y fetch)
+  server,   // HTTP API (for tests: server.listen(0) and fetch)
   getAdminToken, // MEDIO-7: admin token so the tests can authenticate the POSTs
   // AUDIT kaieriksen M01: authorization gate by sender+room for agent-controlled
   // paths (join/leave/inject/recordings). Exposed for tests.

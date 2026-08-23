@@ -1,4 +1,4 @@
-# Secretos — NUNCA versionar
+# Secrets — NEVER commit
 config.json
 config.*.local.json
 testbridge-pw.txt
@@ -6,23 +6,23 @@ testbridge-pw.txt
 secrets/
 .env
 
-# Dependencias
+# Dependencies
 node_modules/
 
-# Historial de rescate (contiene config.json.bak con secretos)
+# Rescue history (contains config.json.bak with secrets)
 history/
 
-# Refuerzos/artefactos de diagnóstico
+# Hardening/diagnostic artifacts
 refs/*.pcap
 
-# Logs y temporales
+# Logs and temp files
 *.log
 npm-debug.log*
 
 # Editor
 .vscode/
 
-# Estado temporal del bridge (test/runtime) — no versionar
+# Bridge temporary state (test/runtime) — do not commit
 .bridge-state.json
 .bridge-pause.json
 .test-tmp*/

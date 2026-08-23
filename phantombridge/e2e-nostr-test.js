@@ -185,7 +185,7 @@ async function main() {
   await sendHop(chain[1]);
   const hop2Ok = await waitRid(chain[1].rid, 10);
   await sendHop(chain[2]);
-  await new Promise(r => setTimeout(r, 4000)); // margen para que el bridge decida
+  await new Promise(r => setTimeout(r, 4000)); // margin so the bridge can decide
   const hop3Dropped = !receivedRids.has(chain[2].rid);
   await sendHop(chain[3]);
   await new Promise(r => setTimeout(r, 4000));

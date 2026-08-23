@@ -61,7 +61,7 @@ t('full chain: processed event advances the watermark -> old delivered expires',
   const tX = now - 3600; // delivered delivered 1h ago
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: 0, seenIds: [],
     pendingSince: null, dropped: [], droppedOverflow: false,
-    recoveryWatermark: tX - 1, // watermark justo antes de X
+    recoveryWatermark: tX - 1, // watermark just before X
     delivery: {'X': {status: 'delivered', ts: tX}}});
   // BEFORE processing: lastSeen may be inflated by reception (0 here,
   // but in the real path it would be the reception time) — lastSeen is NOT

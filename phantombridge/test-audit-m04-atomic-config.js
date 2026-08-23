@@ -1,4 +1,4 @@
-// AUDIT kaieriksen M04 (🔴 BLOQUEANTE del PR #24 phantomyard):
+// AUDIT kaieriksen M04 (🔴 BLOCKING on PR #24 phantomyard):
 //   "/register and persistRoomTimeout both write the shared config through the
 //    same fixed .tmp path, with no serialization or fsync/atomic durability
 //    protocol. Concurrent local API requests can rename/delete each other's

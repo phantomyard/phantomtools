@@ -123,9 +123,9 @@ t('eviction of expirable delivered reduces the count', () => {
   _setBridgeStateForTest({relay: 'ws://test.local', lastSeen: now, seenIds: [],
     pendingSince: null, dropped: [], droppedOverflow: false, recoveryWatermark: now,
     delivery: {
-      'exp-1': {status: 'delivered', ts: now - 3600}, // expirable (watermark supera)
+      'exp-1': {status: 'delivered', ts: now - 3600}, // expirable (watermark exceeds)
       'exp-2': {status: 'delivered', ts: now - 3600}, // expirable
-      'keep-1': {status: 'pending', ts: now - 10},    // no expira (TTL 24h)
+      'keep-1': {status: 'pending', ts: now - 10},    // does not expire (TTL 24h)
     }});
   const before = actualCount();
   // An admission triggers the sweep: exp-1 + exp-2 expire (watermark), keep-1

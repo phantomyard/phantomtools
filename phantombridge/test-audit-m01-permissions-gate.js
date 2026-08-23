@@ -63,7 +63,7 @@ t('full:[] -> deny (nobody has full)', () => {
   assert.strictEqual(evalP({ full: [] }, 'bob', null), false);
 });
 
-t('restricted:{} -> deny (sin full ni rooms)', () => {
+t('restricted:{} -> deny (no full nor rooms)', () => {
   assert.strictEqual(evalP({ restricted: {} }, 'alice', 'mia'), false);
 });
 
@@ -73,7 +73,7 @@ t('full:[alice] -> alice opera cualquier sala; bob no', () => {
   assert.strictEqual(evalP({ full: ['alice'] }, 'bob', 'mia'), false);
 });
 
-t('restricted:{mia:[bob]} -> bob en mia; fuera de mia sin full denegado', () => {
+t('restricted:{mia:[bob]} -> bob in mia; outside mia without full denied', () => {
   assert.strictEqual(evalP({ restricted: { mia: ['bob'] } }, 'bob', 'mia'), true);
   assert.strictEqual(evalP({ restricted: { mia: ['bob'] } }, 'bob', 'otra'), false);
   assert.strictEqual(evalP({ restricted: { mia: ['bob'] } }, 'alice', 'mia'), false);
