@@ -7,7 +7,7 @@
   },
   "stateFile": "./.bridge-state.json",
   "antiloop": {
-    "_comment": "maxHops/expireMs deben coincidir con communication.max_hops/ttl_hours del org.yaml compilado (norma v1.3); /status los expone para detectar drift. El marker del envelope es CONSTANTE de protocolo: [env] (no configurable). hashWindowMs 1h y pairHourMax 10/h (F3-01): defienden contra loops LENTOS (1 msg/15-30min) que evaden el rate por minuto y la ventana de dedup corta.",
+    "_comment": "maxHops/expireMs must match communication.max_hops/ttl_hours in the compiled org.yaml (norma v1.3); /status exposes them to detect drift. The envelope marker is a protocol CONSTANT: [env] (not configurable). hashWindowMs 1h and pairHourMax 10/h (F3-01): defend against SLOW loops (1 msg/15-30min) that evade the per-minute rate and the short dedup window.",
     "maxHops": 3,
     "expireMs": 21600000,
     "hashWindowMs": 3600000,
