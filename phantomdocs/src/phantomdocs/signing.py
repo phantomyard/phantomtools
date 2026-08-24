@@ -16,14 +16,25 @@ actor that made it, using the persona's existing Nostr identity
     signatures) leaves a detectable trace.
 
 Nostr uses BIP-340 Schnorr over secp256k1 with x-only (32-byte) public keys.
-The message signed is the node's MAC (32 bytes) — already a content-addressed
-identity — domain-separated by a fixed prefix so a signature can never be
-replayed across a different protocol.
+The message signed is a **canonical mutation envelope** — a deterministic
+serialization of the node MAC together with the authorization-relevant fields
+(actor, action, category, owners, locations, urn) — domain-separated by a
+fixed prefix so a signature can never be replayed across a different protocol.
+
+Signing the envelope (rather than the bare MAC) is what makes the v2
+boundary an *authorization* boundary and not merely a tamper seal: the MAC
+covers only content identity, so a signature over the MAC alone cannot
+prevent one declared actor from authenticating a mutation asserted as a
+different actor, or a mutation whose category/owners/locations were swapped
+underneath a still-valid MAC. Binding those fields into the signed message
+means ``verify`` can reconstruct the exact envelope from the stored node and
+reject a signature that does not cover the node as it currently stands.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 
 import coincurve
 
@@ -139,22 +150,59 @@ def pubkey_from_nsec(nsec: str) -> str:
     return coincurve.PublicKeyXOnly.from_valid_secret(secret).format().hex()
 
 
-def mutation_message(mac: str) -> bytes:
-    """The 32-byte message signed for a mutation: H(domain || mac)."""
-    return _sha256(_SIGN_DOMAIN + bytes.fromhex(mac))
+def mutation_envelope(
+    *,
+    mac: str,
+    actor: str,
+    action: str,
+    category: str,
+    owners: list[str] | None,
+    locations: list[dict] | None,
+    urn: str,
+) -> bytes:
+    """The canonical bytes signed for a mutation (issue #30 v2).
+
+    Deterministic JSON (sorted keys, compact separators, ASCII-escaped) so
+    ``verify`` can rebuild the exact message from the stored node fields and
+    check that the signature covers the authorization-relevant metadata — not
+    just the content-addressed MAC. Any field change (actor, action,
+    category, owners, locations, urn) changes the signed message and
+    invalidates the signature.
+    """
+    payload = {
+        "actor": actor,
+        "action": action,
+        "category": category,
+        "locations": list(locations) if locations else [],
+        "mac": mac,
+        "owners": list(owners) if owners else [],
+        "urn": urn,
+    }
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
 
 
-def sign_mutation(nsec: str, mac: str) -> str:
-    """Schnorr-sign the mutation MAC with the actor's nsec. Returns 128-hex."""
+def mutation_message(envelope: bytes) -> bytes:
+    """The 32-byte message signed for a mutation: H(domain || envelope)."""
+    return _sha256(_SIGN_DOMAIN + envelope)
+
+
+def sign_mutation(nsec: str, envelope: bytes) -> str:
+    """Schnorr-sign a mutation envelope with the actor's nsec. 128-hex."""
     secret = bytes.fromhex(nsec_to_secret_hex(nsec))
-    return coincurve.PrivateKey(secret).sign_schnorr(mutation_message(mac), None).hex()
+    return (
+        coincurve.PrivateKey(secret)
+        .sign_schnorr(mutation_message(envelope), None)
+        .hex()
+    )
 
 
-def verify_mutation(pubkey_hex: str, signature_hex: str, mac: str) -> bool:
-    """Verify a mutation signature against an x-only pubkey (hex)."""
+def verify_mutation(pubkey_hex: str, signature_hex: str, envelope: bytes) -> bool:
+    """Verify a mutation signature over ``envelope`` against an x-only pubkey."""
     try:
         pubkey = coincurve.PublicKeyXOnly(bytes.fromhex(pubkey_hex))
         signature = bytes.fromhex(signature_hex)
-        return pubkey.verify(signature, mutation_message(mac))
+        return pubkey.verify(signature, mutation_message(envelope))
     except (ValueError, TypeError):
         return False

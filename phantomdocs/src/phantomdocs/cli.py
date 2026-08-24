@@ -56,12 +56,19 @@ from .setup import (
     write_wrapper,
 )
 from .signing import (
+    mutation_envelope,
     npub_to_pubkey_hex,
     pubkey_from_nsec,
     sign_mutation,
     verify_mutation,
 )
-from .storage import LocalBackend, StorageError, read_reference, resolve_backend
+from .storage import (
+    LocalBackend,
+    StorageError,
+    location_uri,
+    read_reference,
+    resolve_backend,
+)
 from .update import is_newer, latest_release
 
 
@@ -194,12 +201,36 @@ def _signing_key(nsec_file: str | None) -> str | None:
     return os.environ.get("PHANTOMDOCS_NSEC", "").strip() or None
 
 
-def _sign_fields(nsec: str | None, mac: str) -> dict[str, str]:
-    """The ``sig`` / ``sigPubkey`` fields for a mutation, or ``{}`` unsigned."""
+def _sign_fields(
+    nsec: str | None,
+    *,
+    mac: str,
+    actor: str,
+    action: str,
+    category: str,
+    owners: list[str] | None,
+    locations: list[dict] | None,
+    urn: str,
+) -> dict[str, str]:
+    """The ``sig`` / ``sigPubkey`` fields for a mutation, or ``{}`` unsigned.
+
+    The signature binds the node MAC **and** the authorization-relevant
+    fields (actor, action, category, owners, locations, urn) by signing the
+    canonical mutation envelope (issue #30 v2).
+    """
     if not nsec:
         return {}
+    envelope = mutation_envelope(
+        mac=mac,
+        actor=actor,
+        action=action,
+        category=category,
+        owners=owners,
+        locations=locations,
+        urn=urn,
+    )
     return {
-        "sig": sign_mutation(nsec, mac),
+        "sig": sign_mutation(nsec, envelope),
         "sigPubkey": pubkey_from_nsec(nsec),
     }
 
@@ -298,8 +329,21 @@ def mkdir(name, parent, category, owners, org_yaml, actor, nsec_file, root):
             "owners": list(owners),
             "meta": {},
             "relations": {},
+            "actor": actor_id,
+            "action": "mkdir",
         }
-        node.update(_sign_fields(_signing_key(nsec_file), mac))
+        node.update(
+            _sign_fields(
+                _signing_key(nsec_file),
+                mac=mac,
+                actor=actor_id,
+                action="mkdir",
+                category=category,
+                owners=list(owners),
+                locations=None,
+                urn=urn,
+            )
+        )
         manifest["nodes"].append(node)
         save(_manifest_path(root), manifest)
     _audit(
@@ -449,15 +493,26 @@ def add(
             "category": effective_category,
             "contentHash": ch,
             "size": len(content),
-            "owners": (
-                list(existing.get("owners", []) or []) if existing else list(owners)
-            ),
+            "owners": effective_owners,
             "locations": locations,
             "meta": {"title": slug},
             "relations": {},
             "previous": previous,
+            "actor": actor_id,
+            "action": "add" if previous is None else "version",
         }
-        node.update(_sign_fields(_signing_key(nsec_file), mac))
+        node.update(
+            _sign_fields(
+                _signing_key(nsec_file),
+                mac=mac,
+                actor=actor_id,
+                action="add" if previous is None else "version",
+                category=effective_category,
+                owners=effective_owners,
+                locations=locations,
+                urn=urn,
+            )
+        )
         manifest["nodes"].append(node)
         save(_manifest_path(root), manifest)
     _audit(
@@ -515,13 +570,13 @@ def get(ref, mac, cat, backend, org_yaml, actor, root):
 
     location = node.get("locations", [{}])[0]
     if "ref" in location:
-        click.echo(f"{node['urn']} -> {location['backend']}://{location['ref']}")
+        click.echo(f"{node['urn']} -> {location_uri(location)}")
     else:
         click.echo(f"{node['urn']} -> {location.get('path', '')}")
     if cat and node.get("kind") == "doc":
         loc = node.get("locations", [{}])[0]
         if "ref" in loc:
-            data = read_reference(f"{loc['backend']}://{loc['ref']}")[0]
+            data = read_reference(location_uri(loc))[0]
         else:
             data = _resolve_store(root, backend).get(node["contentHash"])
         sys.stdout.buffer.write(data)
@@ -611,16 +666,20 @@ def verify(backend, org_yaml, root):
     known_macs.add(manifest["manifest"]["rootMac"])
 
     # Declared actor pubkeys (from org.yaml) for the signature authorization
-    # check. Only enforced when --org-yaml is supplied (issue #30 v2).
-    declared_pubkeys: set[str] | None = None
+    # check. Only enforced when --org-yaml is supplied (issue #30 v2). The
+    # mapping is actor id -> pubkey hex so a signature is validated against
+    # the *specific* actor recorded on the node, not merely "some" declared
+    # actor.
+    declared_pubkeys: dict[str, str] | None = None
     if org_yaml:
         org = load_org(org_yaml)
-        declared_pubkeys = set()
+        declared_pubkeys = {}
         for a in org.get("actors", []):
             npub = a.get("npub")
-            if npub:
+            actor_id = a.get("id")
+            if npub and actor_id:
                 try:
-                    declared_pubkeys.add(npub_to_pubkey_hex(npub))
+                    declared_pubkeys[actor_id] = npub_to_pubkey_hex(npub)
                 except ValueError:
                     pass
 
@@ -639,7 +698,7 @@ def verify(backend, org_yaml, root):
                 loc = node.get("locations", [{}])[0]
                 if loc.get("ref"):
                     try:
-                        data = read_reference(f"{loc['backend']}://{loc['ref']}")[0]
+                        data = read_reference(location_uri(loc))[0]
                         if content_hash(data) != ch:
                             issues.append("content hash mismatch (reference)")
                         elif (
@@ -683,17 +742,36 @@ def verify(backend, org_yaml, root):
                 issues.append("MAC chain mismatch")
 
         # Mutation signature (issue #30 v2): if the node carries a signature,
-        # it must verify against its pubkey; and if --org-yaml is supplied, the
-        # signing key must belong to a declared actor.
+        # it must verify against its pubkey over the *canonical mutation
+        # envelope* (rebuilding the exact actor + authorization fields from the
+        # stored node); and if --org-yaml is supplied, the signing key must
+        # belong to the specific actor recorded on the node — not merely to
+        # some declared actor.
         sig = node.get("sig")
         sig_pubkey = node.get("sigPubkey")
         if sig is not None or sig_pubkey is not None:
             if not sig or not sig_pubkey:
                 issues.append("incomplete mutation signature")
-            elif not verify_mutation(sig_pubkey, sig, node["mac"]):
-                issues.append("signature invalid")
-            elif declared_pubkeys is not None and sig_pubkey not in declared_pubkeys:
-                issues.append("signature from undeclared key")
+            else:
+                envelope = mutation_envelope(
+                    mac=node["mac"],
+                    actor=node.get("actor", ""),
+                    action=node.get("action", ""),
+                    category=node.get("category", ""),
+                    owners=node.get("owners"),
+                    locations=node.get("locations"),
+                    urn=node.get("urn", ""),
+                )
+                if not verify_mutation(sig_pubkey, sig, envelope):
+                    issues.append("signature invalid")
+                elif declared_pubkeys is not None:
+                    declared = declared_pubkeys.get(node.get("actor"))
+                    if declared is None:
+                        issues.append("signature from undeclared actor")
+                    elif sig_pubkey != declared:
+                        issues.append(
+                            "signature key does not match the actor's declared npub"
+                        )
 
         if issues:
             failures += 1
@@ -743,7 +821,16 @@ def tag(name, ref, org_yaml, actor, nsec_file, root):
             )
         manifest.setdefault("refs", {})[name] = node["mac"]
         save(_manifest_path(root), manifest)
-    sig_fields = _sign_fields(_signing_key(nsec_file), node["mac"])
+    sig_fields = _sign_fields(
+        _signing_key(nsec_file),
+        mac=node["mac"],
+        actor=actor_id,
+        action="tag",
+        category=node.get("category", ""),
+        owners=node.get("owners"),
+        locations=node.get("locations"),
+        urn=node["urn"],
+    )
     _audit(
         root,
         actor_id,

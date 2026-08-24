@@ -246,6 +246,14 @@ everything flows through this layer.
 
 A node may declare several `locations` (replicas), each verified by hash.
 
+**Index by reference:** `add --ref <uri>` indexes an object that already
+lives elsewhere without copying it into a content-addressed store. The
+location stores a `ref` key. For `ssh://` the `ref` is kept as the **full
+canonical URI** (`ssh://[user@]host[:port]/path`) so `get`/`verify` can
+re-read the object later (a bare path would drop host/user/port); the remote
+path is shell-quoted before being interpolated into the remote `cat`, so a
+path containing metacharacters is read as a literal filename, never executed.
+
 ## 9. Access control (resolved from PhantomOrg)
 
 PhantomOrg is the **authoritative access model**. PhantomDocs does **not**
@@ -302,15 +310,22 @@ guarantees, and only one of them is cryptographically enforced.
   already write the filesystem.
 
   Binding authorship cryptographically is the v2 authorization boundary,
-  now implemented (issue #30): a mutating command MAY sign the node MAC with
-  the actor's Nostr nsec (``PHANTOMDOCS_NSEC`` or ``--nsec-file``); the
-  BIP-340 Schnorr signature + x-only pubkey are recorded on the node and in
-  the audit entry. ``pd verify --org-yaml`` then (a) verifies each signature
-  against the recorded pubkey and (b) rejects a signature whose key is not a
-  declared actor ``npub`` in org.yaml. This detects an unauthorized write
-  signed with the wrong key (or tampered after signing); it is an opt-in
-  boundary — unsigned mutations remain valid for namespaces that have not
-  adopted signing.
+  now implemented (issue #30): a mutating command MAY sign the node with the
+  actor's Nostr nsec (``PHANTOMDOCS_NSEC`` or ``--nsec-file``). The message
+  signed is a **canonical mutation envelope** — the node MAC together with
+  the authorization-relevant fields (actor, action, category, owners,
+  locations, urn) — so the BIP-340 Schnorr signature binds *who* made the
+  mutation and *what* it was authorized to do, not just the content identity.
+  The signature + x-only pubkey are recorded on the node and in the audit
+  entry. ``pd verify --org-yaml`` then (a) verifies each signature against the
+  recorded pubkey over the reconstructed envelope and (b) rejects a signature
+  whose key does not match the **specific actor recorded on the node** (one
+  declared actor's key can no longer authenticate a mutation asserted as a
+  different actor, and changing category/owners/locations after signing
+  invalidates the signature). This detects an unauthorized write signed with
+  the wrong key (or tampered after signing); it is an opt-in boundary —
+  unsigned mutations remain valid for namespaces that have not adopted
+  signing.
 - **Read** — allowed iff the actor's resolved access (`merge_access`) covers
   the node's `category` (i.e. the category number is in the actor's resolved
   category set, or the actor holds a category exception). `category-0` is
@@ -370,7 +385,10 @@ persona's own files and consumes `org.yaml`.
   (rendered from templates, bounded by `<!-- phantomdocs:start/end -->` markers).
 - `MEMORY.md` — a compact pointer to the protocol (same marker convention).
 - `tools/documents.sh` — a generated wrapper pinning `--actor <id>` (the
-  per-persona stopgap for a fixed actor; no phantombot-side injection).
+  per-persona stopgap for a fixed actor; no phantombot-side injection). The
+  wrapper injects `--actor`/`--org-yaml` **after** the selected subcommand
+  (they are command-local Click options) and only for subcommands that accept
+  them, honouring an explicit operator override.
 - `documents.inboxes` in `org.yaml` — each persona's Drive inbox (`{name, id}`),
   consumed by `pd setup` so the protocol references the inbox by id.
 

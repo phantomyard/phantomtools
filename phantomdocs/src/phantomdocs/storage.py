@@ -46,6 +46,18 @@ def _run_checked(args: list[str], *, stdin: bytes | None = None, text: bool = Fa
     )
 
 
+def _shell_quote(value: str) -> str:
+    """Quote ``value`` for a POSIX shell as a single-quoted literal.
+
+    A remote ``cat``/``test`` command is executed by the remote shell, so a
+    path taken from an operator-supplied reference must be quoted — otherwise
+    shell metacharacters in the path execute additional commands. Embedded
+    single quotes are escaped with the standard ``'\\''`` sequence so the
+    whole value is transmitted as one literal argument.
+    """
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
 class LocalBackend:
     """Content-addressed store: <root>/blobs/<aa>/<full-sha256-hex>."""
 
@@ -262,6 +274,34 @@ def _gdrive_download(workspace_py: str, file_id: str) -> bytes:
             pass
 
 
+def _ssh_canonical(parsed) -> str:
+    """The canonical ``ssh://[user@]host[:port]/path`` URI for a parsed URL.
+
+    Preserves host, user, and a non-default port so a reference round-trips
+    through ``read_reference`` without losing its connection target.
+    """
+    host = parsed.hostname or ""
+    netloc = f"{parsed.username}@{host}" if parsed.username else host
+    port = parsed.port or 22
+    if port != 22:
+        netloc = f"{netloc}:{port}"
+    return f"ssh://{netloc}{parsed.path or ''}"
+
+
+def location_uri(location: dict) -> str:
+    """Reconstruct the addressable URI for a stored ``location``.
+
+    ``ssh`` references are stored as a full canonical URI (host/user/port
+    preserved) so ``get``/``verify`` can re-read them; ``file``/``gdrive``
+    store a bare path/id and the backend scheme is re-attached.
+    """
+    ref = location.get("ref", "")
+    if ref.startswith(("ssh://", "file://", "gdrive://", "local://")):
+        return ref
+    backend = location.get("backend", "")
+    return f"{backend}://{ref}" if backend else ref
+
+
 def read_reference(uri: str, workspace_py: str | None = None) -> tuple[bytes, dict]:
     """Read the bytes of an external object and return ``(bytes, location)``.
 
@@ -306,7 +346,7 @@ def read_reference(uri: str, workspace_py: str | None = None) -> tuple[bytes, di
                 "-o",
                 "ConnectTimeout=10",
                 target,
-                f"cat {remote}",
+                f"cat {_shell_quote(remote)}",
             ]
         )
         if proc.returncode != 0:
@@ -314,7 +354,10 @@ def read_reference(uri: str, workspace_py: str | None = None) -> tuple[bytes, di
             raise StorageError(
                 f"ssh read failed: {detail}" if detail else "ssh read failed"
             )
-        return proc.stdout, {"backend": "ssh", "ref": remote}
+        # Preserve the full canonical reference (host/user/port + path) so
+        # `get`/`verify` can re-read the object later; a bare path would lose
+        # the connection target and reconstruct an empty host.
+        return proc.stdout, {"backend": "ssh", "ref": _ssh_canonical(parsed)}
     # bare local path
     with open(uri, "rb") as f:
         data = f.read()
