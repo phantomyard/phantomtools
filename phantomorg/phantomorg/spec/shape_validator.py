@@ -297,6 +297,13 @@ def validate_shape(raw: dict) -> None:
     if raw["version"] != 1:
         raise ShapeError(f"version: expected 1, found {raw['version']}")
 
+    # documents is an OPTIONAL opaque PhantomDocs namespace block
+    # (schema.json: {"type": "object"}). When present it must be a
+    # mapping — a list/scalar/null would crash PhantomDocs consumers
+    # that call .get() on it. Absent is fine (the block is optional).
+    if "documents" in raw:
+        _require_mapping(raw["documents"], "documents")
+
     org = _require_mapping(raw["organization"], "organization")
     _reject_unknown_keys(org, _ORG_KEYS, "organization")
     for key in ["id", "name", "sector", "languages"]:

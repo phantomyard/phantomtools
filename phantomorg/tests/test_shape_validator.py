@@ -528,6 +528,19 @@ class TestDocumentsBlockAndProjectScope(unittest.TestCase):
         with self.assertRaises(ShapeError):
             validate_shape(doc)
 
+    def test_documents_must_be_mapping(self):
+        # schema.json requires documents to be an object. A list, scalar
+        # or null must be rejected (PhantomDocs consumers call .get() on
+        # it and would crash on a non-mapping).
+        import copy
+
+        for bad in ([], ["namespace"], "au", 42, True, None):
+            doc = copy.deepcopy(self.doc)
+            doc["documents"] = bad
+            with self.assertRaises(ShapeError) as ctx:
+                validate_shape(doc)
+            self.assertIn("documents", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
