@@ -32,6 +32,8 @@ def append(
     urn: str,
     mac: str,
     content_hash: str | None,
+    sig: str | None = None,
+    sig_pubkey: str | None = None,
 ) -> None:
     path = os.path.join(root, AUDIT_FILENAME)
     prev: str | None = None
@@ -49,6 +51,10 @@ def append(
         "hash": content_hash,
         "prev": prev,
     }
+    if sig is not None:
+        entry["sig"] = sig
+    if sig_pubkey is not None:
+        entry["sigPubkey"] = sig_pubkey
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, sort_keys=True) + "\n")
 
