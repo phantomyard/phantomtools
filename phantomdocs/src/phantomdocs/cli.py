@@ -43,6 +43,7 @@ from .manifest import (
     node_by_path,
     node_by_slug,
     node_by_urn,
+    ref_target_mac,
     resolve_node,
     save,
     urn_path,
@@ -211,12 +212,14 @@ def _sign_fields(
     owners: list[str] | None,
     locations: list[dict] | None,
     urn: str,
+    ref: str | None = None,
 ) -> dict[str, str]:
     """The ``sig`` / ``sigPubkey`` fields for a mutation, or ``{}`` unsigned.
 
     The signature binds the node MAC **and** the authorization-relevant
     fields (actor, action, category, owners, locations, urn) by signing the
-    canonical mutation envelope (issue #30 v2).
+    canonical mutation envelope (issue #30 v2). ``ref`` is bound only for
+    ``tag`` mutations, tying the mutable ref name to its target MAC.
     """
     if not nsec:
         return {}
@@ -228,6 +231,7 @@ def _sign_fields(
         owners=owners,
         locations=locations,
         urn=urn,
+        ref=ref,
     )
     return {
         "sig": sign_mutation(nsec, envelope),
@@ -779,6 +783,50 @@ def verify(backend, org_yaml, root):
         else:
             click.echo(f"OK   {node['urn']}")
 
+    # Mutable refs (issue #30 v2 / PR #38): a signed `tag` stores a record
+    # whose signature binds the ref name -> target MAC -> actor. Rebuild the
+    # envelope with the *current* ref name and verify it, so renaming or
+    # repointing ``manifest.refs`` after tagging invalidates the signature.
+    for ref_name, value in (manifest.get("refs") or {}).items():
+        if not isinstance(value, dict):
+            continue  # legacy bare-MAC ref (unsigned, v1 behavior)
+        issues = []
+        mac = value.get("mac")
+        node = node_by_mac(manifest, mac) if mac else None
+        if node is None:
+            issues.append("ref points at unknown MAC")
+        else:
+            sig = value.get("sig")
+            sig_pubkey = value.get("sigPubkey")
+            if (sig is None) != (sig_pubkey is None):
+                issues.append("incomplete ref signature")
+            elif sig is not None:
+                envelope = mutation_envelope(
+                    mac=mac,
+                    actor=value.get("actor", ""),
+                    action=value.get("action", "tag"),
+                    category=node.get("category", ""),
+                    owners=node.get("owners"),
+                    locations=node.get("locations"),
+                    urn=node.get("urn", ""),
+                    ref=ref_name,
+                )
+                if not verify_mutation(sig_pubkey, sig, envelope):
+                    issues.append("ref signature invalid")
+                elif declared_pubkeys is not None:
+                    declared = declared_pubkeys.get(value.get("actor"))
+                    if declared is None:
+                        issues.append("ref signature from undeclared actor")
+                    elif sig_pubkey != declared:
+                        issues.append(
+                            "ref signature key does not match actor's declared npub"
+                        )
+        if issues:
+            failures += 1
+            click.echo(f"FAIL ref:{ref_name}: {', '.join(issues)}")
+        else:
+            click.echo(f"OK   ref:{ref_name}")
+
     audit_problems = audit_verify_chain(root)
     for problem in audit_problems:
         failures += 1
@@ -806,7 +854,10 @@ def tag(name, ref, org_yaml, actor, nsec_file, root):
     """Point a mutable ref (e.g. `latest`, `approved-<date>`) at a version MAC.
 
     Access-controlled: the actor must be able to write the target node's
-    category (fail-closed).
+    category (fail-closed). A signed tag stores a signed record whose
+    signature binds the ref name to its target MAC (issue #30 v2), so
+    renaming or repointing ``manifest.refs`` after tagging is detected by
+    ``verify``.
     """
     actor_id, org = _require_acl(org_yaml, actor)
     with manifest_lock(_manifest_path(root)):
@@ -819,18 +870,26 @@ def tag(name, ref, org_yaml, actor, nsec_file, root):
                 f"denied: {actor_id} cannot write "
                 f"{normalize_category(node.get('category', 0))} ({node['urn']})"
             )
-        manifest.setdefault("refs", {})[name] = node["mac"]
+        sig_fields = _sign_fields(
+            _signing_key(nsec_file),
+            mac=node["mac"],
+            actor=actor_id,
+            action="tag",
+            category=node.get("category", ""),
+            owners=node.get("owners"),
+            locations=node.get("locations"),
+            urn=node["urn"],
+            ref=name,
+        )
+        record = {
+            "mac": node["mac"],
+            "actor": actor_id,
+            "action": "tag",
+        }
+        if sig_fields:
+            record.update(sig_fields)
+        manifest.setdefault("refs", {})[name] = record
         save(_manifest_path(root), manifest)
-    sig_fields = _sign_fields(
-        _signing_key(nsec_file),
-        mac=node["mac"],
-        actor=actor_id,
-        action="tag",
-        category=node.get("category", ""),
-        owners=node.get("owners"),
-        locations=node.get("locations"),
-        urn=node["urn"],
-    )
     _audit(
         root,
         actor_id,
@@ -838,8 +897,8 @@ def tag(name, ref, org_yaml, actor, nsec_file, root):
         node["urn"],
         node["mac"],
         node.get("contentHash"),
-        sig_fields.get("sig"),
-        sig_fields.get("sigPubkey"),
+        record.get("sig"),
+        record.get("sigPubkey"),
     )
     click.echo(f"{name} -> {display_id(node['mac'])}  ({node['urn']})")
 
@@ -852,8 +911,9 @@ def refs(root):
     if not manifest.get("refs"):
         click.echo("no refs")
         return
-    for name, mac in manifest.get("refs", {}).items():
-        node = node_by_mac(manifest, mac)
+    for name, value in manifest.get("refs", {}).items():
+        mac = ref_target_mac(value)
+        node = node_by_mac(manifest, mac) if mac else None
         urn = node["urn"] if node else "(unknown)"
         click.echo(f"{name:20} {display_id(mac)}  {urn}")
 

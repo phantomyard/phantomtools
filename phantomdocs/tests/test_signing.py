@@ -535,3 +535,113 @@ def test_sign_mutation_from_env(tmp_path):
     )
     assert r.exit_code == 0, r.output
     assert "sig:" in (tmp_path / "manifest.yaml").read_text()
+
+
+def test_signed_tag_binds_ref_name_and_target(tmp_path, nsec_file):
+    """Repointing or renaming ``manifest.refs`` after a signed tag must fail
+    verify — the ref name and target MAC are bound into the signature
+    (PR #38 cli.py:824)."""
+    import yaml
+
+    nsec_path, pubkey, _secret = nsec_file
+    org = tmp_path / "org.yaml"
+    org.write_text(
+        ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey)))
+    )
+    runner = CliRunner()
+
+    def setup(root):
+        assert (
+            runner.invoke(
+                main,
+                [
+                    "init",
+                    "--org",
+                    "example-org",
+                    "--namespace",
+                    "docs",
+                    "--root",
+                    str(root),
+                ],
+            ).exit_code
+            == 0
+        )
+        for slug in ("one", "two"):
+            d = root / f"{slug}.txt"
+            d.write_text(f"content of {slug}")
+            assert (
+                runner.invoke(
+                    main,
+                    [
+                        "add",
+                        str(d),
+                        "--slug",
+                        slug,
+                        "--category",
+                        "category-2",
+                        "--owners",
+                        "ceo",
+                        "--org-yaml",
+                        str(org),
+                        "--actor",
+                        "paco",
+                        "--nsec-file",
+                        nsec_path,
+                        "--root",
+                        str(root),
+                    ],
+                ).exit_code
+                == 0
+            )
+        assert (
+            runner.invoke(
+                main,
+                [
+                    "tag",
+                    "latest",
+                    "one",
+                    "--org-yaml",
+                    str(org),
+                    "--actor",
+                    "paco",
+                    "--nsec-file",
+                    nsec_path,
+                    "--root",
+                    str(root),
+                ],
+            ).exit_code
+            == 0
+        )
+
+    # Baseline: signed tag verifies.
+    root = tmp_path / "ok"
+    setup(root)
+    r = runner.invoke(main, ["verify", "--org-yaml", str(org), "--root", str(root)])
+    assert r.exit_code == 0, r.output
+
+    # Repoint `latest` to the other node's MAC.
+    repointed = tmp_path / "repointed"
+    setup(repointed)
+    mp = repointed / "manifest.yaml"
+    data = yaml.safe_load(mp.read_text())
+    other_mac = next(n["mac"] for n in data["nodes"] if n["slug"] == "two")
+    data["refs"]["latest"]["mac"] = other_mac
+    with mp.open("w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+    r = runner.invoke(
+        main, ["verify", "--org-yaml", str(org), "--root", str(repointed)]
+    )
+    assert r.exit_code != 0
+    assert "ref signature invalid" in r.output
+
+    # Rename the ref key after tagging.
+    renamed = tmp_path / "renamed"
+    setup(renamed)
+    mp = renamed / "manifest.yaml"
+    data = yaml.safe_load(mp.read_text())
+    data["refs"]["production"] = data["refs"].pop("latest")
+    with mp.open("w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+    r = runner.invoke(main, ["verify", "--org-yaml", str(org), "--root", str(renamed)])
+    assert r.exit_code != 0
+    assert "ref signature invalid" in r.output

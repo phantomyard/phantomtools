@@ -40,6 +40,12 @@ All notable changes to PhantomDocs are documented in this file.
   reconstructed envelope and rejects a key that does not match the specific
   actor recorded on the node (no cross-actor impersonation; changing
   category/owners after signing invalidates it).
+- **Signed refs (#30 v2)** (`cli.py::tag`/`verify`, `manifest.py`): a signed
+  `tag` stores a signed record (`mac` + `actor` + `sig`/`sigPubkey`) whose
+  signature binds the **ref name** to its target MAC (the ref name is part of
+  the canonical envelope). `pd verify --org-yaml` verifies each signed ref, so
+  renaming or repointing `manifest.refs` after tagging invalidates the
+  signature and fails verification.
 
 **PR #27 review hardening — enforce the advertised ACL.**
 

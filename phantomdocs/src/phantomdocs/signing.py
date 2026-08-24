@@ -159,6 +159,7 @@ def mutation_envelope(
     owners: list[str] | None,
     locations: list[dict] | None,
     urn: str,
+    ref: str | None = None,
 ) -> bytes:
     """The canonical bytes signed for a mutation (issue #30 v2).
 
@@ -168,6 +169,11 @@ def mutation_envelope(
     just the content-addressed MAC. Any field change (actor, action,
     category, owners, locations, urn) changes the signed message and
     invalidates the signature.
+
+    ``ref`` is set only for ``tag`` mutations: the mutable ref name is bound
+    into the envelope so a ref renamed or repointed after signing no longer
+    verifies (issue #30 v2 / PR #38). It is omitted for node mutations so
+    existing signed nodes verify byte-identically.
     """
     payload = {
         "actor": actor,
@@ -178,6 +184,8 @@ def mutation_envelope(
         "owners": list(owners) if owners else [],
         "urn": urn,
     }
+    if ref is not None:
+        payload["ref"] = ref
     return json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode("utf-8")

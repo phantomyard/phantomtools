@@ -326,6 +326,13 @@ guarantees, and only one of them is cryptographically enforced.
   the wrong key (or tampered after signing); it is an opt-in boundary —
   unsigned mutations remain valid for namespaces that have not adopted
   signing.
+
+  A `tag` mutation signs the same envelope with the **ref name** bound in
+  (a `ref` field, present only for `tag`), and the resulting signature is
+  stored on the ref record in `manifest.refs` (alongside the target MAC and
+  actor). `pd verify --org-yaml` validates each signed ref over the current
+  ref name + target MAC, so a ref renamed or repointed after tagging fails
+  verification.
 - **Read** — allowed iff the actor's resolved access (`merge_access`) covers
   the node's `category` (i.e. the category number is in the actor's resolved
   category set, or the actor holds a category exception). `category-0` is
@@ -362,7 +369,10 @@ Enables queries like "which minutes cite this policy?".
   version *is* its MAC (immutable) — filenames never encode version numbers.
 - **Refs (mutable pointers)** — `latest` / `approved-<date>` pointers in the
   manifest resolve a logical name to a version MAC (the `git` branch/tag
-  equivalent); approving a document is tagging a MAC.
+  equivalent); approving a document is tagging a MAC. A signed `tag` stores
+  the signature on the ref record, binding the ref name to the target MAC
+  (see §9), so a ref renamed or repointed after tagging is detected by
+  `pd verify`.
 - **Backup** — `pd backup` copies blobs + manifest to a target backend,
   verifiable by hash.
 - **Verification (cotejo)** — `pd verify` recomputes the MAC chain and content
