@@ -3,7 +3,7 @@ Telegram verification: contrast declared bot usernames against the runtime.
 
 org.yaml declares a ``telegram_bot`` handle (e.g. ``@marco_bot``) for
 every actor — the username citizens use to reach that persona in the
-"cadena de personas" (norma de comunicación). The handle is *declared*
+"chain of personas" (communication norm). The handle is *declared*
 state (org.yaml), but the authoritative value lives in the runtime:
 phantombot's config.toml holds the bot token for the default persona
 (``[channels.telegram].token``) and for each sub-persona
