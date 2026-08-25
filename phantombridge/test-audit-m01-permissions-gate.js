@@ -31,12 +31,11 @@ function t(name, fn) {
 // --- Pure decision matrix (without loading the module, without network) ---
 // evalRoomPermission(permConfig, senderName, room):
 //   undefined          -> legacy/open
-//   {}                 -> fail-closed
-//   {full:[]}          -> deny
-//   {restricted:{}}    -> deny
-//   {full:[a]}         -> a en cualquier sala + room-agnostic
-//   {restricted:{m:[b]}}-> b solo en m; room-agnostic exige full
-//   {full:'a'} (mal)   -> fail-closed
+//   {}                 -> participants join named rooms; room-agnostic denied
+//   {full:[]}          -> same as {} (no full tier)
+//   {full:[a]}         -> a: any room + room-agnostic; others: any named room
+//   {full:'a'} (mal)   -> no full tier (participants join named rooms)
+//   null / array       -> fail-closed (malformed block)
 
 function evalP(permConfig, sender, room) {
   return bridgeModule.evalRoomPermission(permConfig, sender, room);
@@ -51,38 +50,36 @@ t('legacy: without a permissions block -> open (compat with existing deployments
   assert.strictEqual(evalP(undefined, 'algún-agente', null), true);
 });
 
-t('HIGH FIX: permissions:{} (empty block) -> fail-closed, NOT legacy', () => {
-  // The bug found in review: `permissions: {}` was interpreted as absence ->
-  // legacy/open. Now a present (even empty) block denies.
-  assert.strictEqual(evalP({}, 'alice', 'mia'), false, '{} must deny alice');
-  assert.strictEqual(evalP({}, 'alice', null), false, '{} room-agnostic denies');
+t('{} (empty block) -> participants join named rooms; room-agnostic denied', () => {
+  // Role-based (no per-room ACL): a present block governs only the `full`
+  // tier (recordings). Participants (authenticated agents) still join/speak
+  // any NAMED room; room-agnostic actions need `full`.
+  assert.strictEqual(evalP({}, 'alice', 'mia'), true, 'participant joins named room');
+  assert.strictEqual(evalP({}, 'alice', null), false, 'room-agnostic denied without full');
 });
 
-t('full:[] -> deny (nobody has full)', () => {
-  assert.strictEqual(evalP({ full: [] }, 'alice', 'mia'), false);
+t('full:[] -> participants join named rooms; room-agnostic denied', () => {
+  assert.strictEqual(evalP({ full: [] }, 'alice', 'mia'), true);
   assert.strictEqual(evalP({ full: [] }, 'bob', null), false);
 });
 
-t('restricted:{} -> deny (no full nor rooms)', () => {
-  assert.strictEqual(evalP({ restricted: {} }, 'alice', 'mia'), false);
-});
-
-t('full:[alice] -> alice opera cualquier sala; bob no', () => {
+t('full:[alice] -> alice any room + room-agnostic; bob named rooms only', () => {
   assert.strictEqual(evalP({ full: ['alice'] }, 'alice', 'mia'), true);
-  assert.strictEqual(evalP({ full: ['alice'] }, 'alice', null), true); // room-agnostic
-  assert.strictEqual(evalP({ full: ['alice'] }, 'bob', 'mia'), false);
+  assert.strictEqual(evalP({ full: ['alice'] }, 'alice', null), true); // room-agnostic (recordings)
+  assert.strictEqual(evalP({ full: ['alice'] }, 'bob', 'mia'), true);   // participant: named room
+  assert.strictEqual(evalP({ full: ['alice'] }, 'bob', null), false);   // participant: no room-agnostic
 });
 
-t('restricted:{mia:[bob]} -> bob in mia; outside mia without full denied', () => {
-  assert.strictEqual(evalP({ restricted: { mia: ['bob'] } }, 'bob', 'mia'), true);
-  assert.strictEqual(evalP({ restricted: { mia: ['bob'] } }, 'bob', 'otra'), false);
-  assert.strictEqual(evalP({ restricted: { mia: ['bob'] } }, 'alice', 'mia'), false);
-  assert.strictEqual(evalP({ restricted: { mia: ['bob'] } }, 'bob', null), false); // room-agnostic exige full
+t('malformed full (string) -> no full tier: participants join named rooms', () => {
+  // A malformed `full` yields no full tier (recordings denied), but the
+  // participant baseline still lets authenticated agents join/speak.
+  assert.strictEqual(evalP({ full: 'alice' }, 'alice', 'mia'), true);
+  assert.strictEqual(evalP({ full: 'alice' }, 'alice', null), false);
 });
 
-t('HIGH FIX: malformed full (string) -> fail-closed, not legacy', () => {
-  // A present but malformed permissions block must NOT open the bridge.
-  assert.strictEqual(evalP({ full: 'alice' }, 'alice', 'mia'), false, 'full:string must fail-closed');
+t('null / array permConfig -> fail-closed (malformed block)', () => {
+  assert.strictEqual(evalP(null, 'alice', 'mia'), false);
+  assert.strictEqual(evalP([], 'alice', 'mia'), false);
 });
 
 t('empty sender never has permission (fail-closed)', () => {

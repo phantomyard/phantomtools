@@ -208,6 +208,7 @@ function loadOrgRouting(orgFile) {
     return {
       agents: deriveAgents(org),
       routing: deriveRouting(org),
+      actorsByRole: actorsByRole(org),
     };
   } catch (e) {
     // FAIL-CLOSED: the file exists but cannot be parsed/derived. Surface this

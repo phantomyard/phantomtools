@@ -49,11 +49,11 @@
       "alice",
       "carol"
     ],
-    "restricted": {
-      "example-room": [
-        "dave"
-      ]
-    }
+    "fullRoles": [
+      "ceo",
+      "chief_of_staff",
+      "cfo"
+    ]
   },
   "routing": {
     "permissions": {

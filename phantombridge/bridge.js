@@ -2198,8 +2198,8 @@ async function handleIncomingGiftWrap(giftWrap) {
         return;
       }
       // AUDIT kaieriksen M01: recordings is a room-agnostic privileged action
-      // (reads every recording). Only `full`-permission agents (or agents with
-      // at least one restricted room) may list recordings; fail closed.
+      // (reads every recording). Only `full`-permission agents may list
+      // recordings; fail closed.
       if (!agentCanOperateRoom(senderName, null)) {
         console.log('[nostr] recordings denied to', senderName, '(no full permission)');
         const ok = await publishDM(senderPk, 'You do not have permission to list recordings.', 'Bridge').catch(() => false);
@@ -2404,15 +2404,14 @@ for (const [room, agents] of Object.entries(CONFIG.roomAgents || {})) {
 //
 // Config shape:
 //   "permissions": {
-//     "full":            ["bob", "alice"],        // agents that may control ANY room
-//     "restricted": { "room-a": ["dave"], ... }  // room -> agents allowed in that room
+//     "full": ["bob", "alice"]   // agents that may control ANY room + room-agnostic
 //   }
 //
-// Resolution (fail closed):
-//   - if `restricted` has an explicit entry for the room, ONLY agents listed
-//     there (plus `full` agents) are allowed;
-//   - otherwise, if `full` is non-empty, ONLY `full` agents are allowed
-//     (explicit allow-list, nothing else);
+// Resolution (role-based, no per-room ACL):
+//   - `full` agents operate ANY room AND room-agnostic actions (recordings);
+//   - every other authenticated agent operates any NAMED room (join/leave/
+//     speak) — room names are free-form and carry no authorization;
+//   - room-agnostic actions (recordings) are restricted to `full` agents;
 //   - if NO `permissions` block is configured at all, fall back to the
 //     legacy behaviour (any authenticated agent) for backward compatibility.
 // AUDIT M01 (fail-closed, kaieriksen): distinguish "permissions block ABSENT"
@@ -2426,32 +2425,31 @@ const permConfigured = Object.prototype.hasOwnProperty.call(CONFIG, 'permissions
 const permObject = permConfigured && CONFIG.permissions
   && typeof CONFIG.permissions === 'object' && !Array.isArray(CONFIG.permissions)
   ? CONFIG.permissions : {};
-const permFull = new Set(
+// `full` is derived from org.yaml roles (permissions.fullRoles) when org.yaml
+// is present; otherwise it falls back to the explicit `full` name list
+// (legacy/standalone, no org.yaml deployed).
+let permFull = new Set(
   (Array.isArray(permObject.full)) ? permObject.full : []
 );
-const permRestricted = new Map();
-if (permConfigured && permObject.restricted
-    && typeof permObject.restricted === 'object'
-    && !Array.isArray(permObject.restricted)) {
-  for (const [room, agents] of Object.entries(permObject.restricted)) {
-    if (Array.isArray(agents)) permRestricted.set(room, new Set(agents));
+const permFullRoleIds = Array.isArray(permObject.fullRoles) ? permObject.fullRoles : [];
+if (DERIVED && DERIVED.actorsByRole && permFullRoleIds.length > 0) {
+  const derivedNames = new Set();
+  for (const roleId of permFullRoleIds) {
+    for (const name of (DERIVED.actorsByRole[roleId] || [])) derivedNames.add(name);
+  }
+  if (derivedNames.size > 0) {
+    permFull = derivedNames;
+    console.log('[bridge] full derivado de org.yaml roles (' + permFullRoleIds.join(',') + '): ' + [...derivedNames].sort().join(', '));
   }
 }
-
 // Can this sender operate a room command (join/leave/inject/recordings) on
 // `room`? room defaults to "*" for room-agnostic commands (e.g. recordings).
 function agentCanOperateRoom(senderName, room /* string|null */) {
   if (!senderName) return false;
   if (!permConfigured) return true; // legacy: no permissions block -> open
-  if (permFull.has(senderName)) return true; // full: any room
-  if (room) {
-    const allowed = permRestricted.get(room);
-    if (allowed) return allowed.has(senderName);
-    // Room not in restricted map: only `full` agents (already checked above).
-    return false;
-  }
-  // Room-agnostic action (recordings): only `full` agents.
-  return false;
+  if (permFull.has(senderName)) return true; // full: any room + room-agnostic
+  if (room) return true; // participant: any named room (join/leave/speak)
+  return false; // room-agnostic action (recordings): only full agents
 }
 
 // Pure permission decision logic, extracted from agentCanOperateRoom to be
@@ -2461,8 +2459,8 @@ function agentCanOperateRoom(senderName, room /* string|null */) {
 // Resolves "can sender operate room?" against a raw permissions object:
 //   undefined / no block            -> legacy (open)
 //   {} / malformed / no grants      -> fail-closed (deny)
-//   { full: [names] }                 -> full: any room + room-agnostic
-//   { restricted: {room:[names]} }    -> only in listed rooms, room-agnostic needs full
+//   { full: [names] }                 -> full: any room + room-agnostic; every
+//                                     other authenticated agent operates any named room
 // Returns true if the block is absent (legacy) or the sender meets the rule;
 // false in any other case (fail-closed).
 function evalRoomPermission(permConfig, senderName, room /* string|null */) {
@@ -2472,16 +2470,8 @@ function evalRoomPermission(permConfig, senderName, room /* string|null */) {
   if (permConfig === null || typeof permConfig !== 'object' || Array.isArray(permConfig)) return false;
   const full = new Set(Array.isArray(permConfig.full) ? permConfig.full : []);
   if (full.has(senderName)) return true;
-  if (room) {
-    if (permConfig.restricted && typeof permConfig.restricted === 'object'
-        && !Array.isArray(permConfig.restricted)) {
-      const allowed = permConfig.restricted[room];
-      if (allowed && Array.isArray(allowed)) return allowed.includes(senderName);
-    }
-    return false;
-  }
-  // Room-agnostic action (recordings): only `full` agents.
-  return false;
+  if (room) return true; // participant: any named room
+  return false; // room-agnostic action (recordings): only `full` agents
 }
 for (const [room, t] of Object.entries(CONFIG.roomTimeouts || {})) {
   const n = parseInt(t, 10);

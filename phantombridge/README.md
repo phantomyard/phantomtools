@@ -43,23 +43,23 @@ versioned: the `config.json.bak` files contain secrets).
 - **Permissions enforcement** (config):
   - `permissions.full` — agents with full access (may join/leave/inject in
     ANY room and list recordings).
-  - `permissions.restricted` — `{ room: [agents] }` allowing only the listed
-    agents to operate (join/leave/inject) in that specific room.
+  - `permissions.fullRoles` — org roles (from org.yaml) granted `full`; when
+    org.yaml is present the bridge derives `full` from these roles (room names
+    are free-form and carry no authorization).
   - `roomAgents` — specific room → which agents receive room messages
     (destinators; does not authorise the sender to inject).
   - `roomTimeouts` — per-room inactivity timeout.
 
   Every agent-controlled path (join/leave/inject/recordings) is **gated by
-  sender + room scope** (AUDIT M01): an agent may only operate a room it is
-  explicitly allowed to. Resolution is **fail closed**: if
-  `permissions.restricted` lists a room, only that room's agents (plus
-  `permissions.full`) may touch it; rooms not in the map are only for `full`
-  agents. Only if **no `permissions` block exists at all** does the bridge
-  keep the legacy behaviour (any authenticated agent). Important (AUDIT M01):
-  a **present** block (`permissions: {}`, or a malformed `full`/`restricted`)
-  is **fail-closed** — it does NOT fall back to legacy; an operator who
-  configures `permissions` but grants nothing gets "nobody may operate", not
-  "everyone may operate".
+  sender + role** (AUDIT M01): any authenticated agent (participant) may
+  operate any *named* room (join/leave/speak) — room names are free-form;
+  only `full` agents may act room-agnostically (e.g. list recordings).
+  Resolution is **fail closed**: a **present** `permissions` block that grants
+  no `full` still lets participants join/speak named rooms, but room-agnostic
+  actions (recordings) are denied. Only if **no `permissions` block exists at
+  all** does the bridge keep the legacy behaviour (any authenticated agent,
+  including room-agnostic). A malformed block (`null`, array) is **fail-closed**
+  (denies everything).
 
   **Recovery watermark vs sender-controlled timestamps (AUDIT M01-OPCION2):**
   the durable recovery watermark (`recoveryWatermark`) represents **confirmed

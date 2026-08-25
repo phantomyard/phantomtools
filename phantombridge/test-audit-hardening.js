@@ -65,9 +65,10 @@ function request(port, pathName, headers = {}) {
     assert.strictEqual(JSON.parse(r.body).ok, true);
   });
 
-  await t('permissions:null is fail-closed', () => {
+  await t('permissions:null is fail-closed; {} is participant-baseline', () => {
     assert.strictEqual(bridge.evalRoomPermission(null, 'alice', 'room'), false);
-    assert.strictEqual(bridge.evalRoomPermission({}, 'alice', 'room'), false);
+    assert.strictEqual(bridge.evalRoomPermission({}, 'alice', 'room'), true);
+    assert.strictEqual(bridge.evalRoomPermission({}, 'alice', null), false);
     assert.strictEqual(bridge.evalRoomPermission(undefined, 'alice', 'room'), true);
   });
 

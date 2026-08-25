@@ -98,12 +98,12 @@ t('ok: processed backlog advances the watermark incrementally (real progress)' ,
 
 // 4. The M01 gate denies an agent without room permission (independent of
 //    created_at): the command should not even reach processing.
-t('gate M01: an agent without room permission is denied before processing', () => {
-  const perms = { restricted: { 'secret-room': ['bob'] } };
-  assert.strictEqual(evalRoomPermission(perms, 'alice', 'secret-room'), false,
-    'alice (no permission) must not operate secret-room');
-  assert.strictEqual(evalRoomPermission(perms, 'bob', 'secret-room'), true,
-    'bob (with permission) must be able to operate secret-room');
+t('gate M01: a non-full agent is denied room-agnostic actions (recordings)', () => {
+  const perms = { full: ['bob'] };
+  assert.strictEqual(evalRoomPermission(perms, 'alice', 'secret-room'), true,
+    'alice (participant) may operate a named room');
+  assert.strictEqual(evalRoomPermission(perms, 'alice', null), false,
+    'alice (non-full) must not operate room-agnostic actions');
 });
 
 // 5. Compatibility: an agent with full can advance the watermark after
