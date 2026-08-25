@@ -10,3 +10,8 @@ node_modules/
 .idea/
 __pycache__/
 *.pyc
+
+# Notas de revisión obsoletas (ronda 18/08) - descartadas
+docs/pr-reviews/
+bundles/
+phantomorg/phantomorg-review-fixes.zip
