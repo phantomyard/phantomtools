@@ -631,7 +631,7 @@ def test_versioning_preserves_existing_category(tmp_path):
     data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
     docs = [n for n in data["nodes"] if n.get("kind") == "doc"]
     assert len(docs) == 1
-    assert docs[0]["category"] == 3
+    assert docs[0]["category"] == "category-3"
 
     # elena (the legitimate owner with category-3 clearance) still can version.
     r = _run(
@@ -642,7 +642,7 @@ def test_versioning_preserves_existing_category(tmp_path):
     assert "versioned" in r.output
     data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
     docs = [n for n in data["nodes"] if n.get("kind") == "doc"]
-    assert all(n["category"] == 3 for n in docs)
+    assert all(n["category"] == "category-3" for n in docs)
 
 
 def test_read_denies_unknown_os_account(tmp_path):
