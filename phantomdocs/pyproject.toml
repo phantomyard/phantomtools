@@ -10,6 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "PyYAML>=6.0",
     "click>=8.1",
+    "coincurve>=18.0",
 ]
 
 [project.scripts]

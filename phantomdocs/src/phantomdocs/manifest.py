@@ -168,9 +168,24 @@ def versions_of(data: dict[str, Any], urn: str) -> list[dict[str, Any]]:
     return _matches(data, lambda n: n.get("urn") == urn)
 
 
+def ref_target_mac(value: Any) -> str | None:
+    """The target MAC for a refs-map value (bare MAC string or signed record).
+
+    ``tag`` stores either a bare MAC (legacy, unsigned) or a signed record
+    (``{"mac": ..., "sig": ...}``); both name the same target node.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return value.get("mac")
+    return None
+
+
 def resolve_node(data: dict[str, Any], ref: str) -> dict[str, Any] | None:
     """Resolve a node by urn, logical path, slug, or ref name (a MAC)."""
     node = node_by_urn(data, ref) or node_by_path(data, ref) or node_by_slug(data, ref)
     if node is None and ref in data.get("refs", {}):
-        node = node_by_mac(data, data["refs"][ref])
+        mac = ref_target_mac(data["refs"][ref])
+        if mac is not None:
+            node = node_by_mac(data, mac)
     return node

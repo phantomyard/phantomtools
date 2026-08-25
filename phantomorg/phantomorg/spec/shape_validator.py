@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 
 VALID_MESSAGE_TYPES = {"REQUEST", "INFORM", "ESCALATE", "CONFIRM", "REJECT"}
-VALID_SCOPES = {"actor", "role", "org"}
+VALID_SCOPES = {"actor", "role", "org", "project"}
 
 # NIP-19 bech32 npub (Nostr public key). Real format: "npub1" + 62 chars
 # of the bech32 charset (32-byte x-only pubkey + 6-char checksum) = 63
@@ -219,6 +219,7 @@ _ROOT_KEYS = {
     "policies",
     "escalation_matrix",
     "communication",
+    "documents",
 }
 _ORG_KEYS = {"id", "name", "sector", "languages", "default_language"}
 _DEPARTMENT_KEYS = {"id", "name", "access_policy", "parent"}
@@ -297,6 +298,13 @@ def validate_shape(raw: dict) -> None:
     _require_type(raw["version"], int, "version")
     if raw["version"] != 1:
         raise ShapeError(f"version: expected 1, found {raw['version']}")
+
+    # documents is an OPTIONAL opaque PhantomDocs namespace block
+    # (schema.json: {"type": "object"}). When present it must be a
+    # mapping — a list/scalar/null would crash PhantomDocs consumers
+    # that call .get() on it. Absent is fine (the block is optional).
+    if "documents" in raw:
+        _require_mapping(raw["documents"], "documents")
 
     org = _require_mapping(raw["organization"], "organization")
     _reject_unknown_keys(org, _ORG_KEYS, "organization")

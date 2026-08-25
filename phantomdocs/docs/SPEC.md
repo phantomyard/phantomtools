@@ -246,6 +246,14 @@ everything flows through this layer.
 
 A node may declare several `locations` (replicas), each verified by hash.
 
+**Index by reference:** `add --ref <uri>` indexes an object that already
+lives elsewhere without copying it into a content-addressed store. The
+location stores a `ref` key. For `ssh://` the `ref` is kept as the **full
+canonical URI** (`ssh://[user@]host[:port]/path`) so `get`/`verify` can
+re-read the object later (a bare path would drop host/user/port); the remote
+path is shell-quoted before being interpolated into the remote `cat`, so a
+path containing metacharacters is read as a literal filename, never executed.
+
 ## 9. Access control (resolved from PhantomOrg)
 
 PhantomOrg is the **authoritative access model**. PhantomDocs does **not**
@@ -274,8 +282,11 @@ security classification, referencing PhantomOrg's `security_categories`.
   variable → the OS username (`pwd.getpwuid(os.getuid())`). In the
   PhantomOrg/phantombot deployment model N personas live as directories under
   ONE OS account and phantombot gives focus to one persona at a time, so the OS
-  username is **not** the persona identity; the harness (which knows which
-  persona has focus) supplies the actor via `--actor` / `PHANTOMDOCS_ACTOR`.
+  username is **not** the persona identity. PhantomDocs never requires
+  phantombot (or any core app) to change: each persona's own tool wrapper
+  (`tools/documents.sh`, installed by `pd setup` — §13) pins `--actor`, and
+  `PHANTOMDOCS_ACTOR` remains an optional operator-supplied override. Both are
+  phantomtools-side; there is no phantombot hook.
   The OS username is kept only as a fallback for deployments that genuinely run
   one persona per OS account (e.g. the VPS Virtualmin model). The resolved id
   must be a declared actor `id` in `org.yaml`; an unmapped actor is refused.
@@ -298,10 +309,30 @@ guarantees, and only one of them is cryptographically enforced.
   the model's tool use may touch — not to stop a malicious process that can
   already write the filesystem.
 
-  Binding authorship cryptographically (signing each mutation with the actor's
-  Nostr key, recorded in the node/audit so `pd verify` can also detect
-  unauthorized writes) is the v2 path to a real authorization boundary and is
-  tracked in issue #30.
+  Binding authorship cryptographically is the v2 authorization boundary,
+  now implemented (issue #30): a mutating command MAY sign the node with the
+  actor's Nostr nsec (``PHANTOMDOCS_NSEC`` or ``--nsec-file``). The message
+  signed is a **canonical mutation envelope** — the node MAC together with
+  the authorization-relevant fields (actor, action, category, owners,
+  locations, urn) — so the BIP-340 Schnorr signature binds *who* made the
+  mutation and *what* it was authorized to do, not just the content identity.
+  The signature + x-only pubkey are recorded on the node and in the audit
+  entry. ``pd verify --org-yaml`` then (a) verifies each signature against the
+  recorded pubkey over the reconstructed envelope and (b) rejects a signature
+  whose key does not match the **specific actor recorded on the node** (one
+  declared actor's key can no longer authenticate a mutation asserted as a
+  different actor, and changing category/owners/locations after signing
+  invalidates the signature). This detects an unauthorized write signed with
+  the wrong key (or tampered after signing); it is an opt-in boundary —
+  unsigned mutations remain valid for namespaces that have not adopted
+  signing.
+
+  A `tag` mutation signs the same envelope with the **ref name** bound in
+  (a `ref` field, present only for `tag`), and the resulting signature is
+  stored on the ref record in `manifest.refs` (alongside the target MAC and
+  actor). `pd verify --org-yaml` validates each signed ref over the current
+  ref name + target MAC, so a ref renamed or repointed after tagging fails
+  verification.
 - **Read** — allowed iff the actor's resolved access (`merge_access`) covers
   the node's `category` (i.e. the category number is in the actor's resolved
   category set, or the actor holds a category exception). `category-0` is
@@ -338,7 +369,10 @@ Enables queries like "which minutes cite this policy?".
   version *is* its MAC (immutable) — filenames never encode version numbers.
 - **Refs (mutable pointers)** — `latest` / `approved-<date>` pointers in the
   manifest resolve a logical name to a version MAC (the `git` branch/tag
-  equivalent); approving a document is tagging a MAC.
+  equivalent); approving a document is tagging a MAC. A signed `tag` stores
+  the signature on the ref record, binding the ref name to the target MAC
+  (see §9), so a ref renamed or repointed after tagging is detected by
+  `pd verify`.
 - **Backup** — `pd backup` copies blobs + manifest to a target backend,
   verifiable by hash.
 - **Verification (cotejo)** — `pd verify` recomputes the MAC chain and content
@@ -352,13 +386,21 @@ Enables queries like "which minutes cite this policy?".
 
 ## 13. Update package (what PhantomDocs applies)
 
-Idempotent, applied on top of a PhantomOrg persona installation:
+Idempotent and strictly **phantomtools-side**: applied on top of a PhantomOrg
+persona installation by `pd setup`. PhantomDocs never requires phantombot — or
+any core app — to grow per-tool hooks; the package only writes into the
+persona's own files and consumes `org.yaml`.
 
 - `kb/procedures/Documents.md` — document-management protocol per persona
   (rendered from templates, bounded by `<!-- phantomdocs:start/end -->` markers).
 - `MEMORY.md` — a compact pointer to the protocol (same marker convention).
-- Document-management tooling installed into `tools/` of the personas that need
-  it.
+- `tools/documents.sh` — a generated wrapper pinning `--actor <id>` (the
+  per-persona stopgap for a fixed actor; no phantombot-side injection). The
+  wrapper injects `--actor`/`--org-yaml` **after** the selected subcommand
+  (they are command-local Click options) and only for subcommands that accept
+  them, honouring an explicit operator override.
+- `documents.inboxes` in `org.yaml` — each persona's Drive inbox (`{name, id}`),
+  consumed by `pd setup` so the protocol references the inbox by id.
 
 ## 14. Security
 
