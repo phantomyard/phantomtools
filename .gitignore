@@ -11,7 +11,7 @@ node_modules/
 __pycache__/
 *.pyc
 
-# Notas de revisión obsoletas (ronda 18/08) - descartadas
+# Obsolete review notes (round 18/08) - discarded
 docs/pr-reviews/
 bundles/
 phantomorg/phantomorg-review-fixes.zip
