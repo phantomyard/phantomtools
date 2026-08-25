@@ -23,7 +23,14 @@ from .compiler import CompileError
 from .compiler import build as compiler_build
 from .compiler.phantomchat import verify_phantomchat
 from .compiler.telegram import TelegramError, verify_telegram
-from .deploy.norms import file_norms
+from .deploy.norms import (
+    NORMS_STATE_FILENAME,
+    NormFilingResult,
+    file_norms,
+    load_norms_state,
+    next_norms_state,
+    save_norms_state,
+)
 from .deploy.session import (
     ManifestError,
     RollbackError,
@@ -756,8 +763,22 @@ def telegram_check_cmd(org_path, config_path, state_path, as_json):
     default=False,
     help="Skip filing scaffold norms as drawer rows at deploy time",
 )
+@click.option(
+    "--strict-norms",
+    "strict_norms",
+    is_flag=True,
+    default=False,
+    help="Fail (non-zero exit) when any scaffold norm fails to file as a drawer row",
+)
 def deploy_cmd(
-    compiled_dir, target, force, prune, assume_yes, phantombot_bin, no_file_norms
+    compiled_dir,
+    target,
+    force,
+    prune,
+    assume_yes,
+    phantombot_bin,
+    no_file_norms,
+    strict_norms,
 ):
     """Deploys the compiled output into the runtime's personas directory.
 
@@ -915,7 +936,14 @@ def deploy_cmd(
             raise SystemExit(1)
 
     if not no_file_norms:
-        norm_result = file_norms(compiled_dir_path, phantombot_bin=phantombot_bin)
+        state_path = archives_dir(effective_target) / NORMS_STATE_FILENAME
+        previous = load_norms_state(state_path)
+        norm_result = file_norms(
+            compiled_dir_path,
+            phantombot_bin=phantombot_bin,
+            previous=previous,
+            target=effective_target,
+        )
         if norm_result.filed:
             total = sum(norm_result.filed.values())
             click.secho(
@@ -923,6 +951,16 @@ def deploy_cmd(
                 f"{len(norm_result.filed)} persona(s)",
                 fg="green",
             )
+        if norm_result.superseded:
+            click.secho(
+                "Stale scaffold norms (filed before, no longer in the current "
+                "manifest) — their rows still decay in the judge for up to "
+                "365 days:",
+                fg="yellow",
+            )
+            for actor_id, texts in sorted(norm_result.superseded.items()):
+                for text in texts:
+                    click.echo(f"  - {actor_id}: {text}")
         if norm_result.errors:
             click.secho(
                 "Norm filing skipped or failed (phantombot >= 1.1.282 required):",
@@ -930,6 +968,19 @@ def deploy_cmd(
             )
             for err in norm_result.errors:
                 click.echo(f"  - {err}")
+        save_norms_state(
+            state_path,
+            next_norms_state(
+                previous,
+                norm_result,
+                {d.name for d in compiled_dir_path.iterdir() if d.is_dir()},
+            ),
+        )
+        if strict_norms and norm_result.errors:
+            click.secho(
+                "Norm filing errors are fatal (--strict-norms).", fg="red"
+            )
+            raise SystemExit(1)
 
     if not archive_root_pre_existed and archives_dir(effective_target).is_dir():
         click.secho(
@@ -1117,8 +1168,23 @@ def build_all_cmd(base_dir, out_base):
     default=False,
     help="Skip filing scaffold norms as drawer rows at deploy time",
 )
+@click.option(
+    "--strict-norms",
+    "strict_norms",
+    is_flag=True,
+    default=False,
+    help="Fail (non-zero exit) when any scaffold norm fails to file as a drawer row",
+)
 def deploy_all_cmd(
-    base_dir, dist_base, target, force, prune, assume_yes, phantombot_bin, no_file_norms
+    base_dir,
+    dist_base,
+    target,
+    force,
+    prune,
+    assume_yes,
+    phantombot_bin,
+    no_file_norms,
+    strict_norms,
 ):
     """Deploys all organizations under --base using what was compiled in --dist-base."""
     base_dir, dist_base = Path(base_dir), Path(dist_base)
@@ -1158,6 +1224,11 @@ def deploy_all_cmd(
     merged_archived: list[tuple[str, str]] = []
     merged_norms_filed: dict[str, int] = {}
     merged_norms_errors: list[str] = []
+    merged_norms_superseded: dict[str, list[str]] = {}
+    merged_filed_lines: dict[str, list[str]] = {}
+    # Filed-norm ledger (per target), for stale-row detection across deploys.
+    norms_state_path = archives_dir(effective_target) / NORMS_STATE_FILENAME
+    previous_norms = load_norms_state(norms_state_path)
     # Data-dir backup info aggregated across orgs. Keep the FIRST
     # pre-overwrite backup seen per file (the true pre-session state,
     # matching the archive-dedup semantics: the first archive per name is
@@ -1301,12 +1372,21 @@ def deploy_all_cmd(
                 merged_humans_created = merged_humans_created or result.humans_created
             ok += 1
             if not no_file_norms:
-                norm_result = file_norms(compiled_dir, phantombot_bin=phantombot_bin)
+                norm_result = file_norms(
+                    compiled_dir,
+                    phantombot_bin=phantombot_bin,
+                    previous=previous_norms,
+                    target=effective_target,
+                )
                 for actor_id, count in norm_result.filed.items():
                     merged_norms_filed[actor_id] = (
                         merged_norms_filed.get(actor_id, 0) + count
                     )
                 merged_norms_errors.extend(norm_result.errors)
+                for actor_id, texts in norm_result.superseded.items():
+                    merged_norms_superseded.setdefault(actor_id, []).extend(texts)
+                for actor_id, lines in norm_result.filed_lines.items():
+                    merged_filed_lines.setdefault(actor_id, []).extend(lines)
 
         # One aggregated session for the whole deploy-all invocation: a single
         # `po rollback` undoes everything this command changed.
@@ -1383,6 +1463,16 @@ def deploy_all_cmd(
                 f"{len(merged_norms_filed)} persona(s)",
                 fg="green",
             )
+        if merged_norms_superseded:
+            click.secho(
+                "Stale scaffold norms (filed before, no longer in the current "
+                "manifest) — their rows still decay in the judge for up to "
+                "365 days:",
+                fg="yellow",
+            )
+            for actor_id, texts in sorted(merged_norms_superseded.items()):
+                for text in texts:
+                    click.echo(f"  - {actor_id}: {text}")
         if merged_norms_errors:
             click.secho(
                 "Norm filing skipped or failed (phantombot >= 1.1.282 required):",
@@ -1390,6 +1480,24 @@ def deploy_all_cmd(
             )
             for err in merged_norms_errors:
                 click.echo(f"  - {err}")
+        merged_result = NormFilingResult(
+            filed=merged_norms_filed,
+            errors=merged_norms_errors,
+            filed_lines=merged_filed_lines,
+        )
+        save_norms_state(
+            norms_state_path,
+            next_norms_state(
+                previous_norms,
+                merged_result,
+                {d.name for d in compiled_dirs_all},
+            ),
+        )
+        if strict_norms and merged_norms_errors:
+            click.secho(
+                "Norm filing errors are fatal (--strict-norms).", fg="red"
+            )
+            raise SystemExit(1)
     click.secho(
         "Rollback available: `po rollback` (restores the pre-deploy state)",
         fg="cyan",

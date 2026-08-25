@@ -63,6 +63,7 @@ from .target import (
     _archive_stamp,
     _assert_real_directory,
 )
+from .norms import NORMS_STATE_FILENAME
 
 MANIFEST_NAME = ".phantomorg-manifest.json"
 LOCK_NAME = ".phantomorg-manifest.lock"
@@ -104,7 +105,7 @@ _DATA_STAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z")
 # Internal dotfiles that live inside the archive root but are not
 # phantombot archives; the "is the archive root empty?" check must
 # ignore them.
-_INTERNAL_NAMES = {MANIFEST_NAME, LOCK_NAME}
+_INTERNAL_NAMES = {MANIFEST_NAME, LOCK_NAME, NORMS_STATE_FILENAME}
 
 
 def _acquire_lock_file(lock_path: Path):

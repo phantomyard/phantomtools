@@ -729,10 +729,13 @@ def _reconcile_stale_output(spec: OrgSpec, out_dir: Path) -> None:
       longer in the spec (it belongs to this org but was removed). Actor
       dirs of OTHER orgs, unmanaged dirs, or dirs without our metadata are
       left untouched.
-    - Derived artifacts (``phantomchat.json``, the communication norm
-      ``kb/procedures/comunicacion-agentes.md``, the ``norms.json`` manifest,
-      ``HUMANS.md``) are removed from a current actor when the org model no
-      longer produces them (npub dropped, no channels, no humans block).
+    - Derived artifacts are removed from a current actor when the org model
+      no longer produces them: ``phantomchat.json`` (npub dropped or no agent
+      channel) and the communication norm ``kb/procedures/comunicacion-agentes.md``
+      (no channels). The ``norms.json`` manifest is NOT removed here — the
+      build always regenerates it (empty when the org declares no channels),
+      so a channel drop empties it instead of leaving a stale manifest.
+      ``HUMANS.md`` is removed at the ORG level (step 3), not per-actor.
 
     This runs only on the build OUTPUT (regenerable state), never on a live
     persona directory.
