@@ -67,7 +67,9 @@ class _FakeRunner:
     def __call__(self, args: list[str]) -> subprocess.CompletedProcess:
         self.calls.append(list(args))
         if len(args) >= 2 and args[1] == "today":
-            return subprocess.CompletedProcess(args, self.probe_rc, self.probe_stdout, "")
+            return subprocess.CompletedProcess(
+                args, self.probe_rc, self.probe_stdout, ""
+            )
         return subprocess.CompletedProcess(
             args, self.returncode, self.stdout, self.stderr
         )
@@ -255,9 +257,9 @@ class TestStaleRowLedger(unittest.TestCase):
     ledger lets the NEXT deploy surface rows that are gone now."""
 
     def _current_entries(self, out: Path) -> list[str]:
-        return json.loads(
-            (out / "dana" / NORMS_FILENAME).read_text(encoding="utf-8")
-        )["entries"]
+        return json.loads((out / "dana" / NORMS_FILENAME).read_text(encoding="utf-8"))[
+            "entries"
+        ]
 
     def test_superseded_rows_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
