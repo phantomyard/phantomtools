@@ -203,7 +203,9 @@ def file_norms(
         current_hashes = {
             _hash_line(ln) for ln in _read_norm_lines(compiled_dir / actor_id)
         }
-        stale = sorted({text for h, text in prev_entries.items() if h not in current_hashes})
+        stale = sorted(
+            {text for h, text in prev_entries.items() if h not in current_hashes}
+        )
         if stale:
             result.superseded[actor_id] = stale
 

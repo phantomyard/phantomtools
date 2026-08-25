@@ -977,9 +977,7 @@ def deploy_cmd(
             ),
         )
         if strict_norms and norm_result.errors:
-            click.secho(
-                "Norm filing errors are fatal (--strict-norms).", fg="red"
-            )
+            click.secho("Norm filing errors are fatal (--strict-norms).", fg="red")
             raise SystemExit(1)
 
     if not archive_root_pre_existed and archives_dir(effective_target).is_dir():
@@ -1494,9 +1492,7 @@ def deploy_all_cmd(
             ),
         )
         if strict_norms and merged_norms_errors:
-            click.secho(
-                "Norm filing errors are fatal (--strict-norms).", fg="red"
-            )
+            click.secho("Norm filing errors are fatal (--strict-norms).", fg="red")
             raise SystemExit(1)
     click.secho(
         "Rollback available: `po rollback` (restores the pre-deploy state)",

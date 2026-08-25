@@ -56,6 +56,7 @@ try:  # pragma: no cover - Windows has no fcntl
 except ImportError:  # pragma: no cover
     fcntl = None
 
+from .norms import NORMS_STATE_FILENAME
 from .target import (
     PER_FILE_MARKER,
     DeployError,
@@ -63,7 +64,6 @@ from .target import (
     _archive_stamp,
     _assert_real_directory,
 )
-from .norms import NORMS_STATE_FILENAME
 
 MANIFEST_NAME = ".phantomorg-manifest.json"
 LOCK_NAME = ".phantomorg-manifest.lock"
