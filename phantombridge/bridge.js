@@ -2439,7 +2439,7 @@ if (DERIVED && DERIVED.actorsByRole && permFullRoleIds.length > 0) {
   }
   if (derivedNames.size > 0) {
     permFull = derivedNames;
-    console.log('[bridge] full derivado de org.yaml roles (' + permFullRoleIds.join(',') + '): ' + [...derivedNames].sort().join(', '));
+    console.log('[bridge] full derived from org.yaml roles (' + permFullRoleIds.join(',') + '): ' + [...derivedNames].sort().join(', '));
   }
 }
 // Can this sender operate a room command (join/leave/inject/recordings) on
@@ -2520,7 +2520,7 @@ if (JITSI_MODE) {
   xmpp.on('error', (err) => console.error('[xmpp] error:', err.message));
   xmpp.on('offline', () => console.log('[xmpp] offline'));
   xmpp.on('online', async (address) => {
-    console.log('[xmpp] online como', address.toString());
+    console.log('[xmpp] online as', address.toString());
     const prev = [...rooms.entries()];
     rooms.clear();
     for (const [room, info] of prev) await joinRoom(room, {nick: info.nick});
@@ -2693,7 +2693,7 @@ if (JITSI_MODE) {
         const n = parseInt(opts.timeout, 10);
         if (!isNaN(n) && n > 0) roomTimeouts.set(room, n);
       }
-      console.log('[xmpp] unido a', room, 'como', nick, '(timeout inactividad ' + getTimeoutMin(room) + ' min)');
+      console.log('[xmpp] joined', room, 'as', nick, '(inactivity timeout ' + getTimeoutMin(room) + ' min)');
       return {ok: true, allocError: allocError ? allocError.message : null};
     } catch (err) {
       console.error('[xmpp] error join', room, err.message);
