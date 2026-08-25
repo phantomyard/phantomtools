@@ -4,6 +4,49 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+**Hierarchical categories (#31), index by reference (#35), update package (#33), mutation signing (#30 v2).**
+
+- **Hierarchical / project-scoped categories** (`access.py`, `cli.py`):
+  category ids are now `category-...` strings with a project umbrella
+  (`category-4` → `category-4-almaponia`). Holding a parent grants every
+  descendant (prefix rule); per-project grants live at the actor level
+  (`actor_exceptions`), not the shared role. `resolved_categories` returns
+  strings; ints are normalized on read (backward compatible).
+- **Index by reference** (`storage.py::read_reference`, `cli.py`):
+  `pd add --ref gdrive://… | file://… | ssh://…` indexes an external object
+  without copying it into the content-addressed store. `pd get` / `pd verify`
+  re-read the reference to serve bytes / check integrity. `ssh://` references
+  store the full canonical URI (host/user/port preserved) and shell-quote the
+  remote path, so a reference path with metacharacters is read literally and
+  round-trips through `get`/`verify`.
+- **§13 update package** (`setup.py`, `cli.py::setup`): `pd setup` renders
+  `kb/procedures/Documents.md`, a `MEMORY.md` pointer and `tools/documents.sh`
+  (wrapper pinning `--actor`), all bounded by `<!-- phantomdocs:start/end -->`
+  markers; idempotent and re-runnable, preserving persona-authored content.
+  The wrapper injects `--actor`/`--org-yaml` **after** the subcommand (they are
+  command-local Click options) and only for subcommands that accept them.
+- **Product decision — no phantombot-side hooks** (`docs/SPEC.md` §9/§13,
+  `setup.py`, `cli.py`): the phantombot-side `PHANTOMDOCS_ACTOR` injection is
+  dropped. PhantomDocs stays fully additive: the per-persona
+  `tools/documents.sh` wrapper pins `--actor`, and `PHANTOMDOCS_ACTOR` remains
+  an operator-supplied override — neither requires any change to phantombot.
+- **Mutation signing (#30 v2)** (`signing.py`, `cli.py`, `audit.py`): a
+  mutating command may sign the node with the actor's Nostr nsec
+  (`PHANTOMDOCS_NSEC` / `--nsec-file`); the BIP-340 Schnorr signature + x-only
+  pubkey are recorded on the node and audit entry. The signed message is the
+  **canonical mutation envelope** (MAC + actor + action + category + owners +
+  locations + urn), so the signature binds authorship and the authorization
+  metadata. `pd verify --org-yaml` verifies each signature over the
+  reconstructed envelope and rejects a key that does not match the specific
+  actor recorded on the node (no cross-actor impersonation; changing
+  category/owners after signing invalidates it).
+- **Signed refs (#30 v2)** (`cli.py::tag`/`verify`, `manifest.py`): a signed
+  `tag` stores a signed record (`mac` + `actor` + `sig`/`sigPubkey`) whose
+  signature binds the **ref name** to its target MAC (the ref name is part of
+  the canonical envelope). `pd verify --org-yaml` verifies each signed ref, so
+  renaming or repointing `manifest.refs` after tagging invalidates the
+  signature and fails verification.
+
 **PR #27 review hardening — enforce the advertised ACL.**
 
 - **ACL is enforced, not just declared** (`cli.py`): `get`, `search`,

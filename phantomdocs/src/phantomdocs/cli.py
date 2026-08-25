@@ -13,7 +13,13 @@ import sys
 import click
 
 from . import __version__
-from .access import can_read, can_write, load_org, resolved_categories
+from .access import (
+    can_read,
+    can_write,
+    load_org,
+    normalize_category,
+    resolved_categories,
+)
 from .audit import append as audit_append
 from .audit import read as audit_read
 from .audit import verify_chain as audit_verify_chain
@@ -37,12 +43,33 @@ from .manifest import (
     node_by_path,
     node_by_slug,
     node_by_urn,
+    ref_target_mac,
     resolve_node,
     save,
     urn_path,
     versions_of,
 )
-from .storage import LocalBackend, StorageError, resolve_backend
+from .setup import (
+    apply_bounded,
+    render_documents_protocol,
+    render_memory_pointer,
+    render_wrapper,
+    write_wrapper,
+)
+from .signing import (
+    mutation_envelope,
+    npub_to_pubkey_hex,
+    pubkey_from_nsec,
+    sign_mutation,
+    verify_mutation,
+)
+from .storage import (
+    LocalBackend,
+    StorageError,
+    location_uri,
+    read_reference,
+    resolve_backend,
+)
 from .update import is_newer, latest_release
 
 
@@ -96,9 +123,9 @@ def _resolve_actor(explicit: str | None) -> str | None:
     persona at a time, so the OS username is NOT the persona identity.
     The actor is resolved from, in order:
 
-      1. an explicit ``--actor`` flag (harness/caller override);
-      2. the ``PHANTOMDOCS_ACTOR`` environment variable, set by the harness
-         (phantombot knows which persona has focus);
+      1. an explicit ``--actor`` flag (per-persona wrapper / caller override);
+      2. the ``PHANTOMDOCS_ACTOR`` environment variable (operator-supplied
+         override — never injected by phantombot);
       3. the OS username (fallback for one-account-per-persona deployments).
 
     Returns None when nothing resolves (fail-closed). The candidate is
@@ -147,9 +174,69 @@ def _require_acl(org_yaml: str | None, actor: str | None = None):
 
 
 def _audit(
-    root: str, actor: str, action: str, urn: str, mac: str, ch: str | None
+    root: str,
+    actor: str,
+    action: str,
+    urn: str,
+    mac: str,
+    ch: str | None,
+    sig: str | None = None,
+    sig_pubkey: str | None = None,
 ) -> None:
-    audit_append(root, actor, action, urn, mac, ch)
+    audit_append(root, actor, action, urn, mac, ch, sig, sig_pubkey)
+
+
+def _signing_key(nsec_file: str | None) -> str | None:
+    """Resolve the mutation-signing nsec (SPEC §9, issue #30 v2).
+
+    Precedence: ``--nsec-file`` → ``$PHANTOMDOCS_NSEC``. Returns None when
+    the operator has not configured signing, in which case mutations are
+    unsigned (v1 behavior).
+    """
+    if nsec_file:
+        try:
+            with open(nsec_file, "r", encoding="utf-8") as f:
+                return f.read().strip() or None
+        except OSError as exc:
+            raise click.ClickException(f"cannot read --nsec-file: {exc}")
+    return os.environ.get("PHANTOMDOCS_NSEC", "").strip() or None
+
+
+def _sign_fields(
+    nsec: str | None,
+    *,
+    mac: str,
+    actor: str,
+    action: str,
+    category: str,
+    owners: list[str] | None,
+    locations: list[dict] | None,
+    urn: str,
+    ref: str | None = None,
+) -> dict[str, str]:
+    """The ``sig`` / ``sigPubkey`` fields for a mutation, or ``{}`` unsigned.
+
+    The signature binds the node MAC **and** the authorization-relevant
+    fields (actor, action, category, owners, locations, urn) by signing the
+    canonical mutation envelope (issue #30 v2). ``ref`` is bound only for
+    ``tag`` mutations, tying the mutable ref name to its target MAC.
+    """
+    if not nsec:
+        return {}
+    envelope = mutation_envelope(
+        mac=mac,
+        actor=actor,
+        action=action,
+        category=category,
+        owners=owners,
+        locations=locations,
+        urn=urn,
+        ref=ref,
+    )
+    return {
+        "sig": sign_mutation(nsec, envelope),
+        "sigPubkey": pubkey_from_nsec(nsec),
+    }
 
 
 def _resolve_store(root: str, backend: str | None):
@@ -188,28 +275,32 @@ def init(org: str, namespace: str, org_pubkey: str, root: str) -> None:
 @click.option("--parent", default=None, help="Parent folder (logical path or slug).")
 @click.option(
     "--category",
-    type=int,
-    default=1,
+    type=str,
+    default="category-1",
     show_default=True,
-    help="Default security category for children.",
+    help="Security category id (e.g. 'category-2', 'category-4-almaponia').",
 )
 @click.option("--owners", multiple=True, help="PhantomOrg role ids allowed to write.")
 @click.option(
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
 @click.option("--actor", default=None, help=_ACTOR_HELP)
+@click.option(
+    "--nsec-file",
+    default=None,
+    help="File containing the actor's nsec (issue #30 v2 signing).",
+)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def mkdir(name, parent, category, owners, org_yaml, actor, root):
+def mkdir(name, parent, category, owners, org_yaml, actor, nsec_file, root):
     """Create a folder node (a link in the chained MAC hierarchy).
 
     Access-controlled: requires --org-yaml + an authenticated OS identity; the
     actor must be able to write the folder's category (fail-closed).
     """
     actor_id, org = _require_acl(org_yaml, actor)
+    category = normalize_category(category)
     if not can_write(org, actor_id, category, list(owners)):
-        raise click.ClickException(
-            f"denied: {actor_id} cannot write category-{category}"
-        )
+        raise click.ClickException(f"denied: {actor_id} cannot write {category}")
 
     # Load-modify-save under the inter-process lock: a concurrent `pd` must
     # not be able to interleave its load between our load and save (which
@@ -232,35 +323,58 @@ def mkdir(name, parent, category, owners, org_yaml, actor, root):
         if node_by_urn(manifest, urn) is not None:
             raise click.ClickException(f"folder already exists: {urn}")
 
-        manifest["nodes"].append(
-            {
-                "urn": urn,
-                "mac": mac,
-                "parentMac": parent_mac,
-                "kind": "folder",
-                "slug": name,
-                "category": category,
-                "owners": list(owners),
-                "meta": {},
-                "relations": {},
-            }
+        node = {
+            "urn": urn,
+            "mac": mac,
+            "parentMac": parent_mac,
+            "kind": "folder",
+            "slug": name,
+            "category": category,
+            "owners": list(owners),
+            "meta": {},
+            "relations": {},
+            "actor": actor_id,
+            "action": "mkdir",
+        }
+        node.update(
+            _sign_fields(
+                _signing_key(nsec_file),
+                mac=mac,
+                actor=actor_id,
+                action="mkdir",
+                category=category,
+                owners=list(owners),
+                locations=None,
+                urn=urn,
+            )
         )
+        manifest["nodes"].append(node)
         save(_manifest_path(root), manifest)
-    _audit(root, actor_id, "mkdir", urn, mac, None)
+    _audit(
+        root,
+        actor_id,
+        "mkdir",
+        urn,
+        mac,
+        None,
+        node.get("sig"),
+        node.get("sigPubkey"),
+    )
     click.echo(f"created {path}")
     click.echo(f"  urn  {urn}")
     click.echo(f"  mac  {full_id(mac)}")
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+@click.argument("path", required=False)
 @click.option("--slug", required=True, help="Stable slug (no version; spec §7).")
 @click.option(
     "--category",
-    type=int,
+    type=str,
     default=None,
-    help="Security category (PhantomOrg security_categories). Defaults to 1 "
-    "for new nodes; versioning an existing node preserves its category.",
+    help="Security category id (e.g. 'category-2', 'category-4-almaponia'). "
+    "Defaults to category-1 for new nodes; versioning an existing node "
+    "preserves its category.",
 )
 @click.option("--folder", default=None, help="Parent folder (logical path or slug).")
 @click.option("--owners", multiple=True, help="PhantomOrg role ids allowed to write.")
@@ -270,17 +384,41 @@ def mkdir(name, parent, category, owners, org_yaml, actor, root):
 @click.option(
     "--backend", default=None, help="Backend URI (local:// ssh:// gdrive://)."
 )
+@click.option(
+    "--ref",
+    default=None,
+    help="Index an existing external object by reference "
+    "(gdrive://<file_id>, file:///path, ssh://host/path) instead of "
+    "ingesting a local file. Read to hash, but NOT copied.",
+)
 @click.option("--actor", default=None, help=_ACTOR_HELP)
+@click.option(
+    "--nsec-file",
+    default=None,
+    help="File containing the actor's nsec (issue #30 v2 signing).",
+)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def add(path, slug, category, folder, owners, org_yaml, actor, backend, root):
+def add(
+    path, ref, slug, category, folder, owners, org_yaml, actor, nsec_file, backend, root
+):
     """Ingest a document: compute MAC chain, store blob, register node.
 
     Access-controlled: requires --org-yaml + an authenticated OS identity; the
     actor must be able to write the document's category, and when versioning an
     existing node, be one of its owners (fail-closed).
     """
-    with open(path, "rb") as f:
-        content = f.read()
+    if (path is None) == (ref is None):
+        raise click.ClickException(
+            "provide exactly one of: PATH (ingest a local file) or --ref URI "
+            "(index an external object by reference)"
+        )
+
+    if ref:
+        content, ref_location = read_reference(ref)
+    else:
+        with open(path, "rb") as f:
+            content = f.read()
+        ref_location = None
 
     actor_id, org = _require_acl(org_yaml, actor)
 
@@ -315,14 +453,19 @@ def add(path, slug, category, folder, owners, org_yaml, actor, backend, root):
         # downgrade a document by passing a lower --category.
         if existing is not None:
             effective_category = existing["category"]
-            if category is not None and category != effective_category:
+            if category is not None and normalize_category(
+                category
+            ) != normalize_category(effective_category):
                 raise click.ClickException(
                     f"denied: cannot reclassify {urn} from "
-                    f"category-{effective_category} to category-{category} via add "
+                    f"{normalize_category(effective_category)} to "
+                    f"{normalize_category(category)} via add "
                     "(reclassification is a separate operation)"
                 )
         else:
-            effective_category = 1 if category is None else category
+            effective_category = (
+                "category-1" if category is None else normalize_category(category)
+            )
 
         # Write ACL: base category access; when versioning an existing node,
         # the actor must be one of its declared owners.
@@ -331,34 +474,61 @@ def add(path, slug, category, folder, owners, org_yaml, actor, backend, root):
         )
         if not can_write(org, actor_id, effective_category, effective_owners):
             raise click.ClickException(
-                f"denied: {actor_id} cannot write category-{effective_category} "
+                f"denied: {actor_id} cannot write "
+                f"{normalize_category(effective_category)} "
                 f"{'(owner required)' if effective_owners else ''}"
             )
 
-        location = _resolve_store(root, backend).put(ch, content)
-        scheme = backend.split("://")[0] if backend and "://" in backend else "local"
+        if ref_location is not None:
+            locations = [ref_location]
+        else:
+            location = _resolve_store(root, backend).put(ch, content)
+            scheme = (
+                backend.split("://")[0] if backend and "://" in backend else "local"
+            )
+            locations = [{"backend": scheme, "path": location}]
 
-        manifest["nodes"].append(
-            {
-                "urn": urn,
-                "mac": mac,
-                "parentMac": parent_mac,
-                "kind": "doc",
-                "slug": slug,
-                "category": effective_category,
-                "contentHash": ch,
-                "size": len(content),
-                "owners": (
-                    list(existing.get("owners", []) or []) if existing else list(owners)
-                ),
-                "locations": [{"backend": scheme, "path": location}],
-                "meta": {"title": slug},
-                "relations": {},
-                "previous": previous,
-            }
+        node = {
+            "urn": urn,
+            "mac": mac,
+            "parentMac": parent_mac,
+            "kind": "doc",
+            "slug": slug,
+            "category": effective_category,
+            "contentHash": ch,
+            "size": len(content),
+            "owners": effective_owners,
+            "locations": locations,
+            "meta": {"title": slug},
+            "relations": {},
+            "previous": previous,
+            "actor": actor_id,
+            "action": "add" if previous is None else "version",
+        }
+        node.update(
+            _sign_fields(
+                _signing_key(nsec_file),
+                mac=mac,
+                actor=actor_id,
+                action="add" if previous is None else "version",
+                category=effective_category,
+                owners=effective_owners,
+                locations=locations,
+                urn=urn,
+            )
         )
+        manifest["nodes"].append(node)
         save(_manifest_path(root), manifest)
-    _audit(root, actor_id, "add" if previous is None else "version", urn, mac, ch)
+    _audit(
+        root,
+        actor_id,
+        "add" if previous is None else "version",
+        urn,
+        mac,
+        ch,
+        node.get("sig"),
+        node.get("sigPubkey"),
+    )
 
     verb = "added" if previous is None else "versioned"
     click.echo(f"{verb} {logical}")
@@ -398,14 +568,22 @@ def get(ref, mac, cat, backend, org_yaml, actor, root):
     actor_id, org = _require_acl(org_yaml, actor)
     if not can_read(org, actor_id, node.get("category", 0)):
         raise click.ClickException(
-            f"denied: {actor_id} cannot read category-{node.get('category')} "
-            f"({node['urn']})"
+            f"denied: {actor_id} cannot read "
+            f"{normalize_category(node.get('category', 0))} ({node['urn']})"
         )
 
-    location = node.get("locations", [{}])[0].get("path", "")
-    click.echo(f"{node['urn']} -> {location}")
+    location = node.get("locations", [{}])[0]
+    if "ref" in location:
+        click.echo(f"{node['urn']} -> {location_uri(location)}")
+    else:
+        click.echo(f"{node['urn']} -> {location.get('path', '')}")
     if cat and node.get("kind") == "doc":
-        sys.stdout.buffer.write(_resolve_store(root, backend).get(node["contentHash"]))
+        loc = node.get("locations", [{}])[0]
+        if "ref" in loc:
+            data = read_reference(location_uri(loc))[0]
+        else:
+            data = _resolve_store(root, backend).get(node["contentHash"])
+        sys.stdout.buffer.write(data)
 
 
 @main.command()
@@ -424,8 +602,8 @@ def versions(ref, org_yaml, actor, root):
     actor_id, org = _require_acl(org_yaml, actor)
     if not can_read(org, actor_id, node.get("category", 0)):
         raise click.ClickException(
-            f"denied: {actor_id} cannot read category-{node.get('category')} "
-            f"({node['urn']})"
+            f"denied: {actor_id} cannot read "
+            f"{normalize_category(node.get('category', 0))} ({node['urn']})"
         )
     history = versions_of(manifest, node["urn"])
     if not history:
@@ -477,13 +655,37 @@ def search(query, org_yaml, actor, root):
 @click.option(
     "--backend", default=None, help="Backend URI (local:// ssh:// gdrive://)."
 )
+@click.option(
+    "--org-yaml",
+    default=None,
+    help="Optional PhantomOrg org.yaml to also check mutation signatures "
+    "against declared actor npubs (issue #30 v2).",
+)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def verify(backend, root):
+def verify(backend, org_yaml, root):
     """Recompute MAC chain + content hashes against the manifest."""
     manifest = _load_or_die(root)
     store = _resolve_store(root, backend)
     known_macs = {n["mac"] for n in manifest.get("nodes", [])}
     known_macs.add(manifest["manifest"]["rootMac"])
+
+    # Declared actor pubkeys (from org.yaml) for the signature authorization
+    # check. Only enforced when --org-yaml is supplied (issue #30 v2). The
+    # mapping is actor id -> pubkey hex so a signature is validated against
+    # the *specific* actor recorded on the node, not merely "some" declared
+    # actor.
+    declared_pubkeys: dict[str, str] | None = None
+    if org_yaml:
+        org = load_org(org_yaml)
+        declared_pubkeys = {}
+        for a in org.get("actors", []):
+            npub = a.get("npub")
+            actor_id = a.get("id")
+            if npub and actor_id:
+                try:
+                    declared_pubkeys[actor_id] = npub_to_pubkey_hex(npub)
+                except ValueError:
+                    pass
 
     failures = 0
     for node in manifest.get("nodes", []):
@@ -497,28 +699,45 @@ def verify(backend, root):
             if not ch:
                 issues.append("missing contentHash")
             else:
-                try:
-                    if not store.has(ch):
-                        issues.append("blob missing")
-                    else:
-                        try:
-                            data = store.get(ch)
-                        except StorageError as exc:
-                            issues.append(f"{exc}")
-                            data = None
-                        if data is not None:
-                            if content_hash(data) != ch:
-                                issues.append("content hash mismatch")
-                            elif (
-                                node_mac(
-                                    node["parentMac"],
-                                    component_for_doc(node["slug"], data),
-                                )
-                                != node["mac"]
-                            ):
-                                issues.append("MAC chain mismatch")
-                except StorageError as exc:
-                    issues.append(f"backend error: {exc}")
+                loc = node.get("locations", [{}])[0]
+                if loc.get("ref"):
+                    try:
+                        data = read_reference(location_uri(loc))[0]
+                        if content_hash(data) != ch:
+                            issues.append("content hash mismatch (reference)")
+                        elif (
+                            node_mac(
+                                node["parentMac"],
+                                component_for_doc(node["slug"], data),
+                            )
+                            != node["mac"]
+                        ):
+                            issues.append("MAC chain mismatch")
+                    except StorageError as exc:
+                        issues.append(f"reference read failed: {exc}")
+                else:
+                    try:
+                        if not store.has(ch):
+                            issues.append("blob missing")
+                        else:
+                            try:
+                                data = store.get(ch)
+                            except StorageError as exc:
+                                issues.append(f"{exc}")
+                                data = None
+                            if data is not None:
+                                if content_hash(data) != ch:
+                                    issues.append("content hash mismatch")
+                                elif (
+                                    node_mac(
+                                        node["parentMac"],
+                                        component_for_doc(node["slug"], data),
+                                    )
+                                    != node["mac"]
+                                ):
+                                    issues.append("MAC chain mismatch")
+                    except StorageError as exc:
+                        issues.append(f"backend error: {exc}")
         else:
             if (
                 node_mac(node["parentMac"], component_for_folder(node["slug"]))
@@ -526,11 +745,87 @@ def verify(backend, root):
             ):
                 issues.append("MAC chain mismatch")
 
+        # Mutation signature (issue #30 v2): if the node carries a signature,
+        # it must verify against its pubkey over the *canonical mutation
+        # envelope* (rebuilding the exact actor + authorization fields from the
+        # stored node); and if --org-yaml is supplied, the signing key must
+        # belong to the specific actor recorded on the node — not merely to
+        # some declared actor.
+        sig = node.get("sig")
+        sig_pubkey = node.get("sigPubkey")
+        if sig is not None or sig_pubkey is not None:
+            if not sig or not sig_pubkey:
+                issues.append("incomplete mutation signature")
+            else:
+                envelope = mutation_envelope(
+                    mac=node["mac"],
+                    actor=node.get("actor", ""),
+                    action=node.get("action", ""),
+                    category=node.get("category", ""),
+                    owners=node.get("owners"),
+                    locations=node.get("locations"),
+                    urn=node.get("urn", ""),
+                )
+                if not verify_mutation(sig_pubkey, sig, envelope):
+                    issues.append("signature invalid")
+                elif declared_pubkeys is not None:
+                    declared = declared_pubkeys.get(node.get("actor"))
+                    if declared is None:
+                        issues.append("signature from undeclared actor")
+                    elif sig_pubkey != declared:
+                        issues.append(
+                            "signature key does not match the actor's declared npub"
+                        )
+
         if issues:
             failures += 1
             click.echo(f"FAIL {node['urn']}: {', '.join(issues)}")
         else:
             click.echo(f"OK   {node['urn']}")
+
+    # Mutable refs (issue #30 v2 / PR #38): a signed `tag` stores a record
+    # whose signature binds the ref name -> target MAC -> actor. Rebuild the
+    # envelope with the *current* ref name and verify it, so renaming or
+    # repointing ``manifest.refs`` after tagging invalidates the signature.
+    for ref_name, value in (manifest.get("refs") or {}).items():
+        if not isinstance(value, dict):
+            continue  # legacy bare-MAC ref (unsigned, v1 behavior)
+        issues = []
+        mac = value.get("mac")
+        node = node_by_mac(manifest, mac) if mac else None
+        if node is None:
+            issues.append("ref points at unknown MAC")
+        else:
+            sig = value.get("sig")
+            sig_pubkey = value.get("sigPubkey")
+            if (sig is None) != (sig_pubkey is None):
+                issues.append("incomplete ref signature")
+            elif sig is not None:
+                envelope = mutation_envelope(
+                    mac=mac,
+                    actor=value.get("actor", ""),
+                    action=value.get("action", "tag"),
+                    category=node.get("category", ""),
+                    owners=node.get("owners"),
+                    locations=node.get("locations"),
+                    urn=node.get("urn", ""),
+                    ref=ref_name,
+                )
+                if not verify_mutation(sig_pubkey, sig, envelope):
+                    issues.append("ref signature invalid")
+                elif declared_pubkeys is not None:
+                    declared = declared_pubkeys.get(value.get("actor"))
+                    if declared is None:
+                        issues.append("ref signature from undeclared actor")
+                    elif sig_pubkey != declared:
+                        issues.append(
+                            "ref signature key does not match actor's declared npub"
+                        )
+        if issues:
+            failures += 1
+            click.echo(f"FAIL ref:{ref_name}: {', '.join(issues)}")
+        else:
+            click.echo(f"OK   ref:{ref_name}")
 
     audit_problems = audit_verify_chain(root)
     for problem in audit_problems:
@@ -549,12 +844,20 @@ def verify(backend, root):
     "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
 )
 @click.option("--actor", default=None, help=_ACTOR_HELP)
+@click.option(
+    "--nsec-file",
+    default=None,
+    help="File containing the actor's nsec (issue #30 v2 signing).",
+)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def tag(name, ref, org_yaml, actor, root):
+def tag(name, ref, org_yaml, actor, nsec_file, root):
     """Point a mutable ref (e.g. `latest`, `approved-<date>`) at a version MAC.
 
     Access-controlled: the actor must be able to write the target node's
-    category (fail-closed).
+    category (fail-closed). A signed tag stores a signed record whose
+    signature binds the ref name to its target MAC (issue #30 v2), so
+    renaming or repointing ``manifest.refs`` after tagging is detected by
+    ``verify``.
     """
     actor_id, org = _require_acl(org_yaml, actor)
     with manifest_lock(_manifest_path(root)):
@@ -564,12 +867,39 @@ def tag(name, ref, org_yaml, actor, root):
             raise click.ClickException(f"not found: {ref}")
         if not can_write(org, actor_id, node.get("category", 0), node.get("owners")):
             raise click.ClickException(
-                f"denied: {actor_id} cannot write category-{node.get('category')} "
-                f"({node['urn']})"
+                f"denied: {actor_id} cannot write "
+                f"{normalize_category(node.get('category', 0))} ({node['urn']})"
             )
-        manifest.setdefault("refs", {})[name] = node["mac"]
+        sig_fields = _sign_fields(
+            _signing_key(nsec_file),
+            mac=node["mac"],
+            actor=actor_id,
+            action="tag",
+            category=node.get("category", ""),
+            owners=node.get("owners"),
+            locations=node.get("locations"),
+            urn=node["urn"],
+            ref=name,
+        )
+        record = {
+            "mac": node["mac"],
+            "actor": actor_id,
+            "action": "tag",
+        }
+        if sig_fields:
+            record.update(sig_fields)
+        manifest.setdefault("refs", {})[name] = record
         save(_manifest_path(root), manifest)
-    _audit(root, actor_id, "tag", node["urn"], node["mac"], node.get("contentHash"))
+    _audit(
+        root,
+        actor_id,
+        "tag",
+        node["urn"],
+        node["mac"],
+        node.get("contentHash"),
+        record.get("sig"),
+        record.get("sigPubkey"),
+    )
     click.echo(f"{name} -> {display_id(node['mac'])}  ({node['urn']})")
 
 
@@ -581,8 +911,9 @@ def refs(root):
     if not manifest.get("refs"):
         click.echo("no refs")
         return
-    for name, mac in manifest.get("refs", {}).items():
-        node = node_by_mac(manifest, mac)
+    for name, value in manifest.get("refs", {}).items():
+        mac = ref_target_mac(value)
+        node = node_by_mac(manifest, mac) if mac else None
         urn = node["urn"] if node else "(unknown)"
         click.echo(f"{name:20} {display_id(mac)}  {urn}")
 
@@ -614,7 +945,7 @@ def derive_manifest(org_yaml, namespace, org_pubkey, out):
 @click.option("--org-yaml", required=True, help="Path to a PhantomOrg org.yaml.")
 @click.option("--actor", required=True, help="Actor id to resolve.")
 @click.option(
-    "--category", type=int, default=None, help="Check read access for this category."
+    "--category", type=str, default=None, help="Check read access for this category id."
 )
 def acl(org_yaml, actor, category):
     """Resolve an actor's access from a PhantomOrg org.yaml (spec §9)."""
@@ -625,8 +956,9 @@ def acl(org_yaml, actor, category):
         return
     click.echo(f"{actor}: categories {categories}")
     if category is not None:
-        verdict = "ALLOW" if can_read(org, actor, category) else "DENY"
-        click.echo(f"  read category-{category}: {verdict}")
+        cat = normalize_category(category)
+        verdict = "ALLOW" if can_read(org, actor, cat) else "DENY"
+        click.echo(f"  read {cat}: {verdict}")
 
 
 @main.command()
@@ -645,6 +977,58 @@ def status(root):
     click.echo(f"nodes     {len(nodes)} ({len(docs)} docs, {len(folders)} folders)")
     click.echo(f"refs      {len(manifest.get('refs', {}))}")
     click.echo(f"bytes     {total}")
+
+
+@main.command()
+@click.option(
+    "--org-yaml",
+    required=True,
+    help="PhantomOrg org.yaml (authoritative ACL + inboxes).",
+)
+@click.option(
+    "--actor", required=True, help="Persona id to render the update package for."
+)
+@click.option(
+    "--persona-dir",
+    required=True,
+    help="Persona installation root (contains kb/, MEMORY.md, tools/).",
+)
+@click.option("--namespace", default="docs", show_default=True, help="Namespace name.")
+@click.option(
+    "--org-pubkey", default="", help="Org Nostr pubkey (documented in Documents.md)."
+)
+def setup(org_yaml, actor, persona_dir, namespace, org_pubkey):
+    """Apply the §13 update package onto a persona installation.
+
+    Renders kb/procedures/Documents.md (protocol), a MEMORY.md pointer, and
+    tools/documents.sh (wrapper pinning --actor), all bounded by
+    ``<!-- phantomdocs:start/end -->`` markers. Idempotent and re-runnable.
+    """
+    org = load_org(org_yaml)
+    known_actors = {a.get("id") for a in org.get("actors", [])}
+    if actor not in known_actors:
+        raise click.ClickException(
+            f"denied: {actor!r} is not an actor in the org model (fail-closed)"
+        )
+
+    os.makedirs(os.path.join(persona_dir, "kb", "procedures"), exist_ok=True)
+    os.makedirs(os.path.join(persona_dir, "tools"), exist_ok=True)
+
+    documents_md = os.path.join(persona_dir, "kb", "procedures", "Documents.md")
+    memory_md = os.path.join(persona_dir, "MEMORY.md")
+    wrapper = os.path.join(persona_dir, "tools", "documents.sh")
+
+    apply_bounded(
+        documents_md,
+        render_documents_protocol(org, actor, namespace, org_pubkey),
+    )
+    apply_bounded(memory_md, render_memory_pointer(namespace, actor))
+    write_wrapper(wrapper, render_wrapper(org_yaml, actor))
+
+    click.echo(f"updated persona {actor!r} for namespace {namespace!r}")
+    click.echo(f"  protocol   {documents_md}")
+    click.echo(f"  pointer    {memory_md}")
+    click.echo(f"  wrapper    {wrapper}")
 
 
 @main.command()

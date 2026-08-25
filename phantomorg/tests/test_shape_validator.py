@@ -474,5 +474,73 @@ class TestHumansRegistry(unittest.TestCase):
         validate_shape(doc)  # must not raise
 
 
+class TestDocumentsBlockAndProjectScope(unittest.TestCase):
+    """PhantomDocs merge adds an optional root ``documents:`` block and
+    ``scope: project`` security categories. ``po validate`` must accept
+    both (the runtime already does) instead of rejecting them as unknown
+    root keys / invalid scopes."""
+
+    def setUp(self):
+        with open(AU_ORG, encoding="utf-8") as f:
+            self.doc = yaml.safe_load(f)
+
+    def test_documents_block_is_valid(self):
+        import copy
+
+        doc = copy.deepcopy(self.doc)
+        doc["documents"] = {
+            "namespace": "au",
+            "org_pubkey": (
+                "npub1ttkrrfadcrqps2vs6lmrq8rlr3dp6km378z4xklmz3jt82s2jytqzfw5mu"
+            ),
+            "inboxes": {"ceo": {"name": "AU Inbox/Direccion", "id": "1ZJ"}},
+            "naming": {
+                "domains": [
+                    {
+                        "id": "direction",
+                        "category": 2,
+                        "owners": ["ceo"],
+                        "types": [{"id": "action-plans"}],
+                    }
+                ]
+            },
+        }
+        validate_shape(doc)  # must not raise
+
+    def test_documents_block_is_optional(self):
+        # Absent documents block (as in the pre-PhantomDocs orgs) stays valid.
+        validate_shape(self.doc)  # must not raise
+
+    def test_scope_project_is_valid(self):
+        import copy
+
+        doc = copy.deepcopy(self.doc)
+        doc["policies"]["security_categories"]["category-0"]["scope"] = "project"
+        validate_shape(doc)  # must not raise
+
+    def test_scope_project_still_rejects_garbage(self):
+        # Adding `project` to VALID_SCOPES must not widen the enum to
+        # arbitrary strings.
+        import copy
+
+        doc = copy.deepcopy(self.doc)
+        doc["policies"]["security_categories"]["category-0"]["scope"] = "projects"
+        with self.assertRaises(ShapeError):
+            validate_shape(doc)
+
+    def test_documents_must_be_mapping(self):
+        # schema.json requires documents to be an object. A list, scalar
+        # or null must be rejected (PhantomDocs consumers call .get() on
+        # it and would crash on a non-mapping).
+        import copy
+
+        for bad in ([], ["namespace"], "au", 42, True, None):
+            doc = copy.deepcopy(self.doc)
+            doc["documents"] = bad
+            with self.assertRaises(ShapeError) as ctx:
+                validate_shape(doc)
+            self.assertIn("documents", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
