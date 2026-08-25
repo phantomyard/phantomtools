@@ -45,7 +45,9 @@ versioned: the `config.json.bak` files contain secrets).
     ANY room and list recordings).
   - `permissions.fullRoles` — org roles (from org.yaml) granted `full`; when
     org.yaml is present the bridge derives `full` from these roles (room names
-    are free-form and carry no authorization).
+    are free-form and carry no authorization). When derivation succeeds it
+    **replaces** `permissions.full`; the explicit list is only a fallback for
+    standalone deployments with no org.yaml.
   - `roomAgents` — specific room → which agents receive room messages
     (destinators; does not authorise the sender to inject).
   - `roomTimeouts` — per-room inactivity timeout.

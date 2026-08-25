@@ -2458,7 +2458,9 @@ function agentCanOperateRoom(senderName, room /* string|null */) {
 // kaieriksen review §4 criticism: "the tests do not actually test the matrix").
 // Resolves "can sender operate room?" against a raw permissions object:
 //   undefined / no block            -> legacy (open)
-//   {} / malformed / no grants      -> fail-closed (deny)
+//   null / array / non-object       -> fail-closed (deny)
+//   {} (empty block, no grants)     -> participants operate any named room;
+//                                      room-agnostic actions (room === null) denied
 //   { full: [names] }                 -> full: any room + room-agnostic; every
 //                                     other authenticated agent operates any named room
 // Returns true if the block is absent (legacy) or the sender meets the rule;
