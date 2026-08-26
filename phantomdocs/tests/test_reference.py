@@ -3,6 +3,7 @@ from unittest import mock
 
 import yaml
 from click.testing import CliRunner
+
 from phantomdocs.cli import main
 from phantomdocs.storage import _shell_quote, location_uri, read_reference
 
