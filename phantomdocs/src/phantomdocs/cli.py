@@ -42,6 +42,7 @@ from .manifest import (
     ref_target_mac,
     resolve_node,
     save,
+    structural_issues,
     versions_of,
 )
 from .setup import (
@@ -625,6 +626,11 @@ def verify(backend, org_yaml, root):
             click.echo(f"FAIL ref:{ref_name}: {', '.join(issues)}")
         else:
             click.echo(f"OK   ref:{ref_name}")
+
+    structure_problems = structural_issues(manifest)
+    for problem in structure_problems:
+        failures += 1
+        click.echo(f"FAIL structure: {problem}")
 
     audit_problems = audit_verify_chain(root)
     for problem in audit_problems:

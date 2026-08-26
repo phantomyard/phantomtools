@@ -988,3 +988,192 @@ def test_verify_detects_dangling_legacy_ref(tmp_path):
     r = _run(["verify", "--root", root])
     assert r.exit_code != 0
     assert "unknown MAC" in r.output
+
+def test_verify_detects_cross_urn_previous(tmp_path):
+    """Repointing a version's `previous` at another URN's MAC must fail
+    verify (issue #54: lineage was only checked for MAC existence)."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+
+    a = tmp_path / "a.txt"
+    a.write_text("a-v1", encoding="utf-8")
+    assert (
+        _run(
+            [
+                "add",
+                str(a),
+                "--slug",
+                "a.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        ).exit_code
+        == 0
+    )
+    b = tmp_path / "b.txt"
+    b.write_text("b-v1", encoding="utf-8")
+    assert (
+        _run(
+            [
+                "add",
+                str(b),
+                "--slug",
+                "b.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        ).exit_code
+        == 0
+    )
+    a.write_text("a-v2", encoding="utf-8")
+    assert (
+        _run(
+            [
+                "add",
+                str(a),
+                "--slug",
+                "a.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        ).exit_code
+        == 0
+    )
+
+    data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    docs = [n for n in data["nodes"] if n.get("kind") == "doc"]
+    a_nodes = [n for n in docs if n["urn"] == "urn:demo:doc:a.txt"]
+    b_node = next(n for n in docs if n["urn"] == "urn:demo:doc:b.txt")
+    assert len(a_nodes) == 2
+    a_nodes[-1]["previous"] = b_node["mac"]
+    (tmp_path / "manifest.yaml").write_text(
+        yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+    )
+
+    r = _run(["verify", "--root", root])
+    assert r.exit_code != 0
+    assert "previous does not point" in r.output
+
+
+def test_verify_detects_previous_cycle(tmp_path):
+    """A version chain that loops back must fail verify (the first version
+    carries a `previous` link)."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+
+    a = tmp_path / "a.txt"
+    a.write_text("v1", encoding="utf-8")
+    assert (
+        _run(
+            [
+                "add",
+                str(a),
+                "--slug",
+                "a.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        ).exit_code
+        == 0
+    )
+    a.write_text("v2", encoding="utf-8")
+    assert (
+        _run(
+            [
+                "add",
+                str(a),
+                "--slug",
+                "a.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        ).exit_code
+        == 0
+    )
+
+    data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    docs = [n for n in data["nodes"] if n.get("kind") == "doc"]
+    assert len(docs) == 2
+    docs[0]["previous"] = docs[1]["mac"]  # v1.previous = v2.mac -> 2-cycle
+    (tmp_path / "manifest.yaml").write_text(
+        yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+    )
+
+    r = _run(["verify", "--root", root])
+    assert r.exit_code != 0
+    assert "first version has a previous" in r.output
+
+
+def test_verify_detects_parent_cycle(tmp_path):
+    """Two folders whose `parentMac` form a cycle must fail verify with a
+    connectivity diagnostic (issue #54)."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+    assert (
+        _run(
+            [
+                "mkdir",
+                "--name",
+                "f1",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        ).exit_code
+        == 0
+    )
+    assert (
+        _run(
+            [
+                "mkdir",
+                "--name",
+                "f2",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        ).exit_code
+        == 0
+    )
+
+    data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    folders = [n for n in data["nodes"] if n.get("kind") == "folder"]
+    assert len(folders) == 2
+    f1, f2 = folders[0], folders[1]
+    f1["parentMac"], f2["parentMac"] = f2["mac"], f1["mac"]
+    (tmp_path / "manifest.yaml").write_text(
+        yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+    )
+
+    r = _run(["verify", "--root", root])
+    assert r.exit_code != 0
+    assert "parentMac cycle" in r.output
