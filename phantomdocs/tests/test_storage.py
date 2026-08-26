@@ -1,5 +1,6 @@
-import pytest
+from unittest import mock
 
+import pytest
 from phantomdocs.identity import content_hash as _content_hash
 from phantomdocs.storage import (
     GdriveBackend,
@@ -70,6 +71,29 @@ def test_resolve_backend_ssh():
 
 def test_resolve_backend_gdrive():
     assert isinstance(resolve_backend("gdrive://"), GdriveBackend)
+
+
+def test_gdrive_backend_put_returns_file_id():
+    """`put` returns the Drive file id printed by the persona's tooling."""
+    b = GdriveBackend()
+    h = _content_hash(b"x")
+    with mock.patch.object(GdriveBackend, "_require_tool"), mock.patch(
+        "phantomdocs.storage._run_checked",
+        return_value=mock.Mock(returncode=0, stdout="file-abc\n", stderr=""),
+    ):
+        assert b.put(h, b"x") == "file-abc"
+
+
+def test_gdrive_backend_put_fails_closed_without_file_id():
+    """An upload that yields no file id cannot round-trip, so `put` must
+    fail closed rather than fabricate an unrecoverable URI."""
+    b = GdriveBackend()
+    h = _content_hash(b"x")
+    with mock.patch.object(GdriveBackend, "_require_tool"), mock.patch(
+        "phantomdocs.storage._run_checked",
+        return_value=mock.Mock(returncode=0, stdout="", stderr=""),
+    ), pytest.raises(StorageError):
+        b.put(h, b"x")
 
 
 def test_resolve_backend_unknown():

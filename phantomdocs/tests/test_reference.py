@@ -3,7 +3,6 @@ from unittest import mock
 
 import yaml
 from click.testing import CliRunner
-
 from phantomdocs.cli import main
 from phantomdocs.storage import _shell_quote, location_uri, read_reference
 
@@ -182,3 +181,79 @@ def test_location_uri_reconstructs(tmp_path):
     )
     assert location_uri({"backend": "file", "ref": "/abs/p"}) == "file:///abs/p"
     assert location_uri({"backend": "gdrive", "ref": "id123"}) == "gdrive://id123"
+
+
+def test_gdrive_backend_roundtrip(tmp_path):
+    """`add --backend gdrive://` stores the Drive file id as a ref location,
+    so `get --cat` and `verify` re-download and verify the bytes through
+    `read_reference` (the gdrive backend used to be write-only)."""
+    root = str(tmp_path)
+    org = tmp_path / "org.yaml"
+    org.write_text(ORG_YAML, encoding="utf-8")
+
+    drive_store = tmp_path / "drive-store"
+    drive_store.mkdir()
+    ws = tmp_path / "fake-workspace.py"
+    ws.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, shutil, sys\n"
+        "store = os.environ['FAKE_DRIVE_STORE']\n"
+        "if sys.argv[1] == 'drive-upload':\n"
+        "    shutil.copyfile(sys.argv[2], os.path.join(store, 'file-1'))\n"
+        "    print('file-1')\n"
+        "elif sys.argv[1:3] == ['drive', 'download']:\n"
+        "    shutil.copyfile(os.path.join(store, sys.argv[3]), sys.argv[4])\n",
+        encoding="utf-8",
+    )
+    os.chmod(ws, 0o755)
+    env = {"PHANTOMDOCS_WORKSPACE_PY": str(ws), "FAKE_DRIVE_STORE": str(drive_store)}
+
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+
+    doc = tmp_path / "foo.pdf"
+    doc.write_bytes(b"gdrive roundtrip bytes")
+
+    r = _run(
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "foo.pdf",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--backend",
+            "gdrive://",
+            "--root",
+            root,
+        ],
+        env=env,
+    )
+    assert r.exit_code == 0, r.output
+    assert "added foo.pdf" in r.output
+
+    with open(f"{root}/manifest.yaml", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    assert data["nodes"][0]["locations"][0] == {"backend": "gdrive", "ref": "file-1"}
+
+    r = _run(
+        [
+            "get",
+            "foo.pdf",
+            "--cat",
+            "--backend",
+            "gdrive://",
+            "--org-yaml",
+            str(org),
+            "--root",
+            root,
+        ],
+        env=env,
+    )
+    assert r.exit_code == 0, r.output
+    assert "gdrive roundtrip bytes" in r.output
+
+    r = _run(["verify", "--backend", "gdrive://", "--root", root], env=env)
+    assert r.exit_code == 0, r.output
+    assert "verified 1 node" in r.output

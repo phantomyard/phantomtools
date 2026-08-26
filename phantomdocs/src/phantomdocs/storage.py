@@ -176,12 +176,17 @@ class GdriveBackend:
     tooling; PhantomDocs never manages Google credentials itself (same pattern
     as PhantomMeet SPEC §6.1).
 
-    ``put`` delegates to ``workspace.py drive-upload``; ``get``/``has`` are
-    left to the persona's ``workspace.py drive`` tooling.
+    Drive is a *reference* backend, not a content-addressed store: ``put``
+    uploads the blob and returns the Drive file id, which the caller stores
+    as a ``ref`` location so ``get``/``verify`` re-download it through
+    ``read_reference`` (the only Drive read path PhantomDocs implements).
+    ``get``/``has`` by content hash therefore remain unimplemented.
     """
 
-    def __init__(self, workspace_py: str = "workspace.py"):
-        self.workspace_py = workspace_py
+    def __init__(self, workspace_py: str | None = None):
+        self.workspace_py = workspace_py or os.environ.get(
+            "PHANTOMDOCS_WORKSPACE_PY", "workspace.py"
+        )
 
     def _require_tool(self) -> None:
         if shutil.which(self.workspace_py) is None:
@@ -208,7 +213,15 @@ class GdriveBackend:
             raise StorageError(
                 f"drive upload failed: {detail}" if detail else "drive upload failed"
             )
-        return proc.stdout.strip() or f"gdrive://phantomdocs/{content_hash}"
+        # The upload must yield a re-downloadable file id; without one the
+        # document can never be read back (fail-closed).
+        file_id = proc.stdout.strip()
+        file_id = file_id.removeprefix("gdrive://")
+        if not file_id:
+            raise StorageError(
+                "drive upload returned no file id; cannot round-trip the document"
+            )
+        return file_id
 
     def get(self, content_hash: str) -> bytes:
         _require_hash(content_hash)
