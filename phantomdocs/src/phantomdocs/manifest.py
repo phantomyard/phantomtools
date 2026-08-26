@@ -321,6 +321,65 @@ def versions_of(data: dict[str, Any], urn: str) -> list[dict[str, Any]]:
     return _matches(data, lambda n: n.get("urn") == urn)
 
 
+def structural_issues(data: dict[str, Any]) -> list[str]:
+    """Graph-level integrity problems in the node structure (issue #54).
+
+    Non-breaking, verify-time checks over the existing ``parentMac`` /
+    ``previous`` graph (cryptographic MAC recomputation stays ``verify``'s
+    job; this is the structural/semantic gate):
+
+    - tree connectivity: walking ``parentMac`` must reach ``rootMac`` exactly
+      once (no cycles);
+    - version lineage: for each URN, versions form a strictly linear chain —
+      the first version has no ``previous`` and every later version's
+      ``previous`` is the immediately preceding version's MAC (no cross-URN
+      links, no skips, no cycles).
+
+    Returns one human-readable string per problem.
+    """
+    issues: list[str] = []
+    root_mac = data["manifest"]["rootMac"]
+    nodes = data.get("nodes", [])
+    mac_to_node = {n["mac"]: n for n in nodes}
+
+    # Tree connectivity: the parentMac chain must terminate at rootMac and
+    # must not cycle.
+    for node in nodes:
+        seen: set[str] = set()
+        current = node
+        while True:
+            parent = current.get("parentMac")
+            if parent == root_mac:
+                break
+            if parent in seen:
+                issues.append(
+                    f"{node.get('urn', node.get('mac'))}: parentMac cycle at {parent}"
+                )
+                break
+            if parent not in mac_to_node:
+                break  # unknown parent is reported by verify itself
+            seen.add(parent)
+            current = mac_to_node[parent]
+
+    # Version lineage: each URN's versions form a strictly linear chain.
+    by_urn: dict[str, list[dict[str, Any]]] = {}
+    for node in nodes:
+        if node.get("kind") == "doc":
+            by_urn.setdefault(node["urn"], []).append(node)
+    for urn, versions in by_urn.items():
+        for index, version in enumerate(versions):
+            previous = version.get("previous")
+            if index == 0:
+                if previous is not None:
+                    issues.append(f"{urn}: first version has a previous link")
+            elif previous != versions[index - 1]["mac"]:
+                issues.append(
+                    f"{urn}: version {index + 1} previous does not point at "
+                    "the immediately preceding version"
+                )
+    return issues
+
+
 def ref_target_mac(value: Any) -> str | None:
     """The target MAC for a refs-map value (bare MAC string or signed record).
 
