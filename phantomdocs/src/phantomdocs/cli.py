@@ -306,7 +306,10 @@ def add(
         )
 
     if ref:
-        content, ref_location = read_reference(ref)
+        try:
+            content, ref_location = read_reference(ref)
+        except StorageError as exc:
+            raise click.ClickException(str(exc))
     else:
         with open(path, "rb") as f:
             content = f.read()
@@ -381,10 +384,13 @@ def get(ref, mac, cat, backend, org_yaml, actor, root):
         click.echo(f"{node['urn']} -> {location.get('path', '')}")
     if cat and node.get("kind") == "doc":
         loc = node.get("locations", [{}])[0]
-        if "ref" in loc:
-            data = read_reference(location_uri(loc))[0]
-        else:
-            data = _resolve_store(root, backend).get(node["contentHash"])
+        try:
+            if "ref" in loc:
+                data = read_reference(location_uri(loc))[0]
+            else:
+                data = _resolve_store(root, backend).get(node["contentHash"])
+        except StorageError as exc:
+            raise click.ClickException(str(exc))
         sys.stdout.buffer.write(data)
 
 

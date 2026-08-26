@@ -8,6 +8,7 @@ from phantomdocs.storage import (
     LocalBackend,
     SshBackend,
     StorageError,
+    read_reference,
     resolve_backend,
 )
 
@@ -115,3 +116,34 @@ def test_ssh_remote_path_validates_hash():
     assert b.remote_path(h) == f"/var/phantomdocs/blobs/{h[:2]}/{h}"
     with pytest.raises(StorageError):
         b.remote_path("short")
+
+
+def test_ssh_put_is_atomic_and_quotes_base(monkeypatch):
+    """`put` writes to a temp file then renames atomically, and shell-quotes
+    the (possibly space-containing) base path (issue #57)."""
+    captured = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = b""
+        stderr = b""
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        return _Proc()
+
+    monkeypatch.setattr("phantomdocs.storage._run_checked", fake_run)
+    b = SshBackend(host="h", base="/var/phantomdocs with space")
+    b.put("b" * 64, b"data")
+    cmd = captured["args"][-1]
+    # atomic: write to a temp file then rename into place
+    assert "cat >" in cmd and " && mv " in cmd
+    # the base path (with a space) is shell-quoted
+    assert "'/var/phantomdocs with space" in cmd
+
+
+def test_read_reference_missing_file_raises_storage_error(tmp_path):
+    """A missing `file://` reference raises StorageError, not a raw
+    FileNotFoundError (issue #58)."""
+    with pytest.raises(StorageError):
+        read_reference(f"file://{tmp_path}/does-not-exist.txt")
