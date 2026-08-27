@@ -71,6 +71,27 @@ class TestCompilerAU(unittest.TestCase):
             self.assertIn("1000000001", content)
             self.assertIn("1000000002", content)
 
+    def test_build_renders_human_email_column(self):
+        """The HUMANS.md table carries an ``email`` column; a human with
+        an email renders it, and the header advertises the column."""
+        import yaml
+
+        from phantomorg.spec.model import OrgSpec
+        from phantomorg.spec.shape_validator import validate_shape
+
+        with open(AU_ORG, encoding="utf-8") as f:
+            doc = yaml.safe_load(f)
+        doc["humans"][0]["email"] = "presidenta@verdant-aquaponics.org"
+        validate_shape(doc)
+        spec = OrgSpec.from_dict(doc)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            build(spec, out_dir)
+            content = (out_dir / "HUMANS.md").read_text(encoding="utf-8")
+            self.assertIn("| email |", content)
+            self.assertIn("presidenta@verdant-aquaponics.org", content)
+
     def test_merge_humans_markdown_upserts_by_org(self):
         """Multi-org deploy-all: the second org's registry is UPSERTED into
         the data-dir HUMANS.md (keyed by its `Organization:` line), not

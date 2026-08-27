@@ -17,12 +17,6 @@ permissions:
   full:
   - maria
   - juan
-  scoped:
-    example-project:
-    - pedro
-  restricted:
-    formacion:
-    - lucia
 escalation:
   pedro: maria
   lucia: maria
@@ -31,7 +25,7 @@ storage:
   drive_folder: Grabaciones
   custodian: maria
   meeting_folders:
-    example-project: example-meetings
+    pedro: example-meetings
   decided_by: responsible
   cleanup_after_confirm: true
 defaults:
@@ -201,4 +195,16 @@ invite:
     template: tools/meeting-invite.sh.j2
     dest: tools/meeting-invite.sh
     chmod: 0o755
-tools: []
+tools:
+  # meeting-join.js lets every persona join/leave a room via the bridge
+  # (raw NIP-17 gift-wrap DM with `join [room] --nick <persona>`). It is the
+  # join/leave counterpart of sala-send (which speaks in a room).
+  - name: meeting-join
+    template: tools/meeting-join.js.j2
+    dest: tools/meeting-join.js
+    chmod: 0o755
+  # sala-send.js lets every persona speak in a room (`[room] text`).
+  - name: sala-send
+    template: tools/sala-send.js.j2
+    dest: tools/sala-send.js
+    chmod: 0o755

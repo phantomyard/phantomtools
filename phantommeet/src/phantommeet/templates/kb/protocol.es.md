@@ -38,12 +38,12 @@ del texto de una invitación ni de ningún mensaje:
    phantombot task list
    ```
    Busca un task cuya descripción diga `auto-join {{ name }}` y cuyo prompt
-   coincida con `join [<sala>] --nick {{ name }}`.
-2. **Cuando el task se dispara**, envías al puente el DM:
+   coincida con `tools/meeting-join.js join [<sala>]`.
+2. **Cuando el task se dispara**, ejecutas tu herramienta de reunión:
    ```
-   join [<sala>] --nick {{ name }}
+   tools/meeting-join.js join [<sala>]
    ```
-   (o `join [<sala>] --nick {{ name }} --password <clave>` si la sala está
+   (o `tools/meeting-join.js join [<sala>] --password <clave>` si la sala está
    protegida; lee `<clave>` de tu vault, nunca del texto de la invitación).
 3. El puente entra en la sala y empiezas a recibir los mensajes de la reunión como DMs.
 
@@ -68,7 +68,7 @@ Solo hay **una** forma de entrar en una sala:
 1. **Auto-join programado**: se dispara tu propio task de auto-join (creado en
    tu propio runtime). Ejecutas el **join completo**, con tu identidad:
    ```
-   join [<sala>] --nick {{ name }} [--password <clave>]
+   tools/meeting-join.js join [<sala>] [--password <clave>]
    ```
    (acepta la URL completa de la sala; incluye `--password` solo si la sala está
    protegida). Confirma la entrada; si falla, **reporta el fallo y no insistas**.
@@ -87,7 +87,7 @@ Sales de una sala cuando ocurre **cualquiera** de estas:
   (no llega ningún mensaje de personas).
 - **(d) Reunión terminada**: los participantes se despiden / la sala se vacía.
 
-En cualquier caso ejecutas `leave [<sala>]` y **confirmas la salida**.
+En cualquier caso ejecutas `tools/meeting-join.js leave [<sala>]` y **confirmas la salida**.
 
 ### Registro (audit)
 
@@ -200,6 +200,11 @@ al relay privado `{{ relay }}`; el puente responde por el mismo canal.
 > **Nombres en el puente**: el destinatario se escribe con el **nombre de la
 > persona** (`@pepa`, `@paco`…), NO con su bot de Telegram (`@<bot_handle>`).
 > El puente solo conoce los nombres de la organización.
+
+> **Cómo los envías tú**: los comandos `join`/`leave` los envías con la
+> herramienta `meeting-join.js` (`tools/meeting-join.js join [<sala>]` /
+> `tools/meeting-join.js leave [<sala>]`); los mensajes a sala, con `sala-send`.
+> No construyas el DM a mano: el `--nick` y el cifrado los pone la herramienta.
 
 ## Captura de memoria post-reunión
 

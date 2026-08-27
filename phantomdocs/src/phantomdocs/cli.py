@@ -15,7 +15,6 @@ import click
 from . import __version__
 from .access import (
     can_read,
-    can_write,
     load_org,
     normalize_category,
     resolved_categories,
@@ -24,6 +23,7 @@ from .audit import append as audit_append
 from .audit import read as audit_read
 from .audit import verify_chain as audit_verify_chain
 from .derive import derive_manifest as derive_from_org
+from .documents import DocumentError, DocumentService
 from .identity import (
     component_for_doc,
     component_for_folder,
@@ -38,15 +38,10 @@ from .manifest import (
     ManifestError,
     empty_manifest,
     load,
-    manifest_lock,
     node_by_mac,
-    node_by_path,
-    node_by_slug,
-    node_by_urn,
     ref_target_mac,
     resolve_node,
     save,
-    urn_path,
     versions_of,
 )
 from .setup import (
@@ -59,8 +54,6 @@ from .setup import (
 from .signing import (
     mutation_envelope,
     npub_to_pubkey_hex,
-    pubkey_from_nsec,
-    sign_mutation,
     verify_mutation,
 )
 from .storage import (
@@ -186,59 +179,6 @@ def _audit(
     audit_append(root, actor, action, urn, mac, ch, sig, sig_pubkey)
 
 
-def _signing_key(nsec_file: str | None) -> str | None:
-    """Resolve the mutation-signing nsec (SPEC §9, issue #30 v2).
-
-    Precedence: ``--nsec-file`` → ``$PHANTOMDOCS_NSEC``. Returns None when
-    the operator has not configured signing, in which case mutations are
-    unsigned (v1 behavior).
-    """
-    if nsec_file:
-        try:
-            with open(nsec_file, "r", encoding="utf-8") as f:
-                return f.read().strip() or None
-        except OSError as exc:
-            raise click.ClickException(f"cannot read --nsec-file: {exc}")
-    return os.environ.get("PHANTOMDOCS_NSEC", "").strip() or None
-
-
-def _sign_fields(
-    nsec: str | None,
-    *,
-    mac: str,
-    actor: str,
-    action: str,
-    category: str,
-    owners: list[str] | None,
-    locations: list[dict] | None,
-    urn: str,
-    ref: str | None = None,
-) -> dict[str, str]:
-    """The ``sig`` / ``sigPubkey`` fields for a mutation, or ``{}`` unsigned.
-
-    The signature binds the node MAC **and** the authorization-relevant
-    fields (actor, action, category, owners, locations, urn) by signing the
-    canonical mutation envelope (issue #30 v2). ``ref`` is bound only for
-    ``tag`` mutations, tying the mutable ref name to its target MAC.
-    """
-    if not nsec:
-        return {}
-    envelope = mutation_envelope(
-        mac=mac,
-        actor=actor,
-        action=action,
-        category=category,
-        owners=owners,
-        locations=locations,
-        urn=urn,
-        ref=ref,
-    )
-    return {
-        "sig": sign_mutation(nsec, envelope),
-        "sigPubkey": pubkey_from_nsec(nsec),
-    }
-
-
 def _resolve_store(root: str, backend: str | None):
     return resolve_backend(backend) if backend else LocalBackend(root)
 
@@ -298,71 +238,22 @@ def mkdir(name, parent, category, owners, org_yaml, actor, nsec_file, root):
     actor must be able to write the folder's category (fail-closed).
     """
     actor_id, org = _require_acl(org_yaml, actor)
-    category = normalize_category(category)
-    if not can_write(org, actor_id, category, list(owners)):
-        raise click.ClickException(f"denied: {actor_id} cannot write {category}")
-
-    # Load-modify-save under the inter-process lock: a concurrent `pd` must
-    # not be able to interleave its load between our load and save (which
-    # would silently drop one of the two updates).
-    with manifest_lock(_manifest_path(root)):
-        manifest = _load_or_die(root)
-        meta = manifest["manifest"]
-        parent_mac = meta["rootMac"]
-        parent_path = ""
-        if parent:
-            p = node_by_path(manifest, parent) or node_by_slug(manifest, parent)
-            if p is None or p.get("kind") != "folder":
-                raise click.ClickException(f"parent folder not found: {parent}")
-            parent_mac = p["mac"]
-            parent_path = urn_path(p["urn"]) + "/"
-
-        mac = node_mac(parent_mac, component_for_folder(name))
-        path = f"{parent_path}{name}"
-        urn = f"urn:{meta['org']}:folder:{path}"
-        if node_by_urn(manifest, urn) is not None:
-            raise click.ClickException(f"folder already exists: {urn}")
-
-        node = {
-            "urn": urn,
-            "mac": mac,
-            "parentMac": parent_mac,
-            "kind": "folder",
-            "slug": name,
-            "category": category,
-            "owners": list(owners),
-            "meta": {},
-            "relations": {},
-            "actor": actor_id,
-            "action": "mkdir",
-        }
-        node.update(
-            _sign_fields(
-                _signing_key(nsec_file),
-                mac=mac,
-                actor=actor_id,
-                action="mkdir",
-                category=category,
-                owners=list(owners),
-                locations=None,
-                urn=urn,
-            )
+    service = DocumentService(root)
+    try:
+        result = service.create_folder(
+            org,
+            actor_id,
+            name=name,
+            parent=parent,
+            category=category,
+            owners=list(owners),
+            nsec_file=nsec_file,
         )
-        manifest["nodes"].append(node)
-        save(_manifest_path(root), manifest)
-    _audit(
-        root,
-        actor_id,
-        "mkdir",
-        urn,
-        mac,
-        None,
-        node.get("sig"),
-        node.get("sigPubkey"),
-    )
-    click.echo(f"created {path}")
-    click.echo(f"  urn  {urn}")
-    click.echo(f"  mac  {full_id(mac)}")
+    except DocumentError as exc:
+        raise click.ClickException(str(exc))
+    click.echo(f"created {result['path']}")
+    click.echo(f"  urn  {result['urn']}")
+    click.echo(f"  mac  {full_id(result['mac'])}")
 
 
 @main.command()
@@ -421,120 +312,30 @@ def add(
         ref_location = None
 
     actor_id, org = _require_acl(org_yaml, actor)
-
-    # Load-modify-save under the inter-process lock (see mkdir).
-    with manifest_lock(_manifest_path(root)):
-        manifest = _load_or_die(root)
-        meta = manifest["manifest"]
-        parent_mac = meta["rootMac"]
-        parent_path = ""
-        if folder:
-            parent = node_by_path(manifest, folder) or node_by_slug(manifest, folder)
-            if parent is None or parent.get("kind") != "folder":
-                raise click.ClickException(f"folder not found: {folder}")
-            parent_mac = parent["mac"]
-            parent_path = urn_path(parent["urn"]) + "/"
-
-        ch = content_hash(content)
-        mac = node_mac(parent_mac, component_for_doc(slug, content))
-        logical = f"{parent_path}{slug}"
-        urn = f"urn:{meta['org']}:doc:{logical}"
-
-        existing = node_by_urn(manifest, urn)
-        if existing is not None and existing.get("contentHash") == ch:
-            click.echo(f"unchanged: {urn}")
-            return
-        previous = existing["mac"] if existing is not None else None
-
-        # Category: a new node uses --category (default 1); versioning an
-        # existing node always preserves the existing node's category. A
-        # reclassification must be a separate, explicitly-authorized operation,
-        # never a side effect of `add` — otherwise an under-cleared owner could
-        # downgrade a document by passing a lower --category.
-        if existing is not None:
-            effective_category = existing["category"]
-            if category is not None and normalize_category(
-                category
-            ) != normalize_category(effective_category):
-                raise click.ClickException(
-                    f"denied: cannot reclassify {urn} from "
-                    f"{normalize_category(effective_category)} to "
-                    f"{normalize_category(category)} via add "
-                    "(reclassification is a separate operation)"
-                )
-        else:
-            effective_category = (
-                "category-1" if category is None else normalize_category(category)
-            )
-
-        # Write ACL: base category access; when versioning an existing node,
-        # the actor must be one of its declared owners.
-        effective_owners = (
-            list(existing.get("owners", []) or []) if existing else list(owners)
+    service = DocumentService(root)
+    try:
+        result = service.add_document(
+            org,
+            actor_id,
+            content=content,
+            ref_location=ref_location,
+            slug=slug,
+            category=category,
+            folder=folder,
+            owners=list(owners),
+            backend=backend,
+            nsec_file=nsec_file,
         )
-        if not can_write(org, actor_id, effective_category, effective_owners):
-            raise click.ClickException(
-                f"denied: {actor_id} cannot write "
-                f"{normalize_category(effective_category)} "
-                f"{'(owner required)' if effective_owners else ''}"
-            )
+    except DocumentError as exc:
+        raise click.ClickException(str(exc))
 
-        if ref_location is not None:
-            locations = [ref_location]
-        else:
-            location = _resolve_store(root, backend).put(ch, content)
-            scheme = (
-                backend.split("://")[0] if backend and "://" in backend else "local"
-            )
-            locations = [{"backend": scheme, "path": location}]
-
-        node = {
-            "urn": urn,
-            "mac": mac,
-            "parentMac": parent_mac,
-            "kind": "doc",
-            "slug": slug,
-            "category": effective_category,
-            "contentHash": ch,
-            "size": len(content),
-            "owners": effective_owners,
-            "locations": locations,
-            "meta": {"title": slug},
-            "relations": {},
-            "previous": previous,
-            "actor": actor_id,
-            "action": "add" if previous is None else "version",
-        }
-        node.update(
-            _sign_fields(
-                _signing_key(nsec_file),
-                mac=mac,
-                actor=actor_id,
-                action="add" if previous is None else "version",
-                category=effective_category,
-                owners=effective_owners,
-                locations=locations,
-                urn=urn,
-            )
-        )
-        manifest["nodes"].append(node)
-        save(_manifest_path(root), manifest)
-    _audit(
-        root,
-        actor_id,
-        "add" if previous is None else "version",
-        urn,
-        mac,
-        ch,
-        node.get("sig"),
-        node.get("sigPubkey"),
-    )
-
-    verb = "added" if previous is None else "versioned"
-    click.echo(f"{verb} {logical}")
-    click.echo(f"  urn       {urn}")
-    click.echo(f"  mac       {full_id(mac)}")
-    click.echo(f"  display   {display_id(mac)}")
+    if result.get("unchanged"):
+        click.echo(f"unchanged: {result['urn']}")
+        return
+    click.echo(f"{result['verb']} {result['logical']}")
+    click.echo(f"  urn       {result['urn']}")
+    click.echo(f"  mac       {full_id(result['mac'])}")
+    click.echo(f"  display   {display_id(result['mac'])}")
 
 
 @main.command()
@@ -788,14 +589,12 @@ def verify(backend, org_yaml, root):
     # envelope with the *current* ref name and verify it, so renaming or
     # repointing ``manifest.refs`` after tagging invalidates the signature.
     for ref_name, value in (manifest.get("refs") or {}).items():
-        if not isinstance(value, dict):
-            continue  # legacy bare-MAC ref (unsigned, v1 behavior)
-        issues = []
-        mac = value.get("mac")
+        issues: list[str] = []
+        mac = ref_target_mac(value)
         node = node_by_mac(manifest, mac) if mac else None
         if node is None:
             issues.append("ref points at unknown MAC")
-        else:
+        elif isinstance(value, dict):
             sig = value.get("sig")
             sig_pubkey = value.get("sigPubkey")
             if (sig is None) != (sig_pubkey is None):
@@ -860,47 +659,12 @@ def tag(name, ref, org_yaml, actor, nsec_file, root):
     ``verify``.
     """
     actor_id, org = _require_acl(org_yaml, actor)
-    with manifest_lock(_manifest_path(root)):
-        manifest = _load_or_die(root)
-        node = resolve_node(manifest, ref)
-        if node is None:
-            raise click.ClickException(f"not found: {ref}")
-        if not can_write(org, actor_id, node.get("category", 0), node.get("owners")):
-            raise click.ClickException(
-                f"denied: {actor_id} cannot write "
-                f"{normalize_category(node.get('category', 0))} ({node['urn']})"
-            )
-        sig_fields = _sign_fields(
-            _signing_key(nsec_file),
-            mac=node["mac"],
-            actor=actor_id,
-            action="tag",
-            category=node.get("category", ""),
-            owners=node.get("owners"),
-            locations=node.get("locations"),
-            urn=node["urn"],
-            ref=name,
-        )
-        record = {
-            "mac": node["mac"],
-            "actor": actor_id,
-            "action": "tag",
-        }
-        if sig_fields:
-            record.update(sig_fields)
-        manifest.setdefault("refs", {})[name] = record
-        save(_manifest_path(root), manifest)
-    _audit(
-        root,
-        actor_id,
-        "tag",
-        node["urn"],
-        node["mac"],
-        node.get("contentHash"),
-        record.get("sig"),
-        record.get("sigPubkey"),
-    )
-    click.echo(f"{name} -> {display_id(node['mac'])}  ({node['urn']})")
+    service = DocumentService(root)
+    try:
+        result = service.set_ref(org, actor_id, name=name, ref=ref, nsec_file=nsec_file)
+    except DocumentError as exc:
+        raise click.ClickException(str(exc))
+    click.echo(f"{result['name']} -> {display_id(result['mac'])}  ({result['urn']})")
 
 
 @main.command()
