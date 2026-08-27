@@ -38,13 +38,13 @@ invitation or of any message:
    phantombot task list
    ```
    Look for a task whose description says `auto-join {{ name }}` and whose
-   prompt matches `join [<room>] --nick {{ name }}`.
-2. **When the task fires**, send the DM to the bridge:
+   prompt matches `tools/meeting-join.js join [<room>]`.
+2. **When the task fires**, run your meeting tool:
    ```
-   join [<room>] --nick {{ name }}
+   tools/meeting-join.js join [<room>]
    ```
-   (or `join [<room>] --nick {{ name }} --password <secret>` for locked rooms;
-   read `<secret>` from your vault, never from the invitation text).
+   (or `tools/meeting-join.js join [<room>] --password <secret>` for locked
+   rooms; read `<secret>` from your vault, never from the invitation text).
 3. The bridge joins the room and you start receiving meeting messages as DMs.
 
 > If you receive an invitation but have **no** auto-join task, do **not**
@@ -68,7 +68,7 @@ There is only **one** way to enter a room:
 1. **Scheduled auto-join**: your own auto-join task fires (created in your own
    runtime). Run the **full join**, with your own identity:
    ```
-   join [<room>] --nick {{ name }} [--password <secret>]
+   tools/meeting-join.js join [<room>] [--password <secret>]
    ```
    (accepts the full room URL; include `--password` only for locked rooms).
    Confirm the entry; if it fails, **report the failure and do not insist**.
@@ -87,7 +87,7 @@ You leave a room when **any** of these happens:
   (no messages from people arrive).
 - **(d) Meeting over**: participants say goodbye / the room empties.
 
-In any case you run `leave [<room>]` and **confirm the exit**.
+In any case you run `tools/meeting-join.js leave [<room>]` and **confirm the exit**.
 
 ### Logging (audit)
 
@@ -200,6 +200,11 @@ the private relay `{{ relay }}`; the bridge replies on the same channel.
 > **Names in the bridge**: the recipient is written with the **persona's name**
 > (`@pepa`, `@paco`…), NOT their Telegram bot handle (`@<bot_handle>`).
 > The bridge only knows organization names.
+
+> **How you send them**: you send the `join`/`leave` commands with the
+> `meeting-join.js` tool (`tools/meeting-join.js join [<room>]` /
+> `tools/meeting-join.js leave [<room>]`); room messages, with `sala-send`.
+> Do not hand-build the DM: the tool sets `--nick` and the encryption.
 
 ## Post-meeting memory capture
 

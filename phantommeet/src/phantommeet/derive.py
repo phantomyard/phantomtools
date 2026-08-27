@@ -9,7 +9,7 @@ list.
 A small *base manifest* supplies everything that is not part of the org
 model: bridge endpoint, room naming, storage policy, org-specific knowledge
 (kb_appendix) and the derivation rules (which org roles map to
-responsible/support, and the restricted prefix per support role).
+responsible/lead/support).
 """
 
 from __future__ import annotations
@@ -22,10 +22,9 @@ import yaml
 from .manifest import ManifestError
 
 DEFAULT_DERIVE = {
-    "directive_roles": [],
-    "scoped_responsible_roles": {},  # role_id -> scope prefix
-    "support_roles": [],
-    "restricted_prefixes": {},
+    "directive_roles": [],  # org roles -> responsible (full: any room + recordings)
+    "lead_roles": [],  # org roles -> lead (schedule own project, join any room)
+    "support_roles": [],  # org roles -> support (join invited rooms, no scheduling)
 }
 
 
@@ -64,35 +63,20 @@ def load_base(path: str | Path) -> dict[str, Any]:
     if not isinstance(derive, dict):
         raise ManifestError("base manifest 'derive' must be a mapping")
     directive = set(derive.get("directive_roles", []) or [])
-    scoped = derive.get("scoped_responsible_roles", {}) or {}
+    lead = set(derive.get("lead_roles", []) or [])
     support = set(derive.get("support_roles", []) or [])
-    if not isinstance(scoped, dict):
-        raise ManifestError("derive.scoped_responsible_roles must be a mapping")
-    for role_id, prefix in scoped.items():
-        if not isinstance(prefix, str) or not prefix:
-            raise ManifestError(
-                f"derive.scoped_responsible_roles[{role_id!r}] must be a non-empty string"
-            )
-    overlap = directive & support
-    if overlap:
+    for name, roles_set in (("lead", lead), ("support", support)):
+        for role_id in roles_set:
+            if not isinstance(role_id, str) or not role_id:
+                raise ManifestError(
+                    f"derive.{name}_roles entries must be non-empty strings"
+                )
+    overlaps = (directive & lead) | (directive & support) | (lead & support)
+    if overlaps:
         raise ManifestError(
-            f"derive roles overlap (cannot be both directive and support): "
-            f"{', '.join(sorted(overlap))}"
+            "derive roles overlap: a role cannot be directive/lead/support at once: "
+            f"{', '.join(sorted(overlaps))}"
         )
-    scoped_keys = set(scoped)
-    if scoped_keys & directive or scoped_keys & support:
-        raise ManifestError(
-            "derive roles overlap: a role cannot be directive/support and "
-            "scoped_responsible at the same time"
-        )
-    prefixes = derive.get("restricted_prefixes", {}) or {}
-    if not isinstance(prefixes, dict):
-        raise ManifestError("derive.restricted_prefixes must be a mapping")
-    for role_id, prefix in prefixes.items():
-        if not isinstance(prefix, str) or not prefix:
-            raise ManifestError(
-                f"derive.restricted_prefixes[{role_id!r}] must be a non-empty string"
-            )
     raw.setdefault("bridge", {})
     raw.setdefault("rooms", {})
     raw.setdefault("storage", {})
@@ -126,26 +110,23 @@ def derive_manifest(
     derive = dict(DEFAULT_DERIVE)
     derive.update(base.get("derive", {}) or {})
     directive_roles = set(derive["directive_roles"] or [])
-    scoped_responsible = derive["scoped_responsible_roles"] or {}
+    lead_roles = set(derive["lead_roles"] or [])
     support_roles = set(derive["support_roles"] or [])
-    prefixes = derive["restricted_prefixes"] or {}
 
-    if not directive_roles and not scoped_responsible and not support_roles:
+    if not directive_roles and not lead_roles and not support_roles:
         warnings.append(
-            "derive rules map no roles (directive_roles/scoped_responsible_roles/"
+            "derive rules map no roles (directive_roles/lead_roles/"
             "support_roles empty); "
             "the derived manifest grants the meeting capability to nobody"
         )
 
     roles_by_id = _roles_by_id(org_model)
-    for role_id in sorted(directive_roles | set(scoped_responsible) | support_roles):
+    for role_id in sorted(directive_roles | lead_roles | support_roles):
         if role_id not in roles_by_id:
             warnings.append(f"derive rule references unknown org role {role_id!r}")
 
     roles: dict[str, str] = {}
     full: list[str] = []
-    scoped: dict[str, list[str]] = {}
-    restricted: dict[str, list[str]] = {}
 
     actors = org_model.get("actors") or []
     for actor in actors:
@@ -166,20 +147,10 @@ def derive_manifest(
         if role_id in directive_roles:
             roles[pid] = "responsible"
             full.append(pid)
-        elif role_id in scoped_responsible:
-            prefix = scoped_responsible[role_id]
+        elif role_id in lead_roles:
             roles[pid] = "lead"
-            scoped.setdefault(prefix, []).append(pid)
         elif role_id in support_roles:
-            prefix = prefixes.get(role_id)
-            if not prefix:
-                warnings.append(
-                    f"actor {pid!r} has support role {role_id!r} but no "
-                    f"derive.restricted_prefixes[{role_id!r}] entry; skipped"
-                )
-                continue
             roles[pid] = "support"
-            restricted.setdefault(prefix, []).append(pid)
         # actors whose role is not in the derive rules keep no capability.
 
     # --- escalation map (support/lead actor -> responsible actor) ----------
@@ -191,8 +162,8 @@ def derive_manifest(
     #
     # Semantics per tier:
     #   - support actors escalate *every* online-meeting request.
-    #   - lead actors are responsible *within their scope* and escalate only
-    #     requests that fall *outside* their scope.
+    #   - lead actors are responsible *within their project* and escalate only
+    #     requests that fall *outside* their project.
     # Both tiers use the same org escalation target (the org model does not
     # distinguish; the rendered Meetings.md phrases it per tier).
     escalation: dict[str, str] = {}
@@ -243,7 +214,7 @@ def derive_manifest(
         "bridge": base["bridge"],
         "rooms": base["rooms"],
         "roles": roles,
-        "permissions": {"full": full, "scoped": scoped, "restricted": restricted},
+        "permissions": {"full": full},
         "escalation": escalation,
         "storage": base["storage"],
         "defaults": base.get("defaults", {}),
