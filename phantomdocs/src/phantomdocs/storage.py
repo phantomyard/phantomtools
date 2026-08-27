@@ -62,15 +62,23 @@ class LocalBackend:
     """Content-addressed store: <root>/blobs/<aa>/<full-sha256-hex>."""
 
     def __init__(self, root: str):
-        self.root = os.path.abspath(root or ".")
+        self.root = os.path.realpath(os.path.abspath(root or "."))
 
     def blob_path(self, content_hash: str) -> str:
         _require_hash(content_hash)
         return os.path.join(self.root, "blobs", content_hash[:2], content_hash)
 
+    def _confined(self, path: str) -> bool:
+        """True iff the resolved path stays inside the storage root (issue #75:
+        refuse symlinked shard dirs that escape the root)."""
+        real = os.path.realpath(path)
+        return real == self.root or real.startswith(self.root + os.sep)
+
     def put(self, content_hash: str, data: bytes) -> str:
         path = self.blob_path(content_hash)
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        if not self._confined(path):
+            raise StorageError(f"blob path escapes the storage root: {path!r}")
         if not os.path.exists(path):
             with open(path, "wb") as f:
                 f.write(data)
@@ -78,6 +86,8 @@ class LocalBackend:
 
     def get(self, content_hash: str) -> bytes:
         path = self.blob_path(content_hash)
+        if not self._confined(path):
+            raise StorageError(f"blob path escapes the storage root: {content_hash!r}")
         if not os.path.isfile(path):
             raise StorageError(f"blob not found: {content_hash}")
         with open(path, "rb") as f:

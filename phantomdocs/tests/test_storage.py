@@ -189,3 +189,19 @@ def test_ssh_has_quotes_remote_path(monkeypatch):
     b.has("b" * 64)
     cmd = captured["args"][-1]
     assert cmd == "test -f '/var/x; id/blobs/bb/" + "b" * 64 + "'"
+
+def test_local_backend_rejects_symlink_escape(tmp_path):
+    """A symlinked shard dir that escapes the storage root is refused on
+    write (and read) — `realpath` confinement (issue #75)."""
+    root = tmp_path / "root"
+    attacker = tmp_path / "attacker"
+    attacker.mkdir()
+    b = LocalBackend(str(root))
+    data = b"secret-bytes"
+    h = _content_hash(data)
+    shard = root / "blobs" / h[:2]
+    shard.parent.mkdir(parents=True)
+    shard.symlink_to(attacker)  # root/blobs/<aa> -> outside the storage root
+
+    with pytest.raises(StorageError):
+        b.put(h, data)
