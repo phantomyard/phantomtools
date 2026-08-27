@@ -86,6 +86,7 @@ class Actor:
     role: str
     telegram_bot: str | None = None
     npub: str | None = None
+    email: str | None = None
     tools: list[str] = field(default_factory=list)
     tools_excluded: list[str] = field(default_factory=list)
     actor_exceptions: list[str] = field(default_factory=list)
@@ -98,6 +99,7 @@ class Actor:
             role=d["role"],
             telegram_bot=d.get("telegram_bot"),
             npub=d.get("npub"),
+            email=d.get("email"),
             tools=list(d.get("tools", [])),
             tools_excluded=list(d.get("tools_excluded", [])),
             actor_exceptions=list(d.get("actor_exceptions", [])),
@@ -121,6 +123,7 @@ class Human:
     role: str | None = None
     telegram_user_id: int | None = None
     npub: str | None = None
+    email: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> Human:
@@ -130,6 +133,7 @@ class Human:
             role=d.get("role"),
             telegram_user_id=d.get("telegram_user_id"),
             npub=d.get("npub"),
+            email=d.get("email"),
         )
 
 

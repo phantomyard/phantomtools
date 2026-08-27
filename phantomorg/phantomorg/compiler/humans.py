@@ -34,18 +34,19 @@ def render_humans(spec: OrgSpec) -> str:
         f"Organization: `{org.id}`",
         "",
         (
-            "Humans are external counterparts (not personas). Telegram user ids "
-            "and Nostr npubs are filled in as they get registered"
+            "Humans are external counterparts (not personas). Telegram user ids, "
+            "Nostr npubs and emails are filled in as they get registered"
         ),
         "",
-        "| id | name | role | telegram_user_id | npub |",
-        "|---|---|---|---|---|",
+        "| id | name | role | telegram_user_id | npub | email |",
+        "|---|---|---|---|---|---|",
     ]
     for h in spec.humans:
         tg = str(h.telegram_user_id) if h.telegram_user_id is not None else "—"
         npub = h.npub if h.npub else "—"
+        email = h.email if h.email else "—"
         lines.append(
-            f"| `{h.id}` | {h.name or '—'} | {h.role or '—'} | {tg} | `{npub}` |"
+            f"| `{h.id}` | {h.name or '—'} | {h.role or '—'} | {tg} | `{npub}` | {email} |"
         )
     return "\n".join(lines) + "\n"
 
