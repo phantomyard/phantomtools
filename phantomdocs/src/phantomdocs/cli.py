@@ -30,6 +30,7 @@ from .identity import (
     content_hash,
     display_id,
     full_id,
+    is_valid_slug,
     node_mac,
     root_mac,
 )
@@ -167,6 +168,15 @@ def _require_acl(org_yaml: str | None, actor: str | None = None):
     return actor, org
 
 
+def _validate_slug(value: str, label: str) -> None:
+    """Reject names/slugs/namespaces that break SPEC §7 naming (issue #59)."""
+    if not is_valid_slug(value):
+        raise click.ClickException(
+            f"invalid {label} {value!r}: must be a single lowercase/kebab ASCII "
+            "segment (letters, digits, hyphen, dot; no spaces, slashes, or accents)"
+        )
+
+
 def _audit(
     root: str,
     actor: str,
@@ -191,6 +201,7 @@ def _resolve_store(root: str, backend: str | None):
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
 def init(org: str, namespace: str, org_pubkey: str, root: str) -> None:
     """Create a new namespace: manifest + local blob store."""
+    _validate_slug(namespace, "namespace")
     path = _manifest_path(root)
     if os.path.exists(path):
         raise click.ClickException(f"manifest already exists: {path}")
@@ -238,6 +249,7 @@ def mkdir(name, parent, category, owners, org_yaml, actor, nsec_file, root):
     Access-controlled: requires --org-yaml + an authenticated OS identity; the
     actor must be able to write the folder's category (fail-closed).
     """
+    _validate_slug(name, "name")
     actor_id, org = _require_acl(org_yaml, actor)
     service = DocumentService(root)
     try:
@@ -304,6 +316,8 @@ def add(
             "provide exactly one of: PATH (ingest a local file) or --ref URI "
             "(index an external object by reference)"
         )
+
+    _validate_slug(slug, "slug")
 
     if ref:
         try:

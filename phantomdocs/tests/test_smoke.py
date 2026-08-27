@@ -1178,3 +1178,57 @@ def test_verify_detects_parent_cycle(tmp_path):
     r = _run(["verify", "--root", root])
     assert r.exit_code != 0
     assert "parentMac cycle" in r.output
+
+
+def test_add_rejects_invalid_slug(tmp_path):
+    """SPEC §7: a slug must be a single lowercase/kebab ASCII segment."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+    doc = tmp_path / "a.txt"
+    doc.write_text("data", encoding="utf-8")
+    for bad in ("a/b", "../x", "Mi Documento.pdf", "caf\u00e9", ""):
+        r = _run(
+            [
+                "add",
+                str(doc),
+                "--slug",
+                bad,
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        )
+        assert r.exit_code != 0, bad
+        assert "invalid slug" in r.output, bad
+
+
+def test_mkdir_rejects_invalid_name(tmp_path):
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+    r = _run(
+        [
+            "mkdir",
+            "--name",
+            "Mi Carpeta",
+            "--owners",
+            "cfo",
+            "--org-yaml",
+            org,
+            "--root",
+            root,
+        ]
+    )
+    assert r.exit_code != 0
+    assert "invalid name" in r.output
+
+
+def test_init_rejects_empty_namespace(tmp_path):
+    root = str(tmp_path)
+    r = _run(["init", "--org", "demo", "--namespace", "", "--root", root])
+    assert r.exit_code != 0
+    assert "invalid namespace" in r.output

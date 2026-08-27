@@ -17,6 +17,7 @@ Identifiers are self-describing (multihash / RFC 6920 style), spec §4.2:
 from __future__ import annotations
 
 import hashlib
+import re
 
 DISPLAY_BYTES = 16  # 128-bit truncation floor (RFC 6920 "sha-256-128")
 
@@ -28,6 +29,19 @@ def _sha256(data: bytes) -> bytes:
 def is_valid_hex64(value: str) -> bool:
     """True iff value is a 64-char lowercase hex string (a SHA-256 digest)."""
     return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
+
+
+def is_valid_slug(slug: str) -> bool:
+    """True iff ``slug`` is a valid SPEC §7 name segment.
+
+    A slug is a single, non-empty, lowercase/kebab ASCII segment: lowercase
+    letters, digits, hyphen and dot, with no spaces, slashes, accents, or
+    parent-traversal (``..``).
+    """
+    return bool(slug) and ".." not in slug and _SLUG_RE.match(slug) is not None
 
 
 def content_hash(data: bytes) -> str:
