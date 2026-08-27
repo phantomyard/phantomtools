@@ -190,3 +190,47 @@ def _org_path(tmp_path):
     p = tmp_path / "org.yaml"
     p.write_text(ORG_YAML, encoding="utf-8")
     return p
+
+
+def test_malformed_categories_none_fails_closed(tmp_path):
+    """`categories: null` (non-list) must not crash and must grant nothing
+    (issue #77)."""
+    p = tmp_path / "org.yaml"
+    p.write_text(
+        "version: 1\n"
+        "organization: {id: org1}\n"
+        "policies:\n"
+        "  access_levels:\n"
+        "    level-1: {categories: null}\n"
+        "  security_categories: {category-1: {}}\n"
+        "roles:\n"
+        "  - {id: ceo, access_level: level-1, security_exceptions: null}\n"
+        "actors:\n"
+        "  - {id: marco, role: ceo, actor_exceptions: null}\n",
+        encoding="utf-8",
+    )
+    org = load_org(str(p))
+    assert resolved_categories(org, "marco") == []
+    assert can_read(org, "marco", "category-1") is False
+
+
+def test_malformed_categories_string_fails_closed(tmp_path):
+    """A string `categories` must not be iterated char-by-char (type
+    confusion) — it grants nothing (issue #77)."""
+    p = tmp_path / "org.yaml"
+    p.write_text(
+        "version: 1\n"
+        "organization: {id: org1}\n"
+        "policies:\n"
+        "  access_levels:\n"
+        "    level-1: {categories: \"1\"}\n"
+        "  security_categories: {category-1: {}}\n"
+        "roles:\n"
+        "  - {id: ceo, access_level: level-1, security_exceptions: []}\n"
+        "actors:\n"
+        "  - {id: marco, role: ceo, actor_exceptions: []}\n",
+        encoding="utf-8",
+    )
+    org = load_org(str(p))
+    assert resolved_categories(org, "marco") == []
+    assert can_read(org, "marco", 1) is False

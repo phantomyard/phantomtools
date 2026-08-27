@@ -104,11 +104,14 @@ def resolved_categories(org: dict[str, Any], actor_id: str) -> list[str]:
 
     categories: set[str] = set()
     level = levels.get(role.get("access_level"), {})
-    for cat in level.get("categories", []):
+    cats = level.get("categories")
+    if not isinstance(cats, list):
+        cats = []  # non-list categories (None/string/...) grant nothing — fail closed
+    for cat in cats:
         categories.add(normalize_category(cat))
 
-    for exc in list(role.get("security_exceptions", [])) + list(
-        actor.get("actor_exceptions", [])
+    for exc in list(role.get("security_exceptions") or []) + list(
+        actor.get("actor_exceptions") or []
     ):
         cat_id = _exception_category_id(exc)
         if cat_id:
