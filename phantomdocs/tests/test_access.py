@@ -223,7 +223,7 @@ def test_malformed_categories_string_fails_closed(tmp_path):
         "organization: {id: org1}\n"
         "policies:\n"
         "  access_levels:\n"
-        "    level-1: {categories: \"1\"}\n"
+        '    level-1: {categories: "1"}\n'
         "  security_categories: {category-1: {}}\n"
         "roles:\n"
         "  - {id: ceo, access_level: level-1, security_exceptions: []}\n"
