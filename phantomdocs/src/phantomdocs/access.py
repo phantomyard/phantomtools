@@ -5,12 +5,12 @@ PhantomDocs does NOT define its own ACL: it consumes PhantomOrg's
 exception fields, and checks whether an actor's resolved access covers a
 node's category. Fail-closed: no rule -> denied.
 
-Categories are hierarchical. A category id is a ``category-...`` string:
-org-level categories are ``category-1`` .. ``category-3`` (plus the
-``category-0`` absolute exception), and project-scoped categories nest under
-a parent with a ``-<scope>`` suffix — e.g. ``category-4-almaponia`` under the
-``category-4`` "sensitive project" umbrella. Holding a parent grants every
-descendant: an actor with ``category-4`` can read any ``category-4-*``.
+Categories are hierarchical (issue #45): the hierarchy is declared in
+``policies.security_categories``, where each category carries an optional
+``scope`` and ``owner``. A category grants its declared descendants (the
+longest declared ``-``-prefix parent links declared categories); the prefix
+is no longer a blind grant on arbitrary strings. An undeclared category is
+denied (fail-closed).
 """
 
 from __future__ import annotations
@@ -131,17 +131,50 @@ def _actor_role_id(org: dict[str, Any], actor_id: str) -> str | None:
     return None
 
 
+def _security_categories(org: dict[str, Any]) -> dict[str, Any]:
+    """The declared ``policies.security_categories`` map (id -> spec)."""
+    return org.get("policies", {}).get("security_categories", {}) or {}
+
+
+def _category_parents(org: dict[str, Any]) -> dict[str, str | None]:
+    """Map each declared category id to its declared parent id.
+
+    The parent is the longest declared proper ``-``-prefix, so the prefix only
+    links *declared* categories (issue #45): the hierarchy is an explicit
+    relation over ``security_categories`` (which carries ``scope``/``owner``),
+    not a blind string match. An undeclared category has no parent.
+    """
+    declared = set(_security_categories(org))
+    tree: dict[str, str | None] = {}
+    for cid in declared:
+        candidates = [d for d in declared if d != cid and cid.startswith(d + "-")]
+        tree[cid] = max(candidates, key=len) if candidates else None
+    return tree
+
+
 def can_read(org: dict[str, Any], actor_id: str, category: int | str) -> bool:
     """True iff the actor's resolved access covers ``category``.
 
-    A parent grant covers its descendants: an actor holding ``category-4``
-    can read ``category-4-almaponia`` (and any other ``category-4-*``).
+    A direct grant covers the category itself. Otherwise the category is
+    granted when some resolved category is a *declared ancestor* of it — the
+    hierarchy comes from ``policies.security_categories`` (issue #45), so an
+    undeclared category is denied (fail-closed).
     """
     cat = normalize_category(category)
-    resolved = resolved_categories(org, actor_id)
+    resolved = set(resolved_categories(org, actor_id))
     if cat in resolved:
         return True
-    return any(cat.startswith(parent + "-") for parent in resolved)
+    tree = _category_parents(org)
+    if cat not in tree:
+        return False
+    current = tree.get(cat)
+    seen: set[str] = set()
+    while current is not None and current not in seen:
+        seen.add(current)
+        if current in resolved:
+            return True
+        current = tree.get(current)
+    return False
 
 
 def can_write(
