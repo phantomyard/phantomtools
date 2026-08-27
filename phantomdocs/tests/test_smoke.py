@@ -1232,3 +1232,209 @@ def test_init_rejects_empty_namespace(tmp_path):
     r = _run(["init", "--org", "demo", "--namespace", "", "--root", root])
     assert r.exit_code != 0
     assert "invalid namespace" in r.output
+
+
+def test_rollback_creates_new_version(tmp_path):
+    """`rollback --to-mac` restores an older version's content as a new,
+    current version with a fresh MAC (issues #44/#55), never rewriting history."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+
+    a = tmp_path / "a.txt"
+    a.write_text("first", encoding="utf-8")
+    assert (
+        _run(
+            [
+                "add",
+                str(a),
+                "--slug",
+                "a.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        ).exit_code
+        == 0
+    )
+    a.write_text("second", encoding="utf-8")
+    assert (
+        _run(
+            [
+                "add",
+                str(a),
+                "--slug",
+                "a.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        ).exit_code
+        == 0
+    )
+
+    data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    docs = [n for n in data["nodes"] if n.get("kind") == "doc"]
+    v1_mac, v2_mac = docs[0]["mac"], docs[1]["mac"]
+
+    r = _run(
+        ["rollback", "a.txt", "--to-mac", v1_mac, "--org-yaml", org, "--root", root]
+    )
+    assert r.exit_code == 0, r.output
+    assert "rolled back" in r.output
+
+    data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    docs = [n for n in data["nodes"] if n.get("kind") == "doc"]
+    assert len(docs) == 3
+    v3 = docs[2]
+    assert v3["previous"] == v2_mac
+    assert v3["action"] == "rollback"
+    assert v3["contentHash"] == docs[0]["contentHash"]  # v1's content
+    assert v3["mac"] not in (v1_mac, v2_mac)  # fresh identity
+
+    r = _run(["get", "a.txt", "--cat", "--org-yaml", org, "--root", root])
+    assert r.exit_code == 0, r.output
+    assert "first" in r.output
+
+    r = _run(["verify", "--root", root])
+    assert r.exit_code == 0, r.output
+    assert "verified 3 node" in r.output
+
+
+def test_verify_detects_tampered_previous_via_mac(tmp_path):
+    """Under issue #44 the predecessor is bound into the version MAC, so
+    repointing `previous` at a wrong (but known) MAC breaks the chain."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+
+    a = tmp_path / "a.txt"
+    a.write_text("first", encoding="utf-8")
+    assert (
+        _run(
+            [
+                "add",
+                str(a),
+                "--slug",
+                "a.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        ).exit_code
+        == 0
+    )
+    a.write_text("second", encoding="utf-8")
+    assert (
+        _run(
+            [
+                "add",
+                str(a),
+                "--slug",
+                "a.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        ).exit_code
+        == 0
+    )
+
+    data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    docs = [n for n in data["nodes"] if n.get("kind") == "doc"]
+    assert len(docs) == 2
+    docs[1]["previous"] = data["manifest"]["rootMac"]  # known MAC, wrong predecessor
+    (tmp_path / "manifest.yaml").write_text(
+        yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+    )
+
+    r = _run(["verify", "--root", root])
+    assert r.exit_code != 0
+    assert "MAC chain mismatch" in r.output
+
+
+def test_rollback_rejects_cross_document_target(tmp_path):
+    """`rollback --to-mac` must refuse a MAC that belongs to a *different*
+    document (reviewer-reported ACL bypass: otherwise an actor who can write a
+    low-category document could mint a new HEAD version of any document whose
+    MAC they know, and downgrade its category)."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+
+    # roberto (level-2, categories [1,2]) adds a category-1 doc.
+    a = tmp_path / "a.txt"
+    a.write_text("low", encoding="utf-8")
+    assert (
+        _run(
+            [
+                "add",
+                str(a),
+                "--slug",
+                "a.txt",
+                "--category",
+                "category-1",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ],
+            actor="roberto",
+        ).exit_code
+        == 0
+    )
+
+    # elena (category-3 exception) adds a category-3 doc.
+    b = tmp_path / "b.txt"
+    b.write_text("sensitive", encoding="utf-8")
+    assert (
+        _run(
+            [
+                "add",
+                str(b),
+                "--slug",
+                "b.txt",
+                "--category",
+                "category-3",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ],
+            actor="elena",
+        ).exit_code
+        == 0
+    )
+
+    data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    docs = [n for n in data["nodes"] if n.get("kind") == "doc"]
+    b_mac = next(n for n in docs if n["urn"] == "urn:demo:doc:b.txt")["mac"]
+
+    # roberto tries to roll a.txt back to b.txt's MAC — must be refused.
+    r = _run(
+        ["rollback", "a.txt", "--to-mac", b_mac, "--org-yaml", org, "--root", root],
+        actor="roberto",
+    )
+    assert r.exit_code != 0, r.output
+    assert "belongs to" in r.output
+
+    # The manifest must not have gained a new a.txt HEAD from b's content.
+    data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    a_nodes = [n for n in data["nodes"] if n["urn"] == "urn:demo:doc:a.txt"]
+    assert len(a_nodes) == 1

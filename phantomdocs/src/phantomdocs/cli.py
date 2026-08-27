@@ -25,10 +25,10 @@ from .audit import verify_chain as audit_verify_chain
 from .derive import derive_manifest as derive_from_org
 from .documents import DocumentError, DocumentService
 from .identity import (
-    component_for_doc,
     component_for_folder,
     content_hash,
     display_id,
+    doc_version_mac,
     full_id,
     is_valid_slug,
     node_mac,
@@ -528,9 +528,11 @@ def verify(backend, org_yaml, root):
                         if content_hash(data) != ch:
                             issues.append("content hash mismatch (reference)")
                         elif (
-                            node_mac(
+                            doc_version_mac(
                                 node["parentMac"],
-                                component_for_doc(node["slug"], data),
+                                node.get("previous"),
+                                node["slug"],
+                                data,
                             )
                             != node["mac"]
                         ):
@@ -551,9 +553,11 @@ def verify(backend, org_yaml, root):
                                 if content_hash(data) != ch:
                                     issues.append("content hash mismatch")
                                 elif (
-                                    node_mac(
+                                    doc_version_mac(
                                         node["parentMac"],
-                                        component_for_doc(node["slug"], data),
+                                        node.get("previous"),
+                                        node["slug"],
+                                        data,
                                     )
                                     != node["mac"]
                                 ):
@@ -691,6 +695,49 @@ def tag(name, ref, org_yaml, actor, nsec_file, root):
     except DocumentError as exc:
         raise click.ClickException(str(exc))
     click.echo(f"{result['name']} -> {display_id(result['mac'])}  ({result['urn']})")
+
+
+@main.command()
+@click.argument("urn")
+@click.option(
+    "--to-mac", required=True, help="The version MAC to restore (see `pd versions`)."
+)
+@click.option(
+    "--backend", default=None, help="Backend URI (local:// ssh:// gdrive://)."
+)
+@click.option(
+    "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
+)
+@click.option("--actor", default=None, help=_ACTOR_HELP)
+@click.option(
+    "--nsec-file",
+    default=None,
+    help="File containing the actor's nsec (issue #30 v2 signing).",
+)
+@click.option("--root", default=".", show_default=True, help="Local backend root.")
+def rollback(urn, to_mac, backend, org_yaml, actor, nsec_file, root):
+    """Restore an older version's content as a new, current version.
+
+    Creates a new version whose content equals the target version's content,
+    chained off the current version (``previous = current MAC``). Because the
+    version identity binds the predecessor (issue #44), the new version gets a
+    fresh MAC rather than colliding with the target. History is never
+    rewritten or deleted.
+    """
+    actor_id, org = _require_acl(org_yaml, actor)
+    service = DocumentService(root)
+    try:
+        result = service.rollback(
+            org,
+            actor_id,
+            urn=urn,
+            to_mac=to_mac,
+            backend=backend,
+            nsec_file=nsec_file,
+        )
+    except DocumentError as exc:
+        raise click.ClickException(str(exc))
+    click.echo(f"rolled back {result['urn']} to {display_id(result['mac'])}")
 
 
 @main.command()
