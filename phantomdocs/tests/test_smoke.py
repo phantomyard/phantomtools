@@ -951,3 +951,40 @@ def test_actor_flag_denies_unknown_actor(tmp_path):
         )
     assert r.exit_code != 0
     assert "not an actor" in r.output
+
+
+def test_verify_detects_dangling_legacy_ref(tmp_path):
+    """A legacy bare-MAC ref pointing at a nonexistent MAC must fail verify
+    (issue #56)."""
+    root = str(tmp_path)
+    org = _org(tmp_path)
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+    doc = tmp_path / "a.txt"
+    doc.write_text("data", encoding="utf-8")
+    assert (
+        _run(
+            [
+                "add",
+                str(doc),
+                "--slug",
+                "a.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        ).exit_code
+        == 0
+    )
+
+    data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    data["refs"]["latest"] = "deadbeef" * 8  # valid 64-hex, nonexistent MAC
+    (tmp_path / "manifest.yaml").write_text(
+        yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+    )
+
+    r = _run(["verify", "--root", root])
+    assert r.exit_code != 0
+    assert "unknown MAC" in r.output

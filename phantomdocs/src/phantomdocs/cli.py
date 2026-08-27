@@ -784,14 +784,12 @@ def verify(backend, org_yaml, root):
     # envelope with the *current* ref name and verify it, so renaming or
     # repointing ``manifest.refs`` after tagging invalidates the signature.
     for ref_name, value in (manifest.get("refs") or {}).items():
-        if not isinstance(value, dict):
-            continue  # legacy bare-MAC ref (unsigned, v1 behavior)
-        issues = []
-        mac = value.get("mac")
+        issues: list[str] = []
+        mac = ref_target_mac(value)
         node = node_by_mac(manifest, mac) if mac else None
         if node is None:
             issues.append("ref points at unknown MAC")
-        else:
+        elif isinstance(value, dict):
             sig = value.get("sig")
             sig_pubkey = value.get("sigPubkey")
             if (sig is None) != (sig_pubkey is None):
