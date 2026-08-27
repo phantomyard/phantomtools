@@ -341,10 +341,6 @@ def validate(manifest: str) -> None:
     click.echo(f"version:    {m.get('version', '?')}")
     click.echo(f"roles:      {', '.join(f'{p}={r}' for p, r in m['roles'].items())}")
     click.echo(f"full:       {', '.join(m['permissions'].get('full', []))}")
-    for prefix, ids in m["permissions"].get("scoped", {}).items():
-        click.echo(f"scoped:     {prefix} -> {', '.join(ids)}")
-    for prefix, ids in m["permissions"].get("restricted", {}).items():
-        click.echo(f"restricted: {prefix} -> {', '.join(ids)}")
     click.echo("OK")
 
 

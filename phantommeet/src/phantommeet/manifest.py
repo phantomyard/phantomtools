@@ -281,9 +281,10 @@ def validate_infra_section(raw: dict[str, Any]) -> None:
 def access_for(persona_id: str, manifest: dict[str, Any]) -> dict[str, Any]:
     """Return the access descriptor for a persona.
 
-    Result keys: ``kind`` (full|scoped|restricted|none), ``prefix``
-    (scoped/restricted only), ``summary`` (human-readable, in the manifest
-    language).
+    Result keys: ``kind`` (full|participant|none), ``summary`` (human-readable,
+    in the manifest language). Authorization is role-based: room names carry no
+    scope. ``full`` personas (responsible) operate any room and list recordings;
+    every persona with a role is a ``participant`` (join/speak any room).
     """
     perms = manifest["permissions"]
     lang = manifest["language"]
@@ -292,39 +293,21 @@ def access_for(persona_id: str, manifest: dict[str, Any]) -> dict[str, Any]:
         return {
             "kind": "full",
             "summary": (
-                "Full access to all meeting rooms."
+                "Full access to all meeting rooms and recordings."
                 if lang == "en"
-                else "Acceso completo a todas las salas de reunión."
+                else "Acceso completo a todas las salas de reunión y a las grabaciones."
             ),
         }
 
-    for prefix, ids in perms.get("scoped", {}).items():
-        if persona_id in ids:
-            return {
-                "kind": "scoped",
-                "prefix": prefix,
-                "summary": (
-                    f"You schedule and join online meetings within your project "
-                    f"scope '{prefix}-*'."
-                    if lang == "en"
-                    else f"Agendas y participas en reuniones online dentro de tu "
-                    f"ámbito de proyecto '{prefix}-*'."
-                ),
-            }
-
-    for prefix, ids in perms.get("restricted", {}).items():
-        if persona_id in ids:
-            return {
-                "kind": "restricted",
-                "prefix": prefix,
-                "summary": (
-                    f"You take part in rooms you are invited to (invitation URL is "
-                    f"your ticket; org scope '{prefix}-*')."
-                    if lang == "en"
-                    else f"Participas en las salas a las que te inviten (la URL de "
-                    f"invitación es tu ticket; ámbito '{prefix}-*')."
-                ),
-            }
+    if persona_id in manifest.get("roles", {}):
+        return {
+            "kind": "participant",
+            "summary": (
+                "You can join and speak in any meeting room you are invited to."
+                if lang == "en"
+                else "Puedes unirte y hablar en cualquier sala de reunión a la que te inviten."
+            ),
+        }
 
     return {
         "kind": "none",

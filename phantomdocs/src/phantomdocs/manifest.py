@@ -342,3 +342,86 @@ def resolve_node(data: dict[str, Any], ref: str) -> dict[str, Any] | None:
         if mac is not None:
             node = node_by_mac(data, mac)
     return node
+
+
+class ManifestRepository:
+    """Typed boundary over the manifest dict (the YAML persistence DTO).
+
+    Commands mutate the manifest through this repository instead of reaching
+    into ``manifest["nodes"]`` / ``manifest["refs"]`` directly, so the YAML
+    layout stays an implementation detail behind a stable, typed API (issue
+    #46: "the manifest is both storage format and domain model"). The
+    repository wraps the in-memory dict; persistence remains the caller's job
+    (``load`` before, ``save`` after, under ``manifest_lock``).
+    """
+
+    def __init__(self, data: dict[str, Any]):
+        self._data = data
+
+    @property
+    def data(self) -> dict[str, Any]:
+        """The underlying manifest dict (for ``save``)."""
+        return self._data
+
+    # -- header accessors --
+
+    @property
+    def org(self) -> str:
+        return self._data["manifest"]["org"]
+
+    @property
+    def namespace(self) -> str:
+        return self._data["manifest"]["namespace"]
+
+    @property
+    def tenant(self) -> str:
+        return self._data["manifest"]["tenant"]
+
+    @property
+    def root_mac(self) -> str:
+        return self._data["manifest"]["rootMac"]
+
+    # -- collections --
+
+    @property
+    def nodes(self) -> list[dict[str, Any]]:
+        return self._data.setdefault("nodes", [])
+
+    @property
+    def refs(self) -> dict[str, Any]:
+        return self._data.setdefault("refs", {})
+
+    # -- mutations --
+
+    def add_node(self, node: dict[str, Any]) -> dict[str, Any]:
+        """Append a node (a new folder, or a new document version)."""
+        self.nodes.append(node)
+        return node
+
+    def add_version(self, node: dict[str, Any]) -> dict[str, Any]:
+        """Append a document version node (semantic alias of ``add_node``)."""
+        return self.add_node(node)
+
+    def set_ref(self, name: str, record: Any) -> None:
+        """Point a mutable ref at a version MAC (bare MAC or signed record)."""
+        self.refs[name] = record
+
+    # -- lookups (delegated to the module-level resolvers) --
+
+    def node_by_urn(self, urn: str) -> dict[str, Any] | None:
+        return node_by_urn(self._data, urn)
+
+    def node_by_path(self, path: str) -> dict[str, Any] | None:
+        return node_by_path(self._data, path)
+
+    def node_by_slug(self, slug: str) -> dict[str, Any] | None:
+        return node_by_slug(self._data, slug)
+
+    def node_by_mac(self, mac: str) -> dict[str, Any] | None:
+        return node_by_mac(self._data, mac)
+
+    def versions_of(self, urn: str) -> list[dict[str, Any]]:
+        return versions_of(self._data, urn)
+
+    def resolve_node(self, ref: str) -> dict[str, Any] | None:
+        return resolve_node(self._data, ref)
