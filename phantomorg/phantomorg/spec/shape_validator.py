@@ -587,8 +587,8 @@ def validate_shape(raw: dict) -> None:
             _require_type(marker, str, "communication.envelope.marker")
             if marker != "[env]":
                 raise ShapeError(
-                    "communication.envelope.marker: constante de protocolo "
-                    "fija (PhantomBridge la tiene hardcodeada); debe ser "
+                    "communication.envelope.marker: fixed protocol constant "
+                    "(PhantomBridge hardcodes it); must be "
                     f"'[env]', found {marker!r}"
                 )
         if "ttl_hours" in env:
