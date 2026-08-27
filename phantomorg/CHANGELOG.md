@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **Norms filed as drawer rows, not a markdown drawer (#34).** On
+  phantombot ≥ 1.1.282 the five memory drawers are rows in `memory.sqlite`
+  (`drawer_entries`) ranked by `weight · 2^(-age/halfLife)` (norms: 365d),
+  and `memory/norms.md` is a deprecated read path the threat judge no longer
+  reads. PhantomOrg now emits `norms.json` (one plain-text line per scaffold
+  norm) instead of the markdown drawer, and `po deploy` files each line as a
+  row via `phantombot memory drawers --kind norms --file "<line>" --persona
+  <id>` — idempotent re-filing (content-hash + `UNIQUE`) means re-deploys
+  reaffirm instead of duplicating. Requires the phantombot binary ≥ 1.1.282
+  on the target host; `--no-file-norms` skips it, `--phantombot-bin`
+  overrides the path. Also closes #37 (the silent threat-judge briefing gap).
+
 ## v0.5.11 — 2026-08-19
 
 **Additive deploy + phantomyard PR #25 review hardening.**

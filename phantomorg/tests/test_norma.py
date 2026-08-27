@@ -1,8 +1,10 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from phantomorg.compiler import build
+from phantomorg.compiler.build import NORMS_FILENAME
 from phantomorg.spec.loader import OrgSpecError, load_org_yaml
 from phantomorg.validator import validate_org
 
@@ -114,56 +116,46 @@ class TestNormaCompiled(unittest.TestCase):
             self.assertIn(norma_path, written["dana"])
             self.assertIn("1.6", norma_path.read_text(encoding="utf-8"))
 
-    def test_build_writes_concise_norm_into_judge_drawer(self):
-        """memory/norms.md is one of the drawers the threat judge reads in
-        full. The compiler must block-merge a CONCISE operational norm into
-        it (an ORG:BEGIN/END block), not just a pointer to the KB — so the
-        judge is briefed on routine traffic. The full protocol page stays in
-        the KB; the drawer block is the short summary."""
+    def test_build_writes_norms_manifest_not_markdown(self):
+        """memory/norms.md is a deprecated read path (phantombot >= 1.1.282).
+        The compiler must emit norms.json — one plain-text line per scaffold
+        norm — which `po deploy` files as drawer ROWS. No markdown drawer file."""
         spec, _ = validate_org(AU_ORG)
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
             build(spec, out_dir, only="dana")
-            drawer = (out_dir / "dana" / "memory" / "norms.md").read_text(
-                encoding="utf-8"
+            actor_dir = out_dir / "dana"
+            # The deprecated markdown drawer must NOT be produced.
+            self.assertFalse((actor_dir / "memory" / "norms.md").exists())
+            # The row manifest must carry the concise rules for the judge.
+            manifest = json.loads(
+                (actor_dir / NORMS_FILENAME).read_text(encoding="utf-8")
             )
-            # The drawer carries an owned ORG block with the concise rules.
-            self.assertIn("ORG:BEGIN norms", drawer)
-            self.assertIn("ORG:END norms", drawer)
-            # Interim hardening: the block opens with a deploy-date
-            # `## YYYY-MM-DD` header so phantombot's drawer-ingest
-            # parser files entries with real dates, not file mtime.
-            self.assertRegex(
-                drawer,
-                r"<!-- ORG:BEGIN norms -->\s*\n## \d{4}-\d{2}-\d{2}\n",
-            )
-            # The concise block names the channels / request-id format the
-            # judge needs to recognize routine traffic.
-            self.assertIn("telegram", drawer.lower())
-            self.assertIn("phantomchat", drawer.lower())
-            # The full protocol page is referenced for the human-readable copy.
-            self.assertIn("[[procedures/comunicacion-agentes]]", drawer)
+            self.assertEqual(manifest["kind"], "norms")
+            self.assertEqual(manifest["origin"], "phantomorg")
+            joined = "\n".join(manifest["entries"])
+            # Channels / request-id format the judge needs to recognize routine traffic.
+            self.assertIn("telegram", joined.lower())
+            self.assertIn("phantomchat", joined.lower())
+            # Plain text: no markdown emphasis or backticks in any entry.
+            for entry in manifest["entries"]:
+                self.assertNotIn("**", entry)
+                self.assertNotIn("`", entry)
 
-    def test_norm_drawer_one_bullet_per_line(self):
-        """The concise drawer must file one bullet per line: phantombot's
-        drawer-ingest parser splits on newlines, and a single line carrying
-        two bullets gets filed as one mangled entry (the regression this
-        template change exists to prevent)."""
+    def test_norm_manifest_one_line_per_entry(self):
+        """One scaffold norm = one self-contained line = one drawer row. A
+        single line carrying two rules would be filed as one mangled entry."""
         spec, _ = validate_org(AU_ORG)
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
             build(spec, out_dir, only="dana")
-            drawer = (out_dir / "dana" / "memory" / "norms.md").read_text(
-                encoding="utf-8"
+            manifest = json.loads(
+                (out_dir / "dana" / NORMS_FILENAME).read_text(encoding="utf-8")
             )
-            block = drawer.split("<!-- ORG:BEGIN norms -->")[1].split(
-                "<!-- ORG:END norms -->"
-            )[0]
-            bullets = [ln for ln in block.splitlines() if ln.lstrip().startswith("- ")]
-            self.assertGreaterEqual(len(bullets), 5)
-            # No line may carry more than one bullet (trim_blocks regression).
-            for ln in bullets:
-                self.assertNotIn("- ", ln[2:], f"two bullets on one line: {ln!r}")
+            entries = manifest["entries"]
+            self.assertGreaterEqual(len(entries), 5)
+            for entry in entries:
+                self.assertNotIn("\n", entry, f"multi-line norm entry: {entry!r}")
 
     def test_build_skips_norma_without_channels(self):
         """Backward compatible: orgs without channels get no norm file."""
