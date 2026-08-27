@@ -407,6 +407,73 @@ class TestNpubValidation(unittest.TestCase):
                 validate_shape(self.doc)
 
 
+class TestEmailValidation(unittest.TestCase):
+    """actors[].email / humans[].email are optional (a third contact
+    channel alongside Telegram and Nostr), but when present must be a
+    string with a plausible email shape — enough to catch obvious typos
+    like 'not-an-email' or a leading space at validate time instead of
+    send time."""
+
+    def setUp(self):
+        with open(AU_ORG, encoding="utf-8") as f:
+            self.doc = yaml.safe_load(f)
+
+    def test_valid_email_on_actor_passes(self):
+        self.doc["actors"][0]["email"] = "direccion@verdant-aquaponics.org"
+        validate_shape(self.doc)  # must not raise
+
+    def test_valid_email_on_human_passes(self):
+        self.doc["humans"][0]["email"] = "presidenta@verdant-aquaponics.org"
+        validate_shape(self.doc)  # must not raise
+
+    def test_email_optional(self):
+        # email is optional per-actor/per-human: absent (or None) still
+        # validates, same as npub.
+        self.doc["actors"][0]["email"] = None
+        validate_shape(self.doc)
+        del self.doc["actors"][0]["email"]
+        validate_shape(self.doc)
+
+    def test_invalid_email_rejected(self):
+        for bad in (
+            "not-an-email",  # no '@'
+            "direccion@acme",  # no dot in the domain
+            " direccion@acme.org",  # leading space
+            "direccion@acme.org ",  # trailing space
+            "a@b",  # local part / tld too short to be plausible
+            "@acme.org",  # empty local part
+            "direccion@",  # empty domain
+            "",
+        ):
+            self.doc["actors"][0]["email"] = bad
+            with self.assertRaises(ShapeError) as ctx:
+                validate_shape(self.doc)
+            self.assertIn("invalid email", str(ctx.exception))
+
+    def test_invalid_email_on_human_rejected(self):
+        self.doc["humans"][0]["email"] = "not-an-email"
+        with self.assertRaises(ShapeError) as ctx:
+            validate_shape(self.doc)
+        self.assertIn("invalid email", str(ctx.exception))
+
+    def test_email_not_a_string_rejected(self):
+        for bad in (42, ["direccion@acme.org"], {"email": 1}, True):
+            self.doc["actors"][0]["email"] = bad
+            with self.assertRaises(ShapeError):
+                validate_shape(self.doc)
+            self.doc["humans"][0]["email"] = bad
+            with self.assertRaises(ShapeError):
+                validate_shape(self.doc)
+
+    def test_email_typo_key_rejected(self):
+        # A typo'd field name must not silently pass (mirrors the npub /
+        # telegram_bot typo-key tests).
+        self.doc["actors"][0]["emial"] = "direccion@acme.org"
+        with self.assertRaises(ShapeError) as ctx:
+            validate_shape(self.doc)
+        self.assertIn("unknown field", str(ctx.exception))
+
+
 class TestHumansRegistry(unittest.TestCase):
     """org.yaml ``humans:`` block: optional, validatable registry of
     human counterparts (Board president, treasurer...)."""
