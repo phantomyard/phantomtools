@@ -158,7 +158,7 @@ class SshBackend:
 
     def get(self, content_hash: str) -> bytes:
         remote = self.remote_path(content_hash)
-        proc = _run_checked(self._ssh_args() + [f"cat {remote}"])
+        proc = _run_checked(self._ssh_args() + [f"cat {_shell_quote(remote)}"])
         if proc.returncode != 0:
             raise StorageError(self._err(proc, "ssh get failed (blob not found?)"))
         data = proc.stdout
@@ -169,7 +169,7 @@ class SshBackend:
 
     def has(self, content_hash: str) -> bool:
         remote = self.remote_path(content_hash)
-        proc = _run_checked(self._ssh_args() + [f"test -f {remote}"])
+        proc = _run_checked(self._ssh_args() + [f"test -f {_shell_quote(remote)}"])
         return proc.returncode == 0
 
     @staticmethod
