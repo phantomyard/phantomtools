@@ -36,13 +36,11 @@ from .identity import (
 from .manifest import (
     MANIFEST_FILENAME,
     ManifestError,
+    ManifestRepository,
     empty_manifest,
     load,
     manifest_lock,
     node_by_mac,
-    node_by_path,
-    node_by_slug,
-    node_by_urn,
     ref_target_mac,
     resolve_node,
     save,
@@ -306,12 +304,11 @@ def mkdir(name, parent, category, owners, org_yaml, actor, nsec_file, root):
     # not be able to interleave its load between our load and save (which
     # would silently drop one of the two updates).
     with manifest_lock(_manifest_path(root)):
-        manifest = _load_or_die(root)
-        meta = manifest["manifest"]
-        parent_mac = meta["rootMac"]
+        repo = ManifestRepository(_load_or_die(root))
+        parent_mac = repo.root_mac
         parent_path = ""
         if parent:
-            p = node_by_path(manifest, parent) or node_by_slug(manifest, parent)
+            p = repo.node_by_path(parent) or repo.node_by_slug(parent)
             if p is None or p.get("kind") != "folder":
                 raise click.ClickException(f"parent folder not found: {parent}")
             parent_mac = p["mac"]
@@ -319,8 +316,8 @@ def mkdir(name, parent, category, owners, org_yaml, actor, nsec_file, root):
 
         mac = node_mac(parent_mac, component_for_folder(name))
         path = f"{parent_path}{name}"
-        urn = f"urn:{meta['org']}:folder:{path}"
-        if node_by_urn(manifest, urn) is not None:
+        urn = f"urn:{repo.org}:folder:{path}"
+        if repo.node_by_urn(urn) is not None:
             raise click.ClickException(f"folder already exists: {urn}")
 
         node = {
@@ -348,8 +345,8 @@ def mkdir(name, parent, category, owners, org_yaml, actor, nsec_file, root):
                 urn=urn,
             )
         )
-        manifest["nodes"].append(node)
-        save(_manifest_path(root), manifest)
+        repo.add_node(node)
+        save(_manifest_path(root), repo.data)
     _audit(
         root,
         actor_id,
@@ -424,12 +421,11 @@ def add(
 
     # Load-modify-save under the inter-process lock (see mkdir).
     with manifest_lock(_manifest_path(root)):
-        manifest = _load_or_die(root)
-        meta = manifest["manifest"]
-        parent_mac = meta["rootMac"]
+        repo = ManifestRepository(_load_or_die(root))
+        parent_mac = repo.root_mac
         parent_path = ""
         if folder:
-            parent = node_by_path(manifest, folder) or node_by_slug(manifest, folder)
+            parent = repo.node_by_path(folder) or repo.node_by_slug(folder)
             if parent is None or parent.get("kind") != "folder":
                 raise click.ClickException(f"folder not found: {folder}")
             parent_mac = parent["mac"]
@@ -438,9 +434,9 @@ def add(
         ch = content_hash(content)
         mac = node_mac(parent_mac, component_for_doc(slug, content))
         logical = f"{parent_path}{slug}"
-        urn = f"urn:{meta['org']}:doc:{logical}"
+        urn = f"urn:{repo.org}:doc:{logical}"
 
-        existing = node_by_urn(manifest, urn)
+        existing = repo.node_by_urn(urn)
         if existing is not None and existing.get("contentHash") == ch:
             click.echo(f"unchanged: {urn}")
             return
@@ -517,8 +513,8 @@ def add(
                 urn=urn,
             )
         )
-        manifest["nodes"].append(node)
-        save(_manifest_path(root), manifest)
+        repo.add_node(node)
+        save(_manifest_path(root), repo.data)
     _audit(
         root,
         actor_id,
@@ -788,14 +784,12 @@ def verify(backend, org_yaml, root):
     # envelope with the *current* ref name and verify it, so renaming or
     # repointing ``manifest.refs`` after tagging invalidates the signature.
     for ref_name, value in (manifest.get("refs") or {}).items():
-        if not isinstance(value, dict):
-            continue  # legacy bare-MAC ref (unsigned, v1 behavior)
-        issues = []
-        mac = value.get("mac")
+        issues: list[str] = []
+        mac = ref_target_mac(value)
         node = node_by_mac(manifest, mac) if mac else None
         if node is None:
             issues.append("ref points at unknown MAC")
-        else:
+        elif isinstance(value, dict):
             sig = value.get("sig")
             sig_pubkey = value.get("sigPubkey")
             if (sig is None) != (sig_pubkey is None):
@@ -861,8 +855,8 @@ def tag(name, ref, org_yaml, actor, nsec_file, root):
     """
     actor_id, org = _require_acl(org_yaml, actor)
     with manifest_lock(_manifest_path(root)):
-        manifest = _load_or_die(root)
-        node = resolve_node(manifest, ref)
+        repo = ManifestRepository(_load_or_die(root))
+        node = repo.resolve_node(ref)
         if node is None:
             raise click.ClickException(f"not found: {ref}")
         if not can_write(org, actor_id, node.get("category", 0), node.get("owners")):
@@ -888,8 +882,8 @@ def tag(name, ref, org_yaml, actor, nsec_file, root):
         }
         if sig_fields:
             record.update(sig_fields)
-        manifest.setdefault("refs", {})[name] = record
-        save(_manifest_path(root), manifest)
+        repo.set_ref(name, record)
+        save(_manifest_path(root), repo.data)
     _audit(
         root,
         actor_id,
