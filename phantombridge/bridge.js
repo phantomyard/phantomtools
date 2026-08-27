@@ -1634,7 +1634,9 @@ function sweepLoopState(now) {
 // If there is a valid envelope -> ONLY env.rid (authoritative, does not scan text).
 // Without envelope -> best-effort textual fallback (F2-04).
 function resolveRid(parsed, textStr) {
-  if (parsed && parsed.env.rid) return parsed.env.rid;
+  // Only an AUTHENTICATED envelope's rid is authoritative; a forged
+  // (unauthenticated) envelope must not steer the request_id short-circuit.
+  if (parsed && parsed.authenticated && parsed.env.rid) return parsed.env.rid;
   if (!parsed) return extractRid(textStr);
   return null;
 }
