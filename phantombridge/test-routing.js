@@ -102,6 +102,14 @@ t('no rule + default allow -> allowed', () => {
 t('empty permissions + default deny -> denied', () => {
   assert.strictEqual(routingAllowed('carol', 'dave', {}, 'deny'), false);
 });
+t('string rule (not array) fails closed — no substring bypass (#80)', () => {
+  assert.strictEqual(routingAllowed('carol', 'dave', {carol: 'dave'}, 'deny'), false);
+  assert.strictEqual(routingAllowed('carol', 'davey', {carol: 'dave'}, 'deny'), false);
+  assert.strictEqual(routingAllowed('carol', 'alice', {carol: 'dave,alice'}, 'deny'), false);
+});
+t('numeric rule fails closed without throwing (#80)', () => {
+  assert.strictEqual(routingAllowed('carol', 'dave', {carol: 42}, 'deny'), false);
+});
 
 console.log(`\n${passed} passed, ${failed} failed`);
 fs.rmSync(TEST_DIR, {recursive: true, force: true});
