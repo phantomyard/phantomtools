@@ -482,7 +482,13 @@ def add(
             scheme = (
                 backend.split("://")[0] if backend and "://" in backend else "local"
             )
-            locations = [{"backend": scheme, "path": location}]
+            if scheme == "gdrive":
+                # Google Drive is a reference backend, not a
+                # content-addressed store: `put` returns a Drive file id,
+                # and get/verify re-download it via read_reference.
+                locations = [{"backend": "gdrive", "ref": location}]
+            else:
+                locations = [{"backend": scheme, "path": location}]
 
         node = {
             "urn": urn,
