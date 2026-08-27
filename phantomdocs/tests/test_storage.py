@@ -147,3 +147,45 @@ def test_read_reference_missing_file_raises_storage_error(tmp_path):
     FileNotFoundError (issue #58)."""
     with pytest.raises(StorageError):
         read_reference(f"file://{tmp_path}/does-not-exist.txt")
+
+
+def test_ssh_get_quotes_remote_path(monkeypatch):
+    """`get` must shell-quote the remote path like `put` does — a `base` with
+    shell metacharacters must not reach the remote shell (issue #72)."""
+    captured = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = b""
+        stderr = b""
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        return _Proc()
+
+    monkeypatch.setattr("phantomdocs.storage._run_checked", fake_run)
+    b = SshBackend(host="h", base="/var/x; id")
+    with pytest.raises(StorageError):
+        b.get("b" * 64)  # empty stdout -> hash mismatch; the command is what we assert
+    cmd = captured["args"][-1]
+    assert cmd == "cat '/var/x; id/blobs/bb/" + "b" * 64 + "'"
+
+
+def test_ssh_has_quotes_remote_path(monkeypatch):
+    """`has` must shell-quote the remote path (issue #72)."""
+    captured = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = b""
+        stderr = b""
+
+    def fake_run(args, **kwargs):
+        captured["args"] = args
+        return _Proc()
+
+    monkeypatch.setattr("phantomdocs.storage._run_checked", fake_run)
+    b = SshBackend(host="h", base="/var/x; id")
+    b.has("b" * 64)
+    cmd = captured["args"][-1]
+    assert cmd == "test -f '/var/x; id/blobs/bb/" + "b" * 64 + "'"
