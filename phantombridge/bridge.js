@@ -1209,6 +1209,9 @@ function listRecordings() {
       try { st = fs.lstatSync(full); } catch (_) { return []; }
       // Never follow operator-controlled symlinks from a recordings directory.
       if (!st.isFile()) return [];
+      // A hardlink to a file outside the dir is still a regular file (lstat
+      // cannot tell it apart); refuse by link count (nlink > 1).
+      if (st.nlink > 1) return [];
       return [{name: f, size: st.size, mtime: st.mtime.toISOString()}];
     }).sort((a, b) => b.mtime.localeCompare(a.mtime));
   } catch (err) {
@@ -1302,6 +1305,7 @@ function routingAllowed(from, to, perms, def) {
   if (from === to) return false;
   const rule = (perms || {})[from];
   if (!rule) return (def || 'deny') === 'allow';
+  if (!Array.isArray(rule)) return false; // fail closed on non-array rule shapes (string/number)
   if (rule.includes('*')) return true;
   return rule.includes(to);
 }
@@ -3102,6 +3106,11 @@ const server = http.createServer((req, res) => {
       return res.end(JSON.stringify({ok: false, error: 'not found'}));
     }
     if (!st.isFile()) {
+      res.statusCode = 404;
+      return res.end(JSON.stringify({ok: false, error: 'not found'}));
+    }
+    if (st.nlink > 1) {
+      // Hardlink to a file outside the dir (lstat cannot tell it apart); refuse.
       res.statusCode = 404;
       return res.end(JSON.stringify({ok: false, error: 'not found'}));
     }
