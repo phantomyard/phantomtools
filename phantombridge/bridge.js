@@ -1305,6 +1305,7 @@ function routingAllowed(from, to, perms, def) {
   if (from === to) return false;
   const rule = (perms || {})[from];
   if (!rule) return (def || 'deny') === 'allow';
+  if (!Array.isArray(rule)) return false; // fail closed on non-array rule shapes (string/number)
   if (rule.includes('*')) return true;
   return rule.includes(to);
 }
