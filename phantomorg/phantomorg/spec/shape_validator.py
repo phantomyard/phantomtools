@@ -117,6 +117,20 @@ def _is_valid_telegram_handle(value: object) -> bool:
     return m is not None
 
 
+def _is_valid_email(value: object) -> bool:
+    """True when ``value`` is a plausible email address.
+
+    A lightweight shape check (``local@domain.tld``), not RFC 5322 —
+    enough to catch obvious typos like 'not-an-email', 'direccion@acme'
+    or a leading space at validate time instead of send time. These
+    values are rendered into HUMANS.md and later consumed by notification
+    routing, so garbage in means garbage out.
+    """
+    if not isinstance(value, str):
+        return False
+    return re.fullmatch(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value) is not None
+
+
 def slugify_id(text: str) -> str:
     """Normalizes free text into an identifier-shaped string.
 
@@ -244,6 +258,7 @@ _ACTOR_KEYS = {
     "telegram_bot",
     "tone",
     "npub",
+    "email",
 }
 _HUMAN_KEYS = {
     "id",
@@ -251,6 +266,7 @@ _HUMAN_KEYS = {
     "role",
     "telegram_user_id",
     "npub",
+    "email",
 }
 _POLICIES_KEYS = {"access_levels", "security_categories"}
 _ACCESS_LEVEL_KEYS = {"label", "categories"}
@@ -403,6 +419,13 @@ def validate_shape(raw: dict) -> None:
         # npub is optional (bots may not have phantomchat configured yet),
         # but when present it must be a valid NIP-19 bech32 public key.
         _require_optional_type(a.get("npub"), str, f"actors[{i}].npub")
+        _require_optional_type(a.get("email"), str, f"actors[{i}].email")
+        if a.get("email") is not None and not _is_valid_email(a["email"]):
+            raise ShapeError(
+                f"actors[{i}].email: invalid email {a['email']!r} — "
+                "expected a simple address like 'direccion@example.org' "
+                "(local@domain.tld, no whitespace)"
+            )
         if a.get("npub") is not None and not is_valid_npub(a["npub"]):
             raise ShapeError(
                 f"actors[{i}].npub: invalid NIP-19 npub {a['npub']!r} — "
@@ -428,6 +451,13 @@ def validate_shape(raw: dict) -> None:
                 h.get("telegram_user_id"), int, f"humans[{i}].telegram_user_id"
             )
             _require_optional_type(h.get("npub"), str, f"humans[{i}].npub")
+            _require_optional_type(h.get("email"), str, f"humans[{i}].email")
+            if h.get("email") is not None and not _is_valid_email(h["email"]):
+                raise ShapeError(
+                    f"humans[{i}].email: invalid email {h['email']!r} — "
+                    "expected a simple address like 'direccion@example.org' "
+                    "(local@domain.tld, no whitespace)"
+                )
             if h.get("npub") is not None and not is_valid_npub(h["npub"]):
                 raise ShapeError(
                     f"humans[{i}].npub: invalid NIP-19 npub {h['npub']!r} — "
@@ -557,8 +587,8 @@ def validate_shape(raw: dict) -> None:
             _require_type(marker, str, "communication.envelope.marker")
             if marker != "[env]":
                 raise ShapeError(
-                    "communication.envelope.marker: constante de protocolo "
-                    "fija (PhantomBridge la tiene hardcodeada); debe ser "
+                    "communication.envelope.marker: fixed protocol constant "
+                    "(PhantomBridge hardcodes it); must be "
                     f"'[env]', found {marker!r}"
                 )
         if "ttl_hours" in env:
