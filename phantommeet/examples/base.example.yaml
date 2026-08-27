@@ -91,20 +91,16 @@ invite:
     dest: tools/meeting-invite.sh
     chmod: 0o755
 
-# Derivation rules: org roles -> PhantomMeet roles.
-# Directive org roles become "responsible" (full access); scoped_responsible
-# roles become "lead" — responsible for online meetings *within their project
-# scope* (they schedule with meeting-invite.sh, escalate out-of-scope requests
-# to the responsible persona); support org roles become "support" restricted to
-# a room-name prefix (derive.restricted_prefixes) — they never schedule and
-# escalate every online-meeting request.
+# Derivation rules: org roles -> PhantomMeet roles (role-based, no room-name
+# prefixes). Directive org roles become "responsible" (full access);
+# lead_roles become "lead" — responsible for online meetings *within their
+# project* (they schedule with meeting-invite.sh, escalate out-of-project
+# requests to the responsible persona); support_roles become "support" — they
+# never schedule and escalate every online-meeting request.
 derive:
   directive_roles: [ceo, cfo]
-  scoped_responsible_roles:
-    project_lead: example-project
+  lead_roles: [project_lead]
   support_roles: [training_lead]
-  restricted_prefixes:
-    training_lead: formacion
 
 # Legacy ad-hoc kb file superseded by Meetings.md (removed on apply).
 legacy_kb_files:

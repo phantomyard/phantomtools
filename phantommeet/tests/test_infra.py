@@ -30,7 +30,7 @@ def _manifest() -> dict[str, Any]:
         "language": "en",
         "version": "0.0.0",
         "roles": {"maria": "responsible"},
-        "permissions": {"full": ["maria"], "scoped": {}, "restricted": {}},
+        "permissions": {"full": ["maria"]},
         "rooms": {
             "naming": "{YYYY-MM-DD}-{HH-MM}_{topic}",
             "active_room_required": True,
@@ -115,7 +115,8 @@ def test_check_persona_state_skips_relay_npubs_without_access(
     """A persona without meeting access is not required to carry the bridge
     npub in ``relay_npubs`` (include_bridge=False)."""
     manifest = _manifest()
-    manifest["permissions"] = {"full": [], "scoped": {}, "restricted": {}}
+    manifest["roles"] = {}  # maria has no role -> no meeting access
+    manifest["permissions"] = {"full": []}
     persona_dir = tmp_path / "maria"
     _write_phantomchat(
         persona_dir,

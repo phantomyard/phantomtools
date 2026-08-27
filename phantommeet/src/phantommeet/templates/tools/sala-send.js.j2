@@ -1,0 +1,210 @@
+#!/usr/bin/env node
+// sala-send.js — speak in a Jitsi meeting room via the PhantomMeet bridge.
+//
+// Rendered by PhantomMeet (`pm apply`); the persona-specific values below come
+// from the manifest. Sends a NIP-17 gift-wrap DM to the bridge with content
+// `[room] text` so the bridge injects the text into that room. This is the
+// counterpart of `meeting-join.js`, which sends a raw `join` / `leave` command
+// (no room prefix); speaking always carries the `[room]` prefix.
+//
+// Usage:
+//   sala-send.js <room> "text"
+//   sala-send.js --check
+//
+// <room> may be a bare name or a bracketed name (`[room]`).
+'use strict';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { createRequire } = require('module');
+
+// --- Installation-specific values (rendered from the manifest) ------------
+const PERSONA = {{ name | tojson }};
+const BRIDGE_NPUB = {{ bridge.npub | tojson }};
+const DEFAULT_RELAYS = [
+  {{ relay | tojson }},
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+  'wss://nostr.mom',
+  'wss://nostr.data.haus',
+];
+
+// The bridge-DM crypto ships in phantombot's shared tools (where this script
+// and its node_modules live). Resolve nostr-tools from there so this
+// per-persona tool needs no node_modules of its own.
+const PHANTOMBOT_TOOLS = process.env.PHANTOMBOT_TOOLS_DIR ||
+  path.join(os.homedir(), '.local', 'share', 'phantombot', 'tools');
+
+let nip19, finalizeEvent, getPublicKey, wrapEvent;
+try {
+  const phReq = createRequire(path.join(PHANTOMBOT_TOOLS, 'package.json'));
+  ({ nip19, finalizeEvent, getPublicKey } = phReq('nostr-tools'));
+  ({ wrapEvent } = phReq('nostr-tools/nip17'));
+} catch (err) {
+  console.error('ERROR: nostr-tools not found in phantombot shared tools:');
+  console.error('  ' + PHANTOMBOT_TOOLS);
+  console.error('  Set PHANTOMBOT_TOOLS_DIR if the phantombot tools dir differs.');
+  console.error('  (' + err.message + ')');
+  process.exit(2);
+}
+
+const BRIDGE_PK = nip19.decode(BRIDGE_NPUB).data;
+
+// --- Persona identity (nsec) ----------------------------------------------
+function readNsec() {
+  if (process.env.PHANTOMBOT_NSEC) return process.env.PHANTOMBOT_NSEC;
+  const identityPath = path.join(__dirname, '..', 'identity.json');
+  try {
+    const identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
+    if (identity.nsec) return identity.nsec;
+  } catch (err) { /* fall through to the clear error below */ }
+  console.error('ERROR: cannot read nsec from ' + identityPath);
+  console.error('  Set PHANTOMBOT_NSEC to override.');
+  process.exit(2);
+}
+
+// --- Relays ----------------------------------------------------------------
+function loadRelays() {
+  const pcPath = path.join(__dirname, '..', 'phantomchat.json');
+  try {
+    const pc = JSON.parse(fs.readFileSync(pcPath, 'utf8'));
+    if (Array.isArray(pc.relays) && pc.relays.length > 0) return pc.relays;
+  } catch (err) { /* use defaults */ }
+  return DEFAULT_RELAYS;
+}
+
+// --- Room normalization -----------------------------------------------------
+// The bridge parses a speak as `[room] text`; a bare room is bracketed.
+function normalizeRoom(room) {
+  if (room.startsWith('[') && room.endsWith(']')) return room;
+  return '[' + room + ']';
+}
+
+// --- Argument handling ------------------------------------------------------
+function usage() {
+  console.error('usage: sala-send.js <room> "text"');
+  console.error('       sala-send.js --check');
+  process.exit(2);
+}
+
+// --- Publish one gift-wrap event (NIP-42 aware) ----------------------------
+function publish(relayUrl, event, sk, timeoutMs) {
+  return new Promise((resolve) => {
+    let ws = null;
+    let settled = false;
+    let timer = null;
+
+    const settle = (res) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(res);
+    };
+
+    try {
+      ws = new WebSocket(relayUrl);
+    } catch (e) {
+      return resolve({ ok: false, url: relayUrl, err: 'no-websocket' });
+    }
+
+    timer = setTimeout(() => {
+      settle({ ok: false, url: relayUrl, err: 'timeout' });
+      try { ws.close(); } catch (e) {}
+    }, timeoutMs);
+
+    let authed = false, sentAfterAuth = false, sentPlain = false;
+    const sendEvent = () => { try { ws.send(JSON.stringify(['EVENT', event])); } catch (e) {} };
+    const doAuth = (challenge) => {
+      authed = true;
+      const authEvent = {
+        kind: 22242,
+        created_at: Math.floor(Date.now() / 1000),
+        tags: [['relay', relayUrl], ['challenge', challenge]],
+        content: '',
+      };
+      try { ws.send(JSON.stringify(['AUTH', finalizeEvent(authEvent, sk)])); } catch (e) {}
+      setTimeout(() => { sentAfterAuth = true; sendEvent(); }, 300);
+    };
+    ws.onopen = () => {
+      // Wait for a proactive AUTH; if none arrives in 1s, send unauthenticated.
+      setTimeout(() => { if (!authed && !sentPlain) { sentPlain = true; sendEvent(); } }, 1000);
+    };
+    ws.onmessage = (e) => {
+      let parsed;
+      try { parsed = JSON.parse(e.data.toString()); } catch { return; }
+      if (parsed[0] === 'AUTH' && !authed) {
+        doAuth(parsed[1]);
+      } else if (parsed[0] === 'OK') {
+        if (parsed[1] === event.id) {
+          // Ignore a pre-auth OK that arrives before the post-auth re-send.
+          if (authed && !sentAfterAuth) return;
+          settle({ ok: parsed[2] === true, url: relayUrl, msg: parsed[3] || '' });
+        }
+      }
+    };
+    // NOTE: do not call ws.close() inside the error handler — closing from
+    // within 'error' can synchronously re-emit 'error' and recurse. Settle
+    // only; the socket tears down on its own.
+    ws.onerror = () => settle({ ok: false, url: relayUrl, err: 'ws-error' });
+  });
+}
+
+// --- Content builder --------------------------------------------------------
+function buildContent(room, text) {
+  return normalizeRoom(room) + ' ' + text;
+}
+
+function send(content) {
+  const sk = nip19.decode(readNsec()).data;
+  const wrapped = wrapEvent(sk, { publicKey: BRIDGE_PK }, content, 'Jitsi');
+  const relays = loadRelays();
+  console.log('bridge: sending DM (' + BRIDGE_PK.slice(0, 12) + '…): ' + content);
+  Promise.all(relays.map((r) => publish(r, wrapped, sk, 15000))).then((results) => {
+    let ok = 0;
+    for (const r of results) {
+      if (r.ok) ok++;
+      console.log((r.ok ? 'OK   ' : 'FAIL ') + r.url +
+        (r.err ? ' — ' + r.err : '') + (r.msg ? ' — ' + r.msg : ''));
+    }
+    console.log('result: ' + ok + '/' + relays.length + ' relays' +
+      (ok >= 1 ? ' (sent)' : ' (FAILED)'));
+    process.exit(ok >= 1 ? 0 : 1);
+  });
+}
+
+function check() {
+  const sk = nip19.decode(readNsec()).data;
+  const myPk = getPublicKey(sk);
+  console.log('persona : ' + PERSONA);
+  console.log('pubkey  : ' + myPk);
+  console.log('bridge  : ' + BRIDGE_PK + ' (' + BRIDGE_NPUB.slice(0, 12) + '…)');
+  console.log('relays  : ' + loadRelays().join(', '));
+  console.log('OK');
+  process.exit(0);
+}
+
+// --- Main -------------------------------------------------------------------
+function main() {
+  const args = process.argv.slice(2);
+  if (args.length === 0) usage();
+
+  if (args[0] === '--check') return check();
+
+  const room = args[0];
+  const text = args.slice(1).join(' ');
+
+  if (!room) {
+    console.error('ERROR: missing <room>.');
+    usage();
+  }
+  if (!text) {
+    console.error('ERROR: missing "text".');
+    usage();
+  }
+
+  send(buildContent(room, text));
+}
+
+main();

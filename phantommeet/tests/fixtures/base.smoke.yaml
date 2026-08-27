@@ -21,7 +21,7 @@ storage:
   drive_folder: Grabaciones
   custodian: maria
   meeting_folders:
-    example-project: "example-meetings"
+    pedro: "example-meetings"
   decided_by: responsible
   cleanup_after_confirm: true
 
@@ -49,8 +49,5 @@ invite:
 
 derive:
   directive_roles: [ceo, cfo]
-  scoped_responsible_roles:
-    project_lead: example-project
+  lead_roles: [project_lead]
   support_roles: [training_lead]
-  restricted_prefixes:
-    training_lead: formacion

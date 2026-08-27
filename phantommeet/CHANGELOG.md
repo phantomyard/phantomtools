@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+- **Add `sala-send.js` — the speak-in-room tool, now a managed template.**
+  `sala-send` was a hand-maintained persona tool (Mac-local, unversioned). It
+  is now a PhantomMeet template (`tools/sala-send.js.j2`) deployed to every
+  persona like `meeting-join.js`, with the same `ws.onerror` recursion fix.
+
+- **`_upsert_kb` strips stale protocol duplicates from the Meetings.md suffix.**
+  A previous render orphaned outside the markers (e.g. a pre-marker apply that
+  preserved the old body as the suffix) left a duplicate of the managed
+  protocol in the tail, and `_upsert_kb` preserved it on every re-apply. A
+  stale duplicate is now detected by the protocol title header (`# … Protocolo
+  de Reuniones` / `Meeting Protocol`) and stripped, keeping a trailing
+  operator note (`## Estado de validación`).
+
+- **Room authorization is role-based, not room-name based (no prefix/ACL).**
+  The room name had become a proxy for the persona's role: the manifest scoped
+  by prefix (`scoped: {almaponia: [alma]}`) while the bridge enforced an exact
+  room name (`restricted: {almaponia: [alma]}`), so a lead could never operate
+  a room whose name didn't literally match the prefix. Now the authorization
+  is derived from the persona's role, and room names are free-form:
+  - **Bridge** (`agentCanOperateRoom` / `evalRoomPermission`): `full` agents
+    (responsible) operate any room *and* room-agnostic actions (recordings);
+    every other authenticated agent operates any *named* room (join/leave/
+    speak). The per-room `restricted` ACL is removed from the permission
+    model and from `config.json`.
+  - **PhantomMeet** `access_for` returns `full | participant | none` (no
+    prefix); `_persona_context` phrases lead/support by role ("your project",
+    not a `prefix-*`); `derive.py` maps org roles via `lead_roles` /
+    `support_roles` (no `scoped_responsible_roles` / `restricted_prefixes`);
+    the manifest `permissions` block now carries only `full`.
+  - `storage.meeting_folders` is keyed by persona id (e.g. `alma`) instead of
+    a project prefix (`almaponia`).
+
+- **Add `meeting-join.js` — the join/leave tool personas were missing.**
+  The Meeting protocol told personas to “send the DM `join [room] --nick
+  <self>`”, but no tool could actually do it: `sala-send` wraps text as
+  `[room] text` (speak, not join), and the raw-DM crypto lived only in the
+  bridge. Personas improvised and misfired (e.g. a `[--help]` DM denied by
+  the bridge). Now:
+  - New template `templates/tools/meeting-join.js.j2` → per-persona
+    `tools/meeting-join.js` (chmod 0o755), a self-contained Node tool that
+    resolves nostr-tools from phantombot's shared tools dir (`createRequire`
+    on `~/.local/share/phantombot/tools`, overridable via
+    `PHANTOMBOT_TOOLS_DIR`), reads the persona `nsec` from its own
+    `identity.json`, and sends a **raw** NIP-17 gift-wrap DM:
+    `join [room] --nick <self> [--password X] [--timeout N]` / `leave [room]`.
+  - The `--nick` is **always the persona's own identity** — it is never read
+    from an invitation or overridable by the caller (no impersonation).
+  - `_persona_context` now exposes `bridge` so the template can render the
+    bridge `npub` (decoded to hex at runtime with `nip19.decode`).
+  - Deployed via `manifest.tools` (all personas), not gated by `invite.roles`:
+    every persona gets it, while `meeting-invite.sh` stays scheduling-only.
+  - Protocol templates (es/en) updated to reference `tools/meeting-join.js`
+    for join/leave instead of hand-built DMs.
+
 - **PR #21 re-review round 6 (atomic manifest persistence)** — closes
   robertclawson's Major on the manifest-persistence path and Kai's open Major
   (manifest mutation outside `_commit_writes`):

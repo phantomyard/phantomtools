@@ -216,13 +216,13 @@ def _persona_context(persona_id: str, manifest: dict[str, Any]) -> dict[str, Any
         "responsible": "Responsible",
         "lead": "Project Lead",
         "support": "Support",
-    }[role]
+    }.get(role, "")
     if lang == "es":
         role_label = {
             "responsible": "Responsable",
             "lead": "Lead de Proyecto",
             "support": "Soporte",
-        }[role]
+        }.get(role, "")
 
     rooms = manifest["rooms"]
 
@@ -232,37 +232,33 @@ def _persona_context(persona_id: str, manifest: dict[str, Any]) -> dict[str, Any
             if lang == "en"
             else "Tienes **acceso completo** a todas las salas de reunión."
         )
-    elif access["kind"] == "scoped":
+    elif role == "lead":
         permissions_detail = (
-            "You are **responsible for online meetings within your scope** "
-            f"**'{access['prefix']}-*'**: you schedule them with "
-            "`meeting-invite.sh`. If a meeting request is **outside your scope** "
-            "(another project or an org-wide AU meeting), **escalate it to the "
-            "responsible persona** with the exact parameters received."
+            "You are **responsible for your project's online meetings**: you "
+            "schedule them with `meeting-invite.sh`. If a meeting request is "
+            "**outside your project** (another project or an org-wide meeting), "
+            "**escalate it to the responsible persona** with the exact parameters "
+            "received."
             if lang == "en"
-            else "Eres **responsable de las reuniones online dentro de tu ámbito** "
-            f"**'{access['prefix']}-*'**: las agendas con `meeting-invite.sh`. "
-            "Si una solicitud de reunión es de **fuera de tu ámbito** (otro "
-            "proyecto o una reunión general de AU), **escálala a la persona "
-            "responsable** con los parámetros exactos recibidos."
+            else "Eres **responsable de las reuniones online de tu proyecto**: "
+            "las agendas con `meeting-invite.sh`. Si una solicitud de reunión es "
+            "de **fuera de tu proyecto** (otro proyecto o una reunión general de "
+            "la organización), **escálala a la persona responsable** con los "
+            "parámetros exactos recibidos."
         )
-    elif access["kind"] == "restricted":
+    elif role == "support":
         permissions_detail = (
             "You take part in the rooms you are **invited to** (the invitation "
-            "URL is your ticket). Your org scope marker is "
-            f"**'{access['prefix']}-*'**. "
-            "**Do not schedule online meetings**: if you receive an online-meeting "
-            "request, **escalate it to the responsible persona** with the exact "
-            "parameters received. Other agenda items (appointments, calendar, "
-            "reminders) you handle as usual."
+            "URL is your ticket). **Do not schedule online meetings**: if you "
+            "receive an online-meeting request, **escalate it to the responsible "
+            "persona** with the exact parameters received. Other agenda items "
+            "(appointments, calendar, reminders) you handle as usual."
             if lang == "en"
             else "Participas en las salas a las que te **inviten** (la URL de "
-            f"invitación es tu ticket). Tu ámbito de organización es "
-            f"**'{access['prefix']}-*'**. "
-            "**No agendes reuniones online**: si recibes una solicitud de reunión "
-            "online, **escálala a la persona responsable** con los parámetros "
-            "exactos recibidos. El resto de la agenda (citas, calendario, "
-            "recordatorios) la gestionas con normalidad."
+            "invitación es tu ticket). **No agendes reuniones online**: si "
+            "recibes una solicitud de reunión online, **escálala a la persona "
+            "responsable** con los parámetros exactos recibidos. El resto de la "
+            "agenda (citas, calendario, recordatorios) la gestionas con normalidad."
         )
     else:
         permissions_detail = (
@@ -281,11 +277,11 @@ def _persona_context(persona_id: str, manifest: dict[str, Any]) -> dict[str, Any
         handles = manifest.get("invite", {}).get("telegram_bots", {}) or {}
         handle = handles.get(escalation_target)
         mention = f"**{escalation_target}**" + (f" ({handle})" if handle else "")
-        if access["kind"] == "scoped":
+        if role == "lead":
             escalation_line = (
-                f" Meetings outside your scope escalate to {mention}."
+                f" Meetings outside your project escalate to {mention}."
                 if lang == "en"
-                else f" Las reuniones fuera de tu ámbito escalan a {mention}."
+                else f" Las reuniones fuera de tu proyecto escalan a {mention}."
             )
         else:
             escalation_line = (
@@ -298,19 +294,19 @@ def _persona_context(persona_id: str, manifest: dict[str, Any]) -> dict[str, Any
     # Canonical escalation rule text per tier (used by the Meetings.md
     # "Escalation" section). support escalates *every* request; lead (scoped
     # responsible) escalates only out-of-scope ones; responsible never escalates.
-    if access["kind"] == "scoped":
+    if role == "lead":
         escalation_rule = (
-            "You are responsible for online meetings **within your scope**. "
-            "Requests **outside your scope** (another project or an org-wide "
+            "You are responsible for online meetings **within your project**. "
+            "Requests **outside your project** (another project or an org-wide "
             "meeting) are escalated to the responsible persona with the exact "
             "parameters received."
             if lang == "en"
-            else "Eres responsable de las reuniones online **dentro de tu ámbito**. "
-            "Las solicitudes de **fuera de tu ámbito** (otro proyecto o una "
+            else "Eres responsable de las reuniones online **de tu proyecto**. "
+            "Las solicitudes de **fuera de tu proyecto** (otro proyecto o una "
             "reunión general de la organización) se escalan a la persona "
             "responsable con los parámetros exactos recibidos."
         )
-    elif access["kind"] == "restricted":
+    elif role == "support":
         escalation_rule = (
             "You do **not** schedule online meetings: if you receive an "
             "online-meeting request, **escalate it to the responsible persona** "
@@ -335,12 +331,12 @@ def _persona_context(persona_id: str, manifest: dict[str, Any]) -> dict[str, Any
     drive_folder = storage.get("drive_folder", "Grabaciones")
     meeting_folders = storage.get("meeting_folders", {}) or {}
     custodian = storage.get("custodian", "") or ""
-    if access["kind"] == "scoped":
-        destination_folder = meeting_folders.get(access["prefix"], drive_folder)
+    if role == "lead":
+        destination_folder = meeting_folders.get(persona_id, drive_folder)
         destination_note = (
             "your project's meeting folder in Drive"
             if lang == "en"
-            else "la carpeta de reuniones de tu ámbito en Drive"
+            else "la carpeta de reuniones de tu proyecto en Drive"
         )
         destination_owner = persona_id.capitalize()
         destination_custodian = custodian.capitalize() if custodian else ""
@@ -380,6 +376,7 @@ def _persona_context(persona_id: str, manifest: dict[str, Any]) -> dict[str, Any
         "org": manifest["org"],
         "version": manifest.get("version", "?"),
         "relay": manifest.get("bridge", {}).get("relay", "?"),
+        "bridge": manifest.get("bridge", {}),
         "name": persona_id,
         "role_label": role_label,
         "access_summary": access["summary"],
@@ -581,6 +578,37 @@ def _split_frontmatter(text: str) -> tuple[str, str]:
     return text, ""
 
 
+# A stale duplicate of the managed protocol (a previous render orphaned outside
+# the markers — e.g. a pre-marker apply preserved the old body as the suffix).
+# Detectable by the protocol title header, which the managed body renders once.
+_STALE_PROTOCOL_HEADER = re.compile(
+    r"^# [^\n]*(?:Protocolo de Reuniones|Meeting Protocol)[^\n]*$",
+    re.MULTILINE,
+)
+# A trailing operator note deliberately placed outside the markers (e.g.
+# "## Estado de validación"). Kept when a stale duplicate is stripped.
+_STALE_OPERATOR_NOTE = re.compile(
+    r"^## Estado de validación[^\n]*$",
+    re.MULTILINE,
+)
+
+
+def _strip_stale_protocol_duplicate(text: str) -> str:
+    """Strip a stale duplicate of the managed protocol from a Meetings.md
+    suffix. Everything from the protocol title header onward is PhantomMeet-
+    managed content; a trailing operator note (## Estado de validación) is kept.
+    """
+    m = _STALE_PROTOCOL_HEADER.search(text)
+    if not m:
+        return text
+    before = text[: m.start()]
+    after = text[m.start() :]
+    note = _STALE_OPERATOR_NOTE.search(after)
+    if note:
+        return before.rstrip("\n") + "\n\n" + after[note.start() :].rstrip() + "\n"
+    return before.rstrip("\n") + "\n"
+
+
 def _upsert_kb(existing: str, frontmatter: str, body: str) -> str:
     """Upsert the managed Meetings.md: frontmatter + marker-delimited body.
 
@@ -593,7 +621,7 @@ def _upsert_kb(existing: str, frontmatter: str, body: str) -> str:
     managed_body = f"{MARKER_START}\n{body}{MARKER_END}\n"
     if MARKER_START in existing and MARKER_END in existing:
         head = existing.split(MARKER_START, 1)[0]
-        tail = existing.split(MARKER_END, 1)[1]
+        tail = _strip_stale_protocol_duplicate(existing.split(MARKER_END, 1)[1])
         # head = frontmatter + any operator content before the block.
         operator_prefix, _ = _split_frontmatter(head)
         return frontmatter + operator_prefix + managed_body + tail
