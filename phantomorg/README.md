@@ -263,9 +263,10 @@ dist/
 │   ├── tools.md           # the actor's tool list (email, drive, calendar)
 │   ├── MEMORY.md          # created once, then never regenerated
 │   ├── phantomchat.json   # the actor's npub for the PhantomChat channel
+│   ├── norms.json         # scaffold norms — one plain-text line per norm
 │   ├── .phantomorg.yaml # provenance — which org/role generated this persona
 │   ├── memory/            # commitments, decisions, people, lessons scaffolds
-│   └── kb/                # Home.md + norms + templates (decision, runbook, …)
+│   └── kb/                # Home.md + procedures + templates (decision, runbook, …)
 └── dana/
     └── …                  # same tree, built from project_lead instead
 ```
@@ -279,6 +280,15 @@ Then ship it to Phantombot's personas directory:
 po deploy --from ./dist --target ~/.local/share/phantombot/personas/
 # summary printed, then [y/N] before anything is written
 ```
+
+**Norms are filed as drawer rows, not a markdown file.** On phantombot
+≥ 1.1.282 the five memory drawers live as rows in `memory.sqlite`
+(`drawer_entries`), ranked by weight + exponential decay — `memory/norms.md`
+is a deprecated read path. So `po deploy` files each line of the compiled
+`norms.json` as a row via `phantombot memory drawers --kind norms --file
+"<line>" --persona <id>` (requires the phantombot binary ≥ 1.1.282 on the
+target host; `--no-file-norms` skips it, `--phantombot-bin` points at a
+non-default binary).
 
 The generated files are **block-based**: everything PhantomOrg owns lives
 inside `ORG:BEGIN … ORG:END` markers. Any notes you add outside those

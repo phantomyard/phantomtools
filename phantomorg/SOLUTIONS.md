@@ -27,10 +27,12 @@ Implemented review hardening in the supplied project.
 - **Principal-only trust**: `allowed_npubs` holds only the explicit
   `principal_npubs` (empty by default, fail-closed). `human_npubs`, the bridge
   and relays are delivery endpoints, never trusted.
-- **memory/norms.md is seed-only**: the drawer belongs to the
-  capture/heartbeat/nightly pipeline; the compiler seeds it once (a pointer)
-  and never overwrites it. The communication norm lives in the KB as an
-  OKF-frontmatter procedure.
+- **Norms are filed as drawer rows, not a markdown file**: since
+  phantombot ≥ 1.1.282 the drawers are rows in `memory.sqlite` and
+  `memory/norms.md` is a deprecated read path. PhantomOrg emits `norms.json`
+  (one plain-text line per scaffold norm) and `po deploy` files each line as a
+  row via `phantombot memory drawers --file`. The full communication norm
+  lives in the KB as an OKF-frontmatter procedure.
 - `phantomchat.json` is seeded once and never overwritten (the allowlist is
   runtime state).
 - Collision-safe data-file backup names (UUID suffix, no timestamp clobber).

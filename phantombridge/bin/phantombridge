@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+#
+# phantombridge — launcher for the PhantomBridge Jitsi↔Nostr bridge.
+#
+# Resolves the bridge entry point (bridge.js) relative to this symlink so the
+# command works from anywhere, whether installed (bin/ symlinked into PATH by
+# install.sh) or run straight from the checkout.
+#
+# Usage:
+#   phantombridge                # run with ./config.json (or $PHANTOMBRIDGE_CONFIG)
+#   phantombridge /path/to/config.json
+#   phantombridge --version      # print version and exit
+#   phantombridge --help         # this help
+#
+# The bridge is a long-running daemon: it joins Jitsi XMPP rooms and mirrors
+# them onto Nostr (NIP-17 gift-wraps), routing agent DMs both ways. It prints
+# logs to stdout/stderr and stays in the foreground; run it under systemd or
+# your favourite process supervisor.
+set -euo pipefail
+
+# Resolve the real directory of this script even when called through a symlink
+# in PATH (that's how install.sh wires it up: bin/phantombridge -> ~/.local/bin).
+resolve() {
+    local target="$1"
+    while [[ -L "$target" ]]; do
+        local dir; dir="$(cd "$(dirname "$target")" && pwd)"
+        target="$(readlink "$target")"
+        [[ "$target" != /* ]] && target="$dir/$target"
+    done
+    printf '%s' "$target"
+}
+
+SELF="$(resolve "${BASH_SOURCE[0]}")"
+BRIDGE_DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
+BRIDGE_JS="$BRIDGE_DIR/bridge.js"
+
+need() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "phantombridge: $1 not found in PATH (required)" >&2
+        exit 1
+    }
+}
+
+case "${1:-}" in
+    --version|-v)
+        grep -m1 '"version"' "$BRIDGE_DIR/package.json" \
+            | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'
+        exit 0
+        ;;
+    --help|-h)
+        sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0
+        ;;
+esac
+
+need node
+
+# Resolve deps. When installed via install.sh the checkout is the repo itself,
+# so node_modules must exist (npm install). When run from the checkout the
+# node_modules present at the checkout root are used.
+if [[ ! -d "$BRIDGE_DIR/node_modules" ]]; then
+    echo "phantombridge: dependencies not installed — run: (cd $BRIDGE_DIR && npm install)" >&2
+    exit 1
+fi
+
+exec node "$BRIDGE_JS" "$@"

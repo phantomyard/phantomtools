@@ -1,0 +1,29 @@
+{
+  "name": "phantombridge",
+  "version": "1.8.0",
+  "description": "Optional Jitsi↔Nostr and Nostr↔Nostr bridge for phantombot. Hardened for fail-closed org routing, authenticated local control, private secrets, and untrusted room relaying.",
+  "main": "bridge.js",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "test": "node test-antiloop.js && node test-audit-hardening.js && node test-audit-m01-blocker2-watermark-gate.js && node test-audit-m01-permissions-gate.js && node test-audit-m04-atomic-config.js && node test-audit-m05-recordings-auth.js && node test-audit-unauthorized-cursor.js && node test-audit10-watermark-recovery.js && node test-audit11-processwatermark-fed.js && node test-audit12-rescan-progress-rounded.js && node test-audit13-delivery-size-counter.js && node test-audit16-dropped-createdat-byid.js && node test-audit2-delivery-dropped.js && node test-audit4-delivered-watermark.js && node test-audit6-delivery-rescan.js && node test-audit7-delivery-noloss.js && node test-audit8-rescan-backoff.js && node test-audit9-rescan-progress.js && node test-backpressure-audit-alto2.js && node test-backpressure-recovery.js && node test-crash-e2e-audit2.js && node test-giftwrap-adversarial.js && node test-giftwrap-audit-alto1.js && node test-giftwrap-fix.js && node test-loadstate-audit-low9.js && node test-org-routing.js && node test-pause-persist.js && node test-pause.js && node test-persist-audit-alto3.js && node test-rejected-audit-low8.js && node test-route-rejected-finalize.js && node test-routing.js && node test-secrets.js && node test-mcp-auth.js"
+  },
+  "keywords": [
+    "nostr",
+    "jitsi",
+    "xmpp",
+    "phantombot",
+    "bridge",
+    "gift-wrap"
+  ],
+  "author": "Example Org / salvaalba-dev",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@xmpp/client": "^0.14.0",
+    "js-yaml": "^5.2.3",
+    "nostr-tools": "^2.24.1",
+    "ws": "^8.21.3"
+  }
+}

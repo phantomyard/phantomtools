@@ -1,0 +1,28 @@
+# Secrets — NEVER commit
+config.json
+config.*.local.json
+testbridge-pw.txt
+*.secret
+secrets/
+.env
+
+# Dependencies
+node_modules/
+
+# Rescue history (contains config.json.bak with secrets)
+history/
+
+# Hardening/diagnostic artifacts
+refs/*.pcap
+
+# Logs and temp files
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+
+# Bridge temporary state (test/runtime) — do not commit
+.bridge-state.json
+.bridge-pause.json
+.test-tmp*/
