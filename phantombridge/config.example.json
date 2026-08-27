@@ -1,0 +1,84 @@
+{
+  "_comment": "Copy this to config.json and fill it in. config.json is NOT versioned. Secrets are REFERENCES, never values: \"vault:NAME\" (resolved at startup via `phantombot vault get NAME`) or \"env:VAR\" (operator-injected environment). Store them once with `phantombot vault set NAME value`.",
+  "mode": "both",
+  "paused": {
+    "jitsi": false,
+    "nostr": false
+  },
+  "stateFile": "./.bridge-state.json",
+  "antiloop": {
+    "_comment": "maxHops/expireMs must match communication.max_hops/ttl_hours in the compiled org.yaml (norma v1.3); /status exposes them to detect drift. The envelope marker is a protocol CONSTANT: [env] (not configurable). hashWindowMs 1h and pairHourMax 10/h (F3-01): defend against SLOW loops (1 msg/15-30min) that evade the per-minute rate and the short dedup window.",
+    "maxHops": 3,
+    "expireMs": 21600000,
+    "hashWindowMs": 3600000,
+    "hashMax": 200,
+    "fuzzyThreshold": 0.85,
+    "pairWindowMs": 60000,
+    "pairMax": 10,
+    "pairHourWindowMs": 3600000,
+    "pairHourMax": 10,
+    "reqWindowMs": 600000,
+    "reqMax": 8,
+    "requestMax": 500
+  },
+  "nick": "secretario",
+  "roomSuffix": "@conference.meet.example.com",
+  "startRooms": [],
+  "httpPort": 8090,
+  "xmpp": {
+    "service": "xmpps://127.0.0.1:5223",
+    "domain": "auth.meet.example.com",
+    "username": "bridge",
+    "focus": "focus.meet.example.com",
+    "password": "vault:bridge-xmpp-password"
+  },
+  "nostr": {
+    "relay": "ws://relay.example.com:7777",
+    "nsec": "vault:bridge-nsec",
+    "relayNsec": "vault:bridge-relay-nsec"
+  },
+  "agents": {
+    "bob": "HEX_PUBKEY_64",
+    "alice": "HEX_PUBKEY_64",
+    "carol": "HEX_PUBKEY_64",
+    "dave": "HEX_PUBKEY_64"
+  },
+  "permissions": {
+    "full": [
+      "bob",
+      "alice",
+      "carol"
+    ],
+    "fullRoles": [
+      "ceo",
+      "chief_of_staff",
+      "cfo"
+    ]
+  },
+  "routing": {
+    "permissions": {
+      "carol": [
+        "dave",
+        "alice",
+        "bob"
+      ],
+      "dave": [
+        "carol"
+      ]
+    },
+    "default": "deny"
+  },
+  "downloadBase": "https://meet.example.com",
+  "downloadSecretFile": "/opt/recordings-serve/.secret",
+  "downloadExpiryHours": 24,
+  "roomAgents": {
+    "mia": [
+      "alice"
+    ]
+  },
+  "roomTimeouts": {
+    "mia": 20
+  },
+  "orgFile": "./org.yaml",
+  "httpAdminToken": "vault:bridge-admin-token"
+}
