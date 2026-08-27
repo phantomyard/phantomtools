@@ -37,6 +37,19 @@ def test_doc_mac_binds_content():
     assert m1 != m2
 
 
+def test_doc_version_mac_binds_predecessor():
+    parent = identity.root_mac("org", "npubX", "docs")
+    v1 = identity.doc_version_mac(parent, None, "a.md", b"one")
+    v2 = identity.doc_version_mac(parent, v1, "a.md", b"two")
+    assert v1 != v2
+    # The first version is backward-compatible with node_mac(parent, component).
+    assert v1 == identity.node_mac(parent, identity.component_for_doc("a.md", b"one"))
+    # Same content but a different predecessor -> a distinct identity (rollback).
+    restored = identity.doc_version_mac(parent, v2, "a.md", b"one")
+    assert restored != v1
+    assert restored != v2
+
+
 def test_self_describing_forms():
     mac = identity.root_mac("org", "npubX", "docs")
     assert identity.full_id(mac) == f"sha2-256-256:{mac}"

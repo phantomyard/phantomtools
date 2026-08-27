@@ -75,12 +75,19 @@ node MAC   = H( parent_MAC || component )      # inherit parent + append own
 
 component(folder) = slug                       # folders are structural
 component(doc)    = slug || H(content)         # docs bind name + content
+
+# versioned docs chain off their predecessor, not the tree parent
+v1 = H( parent_MAC || slug || H(content) )     # first version: tree parent
+vN = H( v_{N-1} || slug || H(content) )        # later versions: predecessor
 ```
 
 Properties this provides:
 
 - **Lineage embedded** — a node's MAC encodes its full path (chain of parents).
   To locate a node you walk the tree; to verify it you recompute from the root.
+- **Version history chained** — a document version's MAC binds its predecessor,
+  so the version history is a second hash chain; tampering with `previous` or
+  rolling back to older content both produce a distinct, recomputable identity.
 - **Tamper cascade** — altering a parent (rename / move / corruption)
   invalidates the MACs of all its descendants automatically. Fail-closed by
   construction.
