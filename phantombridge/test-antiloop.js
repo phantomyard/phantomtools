@@ -417,11 +417,11 @@ t('envelope: envelope rid feeds the short-circuit', () => {
   const rid = 'example-org-20250101-0301';
   // Same rid inside the envelope, distinct edges (star), trace without
   // prior edges (only the origin) so the count is what cuts.
-  antiLoopCheck('carol', 'dave', '[env] {"rid":"' + rid + '","hops":1,"trace":["carol"]}\n1');
-  antiLoopCheck('carol', 'alice', '[env] {"rid":"' + rid + '","hops":1,"trace":["carol"]}\n2');
-  antiLoopCheck('carol', 'bob', '[env] {"rid":"' + rid + '","hops":1,"trace":["carol"]}\n3');
-  antiLoopCheck('dave', 'carol', '[env] {"rid":"' + rid + '","hops":1,"trace":["dave"]}\n4');
-  const r = antiLoopCheck('dave', 'alice', '[env] {"rid":"' + rid + '","hops":1,"trace":["dave"]}\n5');
+  antiLoopCheck('carol', 'dave', signEnvelope({rid, hops: 1, trace: ['carol']}, '1'));
+  antiLoopCheck('carol', 'alice', signEnvelope({rid, hops: 1, trace: ['carol']}, '2'));
+  antiLoopCheck('carol', 'bob', signEnvelope({rid, hops: 1, trace: ['carol']}, '3'));
+  antiLoopCheck('dave', 'carol', signEnvelope({rid, hops: 1, trace: ['dave']}, '4'));
+  const r = antiLoopCheck('dave', 'alice', signEnvelope({rid, hops: 1, trace: ['dave']}, '5'));
   assert.ok(r && r.ok === false && r.reason === 'request', 'expected request, got: ' + JSON.stringify(r));
 });
 
@@ -471,7 +471,7 @@ t('F2-04: envelope rid wins; free text does NOT pollute the counter', () => {
   const envRid = 'example-org-20250101-0501';
   // Text mentioning another rid (room-...) but the envelope says envRid:
   // the counter must track envRid, NOT the rid in the text.
-  const text = '[env] {"rid":"' + envRid + '","hops":1,"trace":["carol"]}\nusa room-20250101-0007 por favor';
+  const text = signEnvelope({rid: envRid, hops: 1, trace: ['carol']}, 'usa room-20250101-0007 por favor');
   const r = antiLoopCheck('carol', 'dave', text);
   assert.strictEqual(r.ok, true, 'must not be dropped');
   assert.ok(ANTILOOP.requests.has(envRid), 'must track the envelope rid');
@@ -488,7 +488,7 @@ t('F2-04: without envelope, free text is used as best-effort fallback', () => {
 
 t('F2-04: extractRid does not touch the envelope rid (env.rid authoritative)', () => {
   reset();
-  const parsed = parseEnvelope('[env] {"rid":"example-org-20250101-0601","hops":1,"trace":["carol"]}\nREQUEST');
+  const parsed = parseEnvelope(signEnvelope({rid: 'example-org-20250101-0601', hops: 1, trace: ['carol']}, 'REQUEST'));
   assert.strictEqual(resolveRid(parsed, '[env] {"rid":"x-20250101-9999"}\nREQUEST'), 'example-org-20250101-0601', 'env.rid wins over the text');
 });
 
@@ -499,11 +499,11 @@ t('F2-08: requestMax evicts the LRU entry (by last)', () => {
   ANTILOOP.pairMax = 1000;
   ANTILOOP.requestMax = 3;
   const t0 = Date.now();
-  antiLoopCheck('carol', 'dave', '[env] {"rid":"example-org-20250101-0701","hops":1,"trace":["carol"]}\nA');
-  antiLoopCheck('carol', 'alice', '[env] {"rid":"example-org-20250101-0702","hops":1,"trace":["carol"]}\nB');
-  antiLoopCheck('carol', 'bob', '[env] {"rid":"example-org-20250101-0703","hops":1,"trace":["carol"]}\nC');
+  antiLoopCheck('carol', 'dave', signEnvelope({rid: 'example-org-20250101-0701', hops: 1, trace: ['carol']}, 'A'));
+  antiLoopCheck('carol', 'alice', signEnvelope({rid: 'example-org-20250101-0702', hops: 1, trace: ['carol']}, 'B'));
+  antiLoopCheck('carol', 'bob', signEnvelope({rid: 'example-org-20250101-0703', hops: 1, trace: ['carol']}, 'C'));
   // Fourth distinct entry -> the map must stay at 3 (evicts the oldest).
-  antiLoopCheck('carol', 'alice', '[env] {"rid":"example-org-20250101-0704","hops":1,"trace":["carol"]}\nD');
+  antiLoopCheck('carol', 'alice', signEnvelope({rid: 'example-org-20250101-0704', hops: 1, trace: ['carol']}, 'D'));
   assert.strictEqual(ANTILOOP.requests.size, 3, 'requestMax must bound the map');
   assert.ok(!ANTILOOP.requests.has('example-org-20250101-0701'), 'must evict the oldest entry');
   void t0;
@@ -530,7 +530,7 @@ t('F2-10: antiLoopRollback compensates consumed hash, pair and rid', () => {
   reset();
   ANTILOOP.pairMax = 3;
   const rid = 'example-org-20250101-0901';
-  const text = '[env] {"rid":"' + rid + '","hops":1,"trace":["carol"]}\nREQUEST rollback';
+  const text = signEnvelope({rid, hops: 1, trace: ['carol']}, 'REQUEST rollback');
   const beforeHashes = ANTILOOP.hashes.size;
   const beforePairs = ANTILOOP.pairs.size;
   const beforeReqs = ANTILOOP.requests.size;
@@ -597,8 +597,8 @@ t('F2-R02: two concurrent admissions of the same RID (distinct edges) — rollin
   reset();
   ANTILOOP.pairMax = 1000;
   const rid = 'example-org-20250101-1101';
-  const a1 = antiLoopCheck('carol', 'dave', '[env] {"rid":"' + rid + '","hops":1,"trace":["carol"]}\nA');
-  const a2 = antiLoopCheck('dave', 'alice', '[env] {"rid":"' + rid + '","hops":1,"trace":["dave"]}\nB');
+  const a1 = antiLoopCheck('carol', 'dave', signEnvelope({rid, hops: 1, trace: ['carol']}, 'A'));
+  const a2 = antiLoopCheck('dave', 'alice', signEnvelope({rid, hops: 1, trace: ['dave']}, 'B'));
   assert.strictEqual(a1.ok && a2.ok, true, 'both admitted');
   const r = ANTILOOP.requests.get(rid);
   assert.strictEqual(r.count, 2, 'count=2 (two admissions)');
@@ -616,11 +616,11 @@ t('F2-R02: same RID and SAME edge — the check cuts by cycle (the Map case is d
   ANTILOOP.pairMax = 1000;
   const rid = 'example-org-20250101-1102';
   // Two A->B messages with the SAME rid (different text -> dedup does not cut):
-  const a1 = antiLoopCheck('carol', 'dave', '[env] {"rid":"' + rid + '","hops":1,"trace":["carol"]}\nX');
+  const a1 = antiLoopCheck('carol', 'dave', signEnvelope({rid, hops: 1, trace: ['carol']}, 'X'));
   assert.strictEqual(a1.ok, true, 'first admission OK');
   assert.strictEqual(ANTILOOP.requests.get(rid).edges.get('carol|dave'), 1, 'edge with 1 occurrence (Map)');
   // The 2nd with the SAME edge cuts by cycle BEFORE the COMMIT:
-  const r = antiLoopCheck('carol', 'dave', '[env] {"rid":"' + rid + '","hops":1,"trace":["carol"]}\nY');
+  const r = antiLoopCheck('carol', 'dave', signEnvelope({rid, hops: 1, trace: ['carol']}, 'Y'));
   assert.strictEqual(r.ok, false, 'second with same edge is dropped');
   assert.strictEqual(r.reason, 'cycle', 'reason=cycle');
   assert.strictEqual(ANTILOOP.requests.get(rid).count, 1, 'count intact (1 real admission)');
@@ -635,13 +635,13 @@ t('F2-R02: eviction + re-creation of the same RID — the old admission rollback
   ANTILOOP.requestMax = 2;
   const rid = 'example-org-20250101-1103';
   // Admission 1 (RID X) + filler to evict:
-  const a1 = antiLoopCheck('carol', 'dave', '[env] {"rid":"' + rid + '","hops":1,"trace":["carol"]}\nA');
-  antiLoopCheck('carol', 'alice', '[env] {"rid":"example-org-20250101-1199","hops":1,"trace":["carol"]}\nB');
+  const a1 = antiLoopCheck('carol', 'dave', signEnvelope({rid, hops: 1, trace: ['carol']}, 'A'));
+  antiLoopCheck('carol', 'alice', signEnvelope({rid: 'example-org-20250101-1199', hops: 1, trace: ['carol']}, 'B'));
   // Third distinct entry evicts the oldest (RID X left the map):
-  antiLoopCheck('carol', 'bob', '[env] {"rid":"example-org-20250101-1198","hops":1,"trace":["carol"]}\nC');
+  antiLoopCheck('carol', 'bob', signEnvelope({rid: 'example-org-20250101-1198', hops: 1, trace: ['carol']}, 'C'));
   assert.ok(!ANTILOOP.requests.has(rid), 'RID X evicted');
   // The same RID reappears (new instance):
-  const a2 = antiLoopCheck('carol', 'dave', '[env] {"rid":"' + rid + '","hops":1,"trace":["carol"]}\nD');
+  const a2 = antiLoopCheck('carol', 'dave', signEnvelope({rid, hops: 1, trace: ['carol']}, 'D'));
   assert.ok(ANTILOOP.requests.has(rid), 'RID X re-registered (new entry)');
   // Rolling back the OLD admission (a1): must not touch the new entry.
   antiLoopRollback(a1.admission);
