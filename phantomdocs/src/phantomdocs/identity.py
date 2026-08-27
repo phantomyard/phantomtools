@@ -83,6 +83,27 @@ def node_mac(parent_mac: str, component: bytes) -> str:
     return _sha256(bytes.fromhex(parent_mac) + component).hex()
 
 
+def doc_version_mac(
+    parent_mac: str, previous_mac: str | None, slug: str, content: bytes
+) -> str:
+    """The identity of a document version (issue #44).
+
+    Version identity binds the predecessor, so the version history is
+    cryptographically chained — not just the tree:
+
+        v1 = H(parentMac || slug || H(content))
+        vN = H(v_{N-1} || slug || H(content))    (N > 1)
+
+    ``parent_mac`` is the *tree* parent (folder or root) and is used only for
+    the first version; later versions chain off their predecessor instead.
+    This makes a rollback to older content yield a distinct identity (a
+    different predecessor) and makes tampering with ``previous`` detectable
+    by MAC recomputation.
+    """
+    base = previous_mac if previous_mac else parent_mac
+    return node_mac(base, component_for_doc(slug, content))
+
+
 def full_id(mac: str) -> str:
     """Self-describing full form: sha2-256-256:<64 hex>."""
     return f"sha2-256-256:{mac}"
