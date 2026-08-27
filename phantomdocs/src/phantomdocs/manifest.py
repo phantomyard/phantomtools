@@ -251,15 +251,19 @@ def validate(data: dict[str, Any]) -> list[str]:
         ):
             errors.append(f"{prefix}: previous {previous!r} is unknown")
 
-    # --- duplicate versions: (urn, contentHash) must be unique ---
-    seen_versions: dict[tuple[str, str], int] = {}
+    # --- duplicate versions: (urn, contentHash, previous) must be unique ---
+    # The predecessor is part of the key (issue #44/#55): a rollback re-introduces
+    # an earlier (urn, contentHash) pair chained off a *new* predecessor, which is
+    # a distinct version — only the same content appended twice off the same
+    # predecessor is a genuine duplicate.
+    seen_versions: dict[tuple[str, str, str | None], int] = {}
     for index, node in enumerate(nodes):
         if not isinstance(node, dict) or node.get("kind") != "doc":
             continue
         ch = node.get("contentHash")
         if not isinstance(ch, str) or not is_valid_hex64(ch):
             continue
-        key = (node.get("urn", ""), ch)
+        key = (node.get("urn", ""), ch, node.get("previous"))
         if key in seen_versions:
             errors.append(
                 f"nodes[{index}]: duplicate version of {key[0]!r} "
