@@ -19,8 +19,10 @@ ORG_YAML = textwrap.dedent("""\
         category-1: { label: Public }
         category-2: { label: Confidential }
         category-3: { label: "Sensitive financial" }
-        category-4: { label: "Sensitive project (umbrella)" }
-        category-4-almaponia: { label: "Sensitive - ALMAPONIA" }
+        category-4: { label: "Sensitive project (umbrella)", scope: project }
+        category-4-almaponia: { label: "Sensitive - ALMAPONIA", scope: project, owner: almaponia }
+        category-4-proyecto2: { label: "Sensitive - Proyecto2", scope: project, owner: proyecto2 }
+        category-4-almaponia-finance: { label: "Sensitive - ALMAPONIA finance", scope: project, owner: almaponia }
     roles:
       - id: cfo
         access_level: level-2
@@ -96,6 +98,22 @@ def test_can_read_hierarchical_umbrella(tmp_path):
     assert can_read(org, "alma", 3) is False
     # roberto has category-3 but NOT category-4 -> cannot read project-sensitive
     assert can_read(org, "roberto", "category-4-almaponia") is False
+
+
+def test_can_read_undeclared_category_fails_closed(tmp_path):
+    """An undeclared category has no place in the declared hierarchy, so it is
+    denied even for an umbrella holder (issue #45: explicit relations)."""
+    org = _org(tmp_path)
+    # pepa holds category-4 (umbrella), but "category-4-typo" is not declared.
+    assert can_read(org, "pepa", "category-4-typo") is False
+
+
+def test_can_read_leaf_grants_own_subcategory(tmp_path):
+    """A project-specific leaf grants its own declared sub-categories (same
+    branch), but a peer project's leaf does not."""
+    org = _org(tmp_path)
+    assert can_read(org, "alma", "category-4-almaponia-finance") is True
+    assert can_read(org, "alma", "category-4-proyecto2") is False
 
 
 def test_can_write_requires_owners(tmp_path):

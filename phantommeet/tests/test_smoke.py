@@ -63,8 +63,8 @@ def test_derive_then_validate_smoke_org(tmp_path: Path) -> None:
     proc = run_cli("validate", "--manifest", str(derived))
     assert proc.returncode == 0, proc.stderr
     assert "OK" in proc.stdout
-    # derive rules map ceo/cfo -> responsible, project_lead -> lead (scoped),
-    # training_lead -> support (restricted)
+    # derive rules map ceo/cfo -> responsible, project_lead -> lead,
+    # training_lead -> support (role-based, no room-name scope)
     assert "maria=responsible" in proc.stdout
     assert "pedro=lead" in proc.stdout
     assert "lucia=support" in proc.stdout
@@ -73,12 +73,8 @@ def test_derive_then_validate_smoke_org(tmp_path: Path) -> None:
     # -> ceo -> maria).
     manifest = yaml.safe_load(derived.read_text(encoding="utf-8"))
     assert manifest["escalation"] == {"lucia": "maria", "pedro": "maria"}
-    # permissions: three tiers — full, scoped (prefix-scoped leads), restricted.
-    assert manifest["permissions"] == {
-        "full": ["maria", "juan"],
-        "scoped": {"example-project": ["pedro"]},
-        "restricted": {"formacion": ["lucia"]},
-    }
+    # permissions: role-based, no room-name scope — only `full` (responsible).
+    assert manifest["permissions"] == {"full": ["maria", "juan"]}
     assert manifest["roles"] == {
         "maria": "responsible",
         "juan": "responsible",
@@ -146,9 +142,9 @@ def test_meetings_md_renders_explicit_escalation_for_support(tmp_path: Path) -> 
     assert "60` min" in meetings
 
 
-def test_meetings_md_renders_scoped_responsible_for_lead(tmp_path: Path) -> None:
-    """Lead personas render as scoped-responsible in Meetings.md: they
-    schedule within their scope and escalate only out-of-scope requests."""
+def test_meetings_md_renders_project_responsible_for_lead(tmp_path: Path) -> None:
+    """Lead personas render as project-responsible in Meetings.md: they
+    schedule their project's meetings and escalate only out-of-project requests."""
     derived = tmp_path / "derived.yaml"
     proc = run_cli(
         "derive-manifest",
@@ -179,27 +175,24 @@ def test_meetings_md_renders_scoped_responsible_for_lead(tmp_path: Path) -> None
     meetings = (personas / "pedro" / "kb" / "procedures" / "Meetings.md").read_text(
         encoding="utf-8"
     )
-    # Scoped responsible: can schedule within scope.
-    assert (
-        "Eres **responsable de las reuniones online dentro de tu ámbito**" in meetings
-    )
-    assert "**'example-project-*'**: las agendas con `meeting-invite.sh`" in meetings
-    # Out-of-scope escalates to the concrete persona.
-    assert "Las reuniones fuera de tu ámbito escalan a **maria**." in meetings
+    # Lead: schedules her project's meetings (no room-name scope).
+    assert "Eres **responsable de las reuniones online de tu proyecto**" in meetings
+    assert "example-project-*" not in meetings
+    # Out-of-project escalates to the concrete persona.
+    assert "Las reuniones fuera de tu proyecto escalan a **maria**." in meetings
     # Lead must NOT get the support "No agendes" rule.
     assert "**No agendes reuniones online**" not in meetings
     # Lead role label.
     assert "Lead de Proyecto" in meetings
-    # Canonical escalation section with @-mention format (out-of-scope only).
+    # Canonical escalation section with @-mention format (out-of-project only).
     assert "## Escalado de solicitudes de reunión" in meetings
     assert "`@maria <solicitud con los parámetros exactos recibidos>`" in meetings
-    assert (
-        "Eres responsable de las reuniones online **dentro de tu ámbito**" in meetings
-    )
-    # Destination is per-scope: the lead answers with their project's folder,
+    assert "Eres responsable de las reuniones online **de tu proyecto**" in meetings
+    # Destination is per-project: the lead answers with their project's folder,
     # not the org-wide recordings folder.
     assert (
-        "`example-meetings` (la carpeta de reuniones de tu ámbito en Drive)" in meetings
+        "`example-meetings` (la carpeta de reuniones de tu proyecto en Drive)"
+        in meetings
     )
     assert "`Grabaciones`" not in meetings
     # Custody: the lead uploads her scope's recordings; org custodian is backup.
@@ -663,6 +656,30 @@ def test_upsert_kb_preserves_prefix_and_suffix() -> None:
     assert "old body" not in out
     # frontmatter is still first
     assert out.startswith(frontmatter)
+
+
+def test_upsert_kb_strips_stale_protocol_duplicate() -> None:
+    """A stale duplicate of the managed protocol in the suffix (a previous
+    render orphaned outside the markers) is stripped; a trailing operator note
+    is kept."""
+    frontmatter = "---\ntype: procedure\ntitle: T\n---\n"
+    existing = (
+        frontmatter
+        + "<!-- phantommeet:start -->\nmanaged body\n<!-- phantommeet:end -->\n"
+        + "# aquaponics-united — Protocolo de Reuniones\n"
+        + "## Rol en reuniones\n- stale line\n"
+        + "## Estado de validación\n- nota del operador\n"
+    )
+    out = _upsert_kb(existing, frontmatter, "managed body\n")
+    # stale duplicate gone
+    assert "# aquaponics-united — Protocolo de Reuniones" not in out
+    assert "## Rol en reuniones" not in out
+    assert "stale line" not in out
+    # operator note kept
+    assert "## Estado de validación" in out
+    assert "nota del operador" in out
+    # managed body present
+    assert "managed body" in out
 
 
 def test_apply_refuses_tool_path_escape(tmp_path: Path) -> None:
@@ -1198,3 +1215,101 @@ def test_manifest_render_failure_preserves_manifest(
     assert manifest_path.read_bytes() == before
     # Nothing else was committed either: the render aborts before Phase 2.
     assert not (personas / "maria" / "kb" / "procedures" / "Meetings.md").exists()
+
+
+def test_meeting_join_tool_renders_persona_identity() -> None:
+    """meeting-join.js renders per persona: the nick is the persona's own id
+    (never read from an invitation), the bridge npub comes from the manifest,
+    and no Jinja delimiters leak into the output."""
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    assert "npub" in manifest["bridge"]
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        ctx = _persona_context(pid, manifest)
+        rendered = _tool_env("es").get_template("meeting-join.js.j2").render(**ctx)
+        # persona identity injected as a JS string literal
+        assert f'PERSONA = "{pid}"' in rendered
+        # bridge npub rendered from the manifest
+        assert f'BRIDGE_NPUB = "{manifest["bridge"]["npub"]}"' in rendered
+        # no Jinja leftovers
+        assert "{{" not in rendered and "{%" not in rendered
+        # the join nick is always derived from the PERSONA constant
+        assert "--nick ' + PERSONA" in rendered
+        # never hardcodes another persona's nick
+        for other in ("maria", "juan", "pedro", "lucia"):
+            if other != pid:
+                assert f"--nick {other}" not in rendered
+
+
+def test_meeting_join_tool_deployed_to_all_personas(tmp_path: Path) -> None:
+    """pm apply installs meeting-join.js into every persona (not gated by
+    invite.roles), with the executable bit set."""
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8"
+    )
+    personas = tmp_path / "personas"
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        (personas / pid).mkdir(parents=True, exist_ok=True)
+
+    proc = run_cli(
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--target",
+        str(personas),
+        "--invite-roles",
+        "maria",
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        tool = personas / pid / "tools" / "meeting-join.js"
+        assert tool.exists(), f"meeting-join.js missing for {pid}"
+        mode = tool.stat().st_mode & 0o777
+        assert mode == 0o755, f"meeting-join.js not executable for {pid}: {oct(mode)}"
+
+
+def test_sala_send_tool_renders_persona_identity() -> None:
+    """sala-send.js renders per persona: PERSONA + BRIDGE_NPUB from the
+    manifest, no Jinja delimiters leak, and the speak content is `[room] text`."""
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    assert "npub" in manifest["bridge"]
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        ctx = _persona_context(pid, manifest)
+        rendered = _tool_env("es").get_template("sala-send.js.j2").render(**ctx)
+        assert f'PERSONA = "{pid}"' in rendered
+        assert f'BRIDGE_NPUB = "{manifest["bridge"]["npub"]}"' in rendered
+        assert "{{" not in rendered and "{%" not in rendered
+        # speak content builder: `[room] text`
+        assert "normalizeRoom(room) + ' ' + text" in rendered
+
+
+def test_sala_send_tool_deployed_to_all_personas(tmp_path: Path) -> None:
+    """pm apply installs sala-send.js into every persona (not gated by
+    invite.roles), with the executable bit set."""
+    manifest = yaml.safe_load((EXAMPLES / "example-org.yaml").read_text())
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True), encoding="utf-8"
+    )
+    personas = tmp_path / "personas"
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        (personas / pid).mkdir(parents=True, exist_ok=True)
+
+    proc = run_cli(
+        "apply",
+        "--manifest",
+        str(manifest_path),
+        "--target",
+        str(personas),
+        "--invite-roles",
+        "maria",
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    for pid in ("maria", "juan", "pedro", "lucia"):
+        tool = personas / pid / "tools" / "sala-send.js"
+        assert tool.exists(), f"sala-send.js missing for {pid}"
+        mode = tool.stat().st_mode & 0o777
+        assert mode == 0o755, f"sala-send.js not executable for {pid}: {oct(mode)}"
