@@ -258,3 +258,30 @@ def test_gdrive_backend_roundtrip(tmp_path):
     r = _run(["verify", "--backend", "gdrive://", "--root", root], env=env)
     assert r.exit_code == 0, r.output
     assert "verified 1 node" in r.output
+
+
+def test_add_ref_missing_file_is_clean_error(tmp_path):
+    """`add --ref` on a missing file yields a clean CLI error, not a raw
+    traceback (issue #58)."""
+    root = str(tmp_path)
+    org = tmp_path / "org.yaml"
+    org.write_text(ORG_YAML, encoding="utf-8")
+    assert _run(["init", "--org", "demo", "--root", root]).exit_code == 0
+    r = _run(
+        [
+            "add",
+            "--ref",
+            f"file://{tmp_path}/missing.txt",
+            "--slug",
+            "x.txt",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--root",
+            root,
+        ]
+    )
+    assert r.exit_code != 0
+    assert "cannot read" in r.output
+    assert "Traceback" not in r.output

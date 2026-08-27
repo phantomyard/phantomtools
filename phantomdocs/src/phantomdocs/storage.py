@@ -142,9 +142,16 @@ class SshBackend:
     def put(self, content_hash: str, data: bytes) -> str:
         remote = self.remote_path(content_hash)
         parent = os.path.dirname(remote)
-        proc = _run_checked(
-            self._ssh_args() + [f"mkdir -p {parent} && cat > {remote}"], stdin=data
+        tmp = f"{remote}.tmp"
+        # Write to a temp file then rename atomically, and shell-quote the
+        # paths: a mid-transfer disconnect leaves no partial blob visible, and
+        # a `base` with spaces/special chars cannot break the write.
+        cmd = (
+            f"mkdir -p {_shell_quote(parent)} && "
+            f"cat > {_shell_quote(tmp)} && "
+            f"mv {_shell_quote(tmp)} {_shell_quote(remote)}"
         )
+        proc = _run_checked(self._ssh_args() + [cmd], stdin=data)
         if proc.returncode != 0:
             raise StorageError(self._err(proc, "ssh put failed"))
         return f"ssh://{self.target}:{self.port}{remote}"
@@ -338,8 +345,11 @@ def read_reference(uri: str, workspace_py: str | None = None) -> tuple[bytes, di
         return data, {"backend": "gdrive", "ref": file_id}
     if uri.startswith("file://"):
         path = uri[len("file://") :]
-        with open(path, "rb") as f:
-            data = f.read()
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError as exc:
+            raise StorageError(f"cannot read reference {path!r}: {exc}") from exc
         return data, {"backend": "file", "ref": path}
     if uri.startswith("ssh://"):
         parsed = urlparse(uri)
@@ -372,6 +382,9 @@ def read_reference(uri: str, workspace_py: str | None = None) -> tuple[bytes, di
         # the connection target and reconstruct an empty host.
         return proc.stdout, {"backend": "ssh", "ref": _ssh_canonical(parsed)}
     # bare local path
-    with open(uri, "rb") as f:
-        data = f.read()
+    try:
+        with open(uri, "rb") as f:
+            data = f.read()
+    except OSError as exc:
+        raise StorageError(f"cannot read reference {uri!r}: {exc}") from exc
     return data, {"backend": "file", "ref": uri}
