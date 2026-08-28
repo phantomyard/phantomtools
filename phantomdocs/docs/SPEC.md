@@ -505,6 +505,16 @@ persona's own files and consumes `org.yaml`.
 - Secrets never stored in the manifest; backends reuse the persona's existing
   credentials (SSH keys, OAuth2).
 - Audit log is append-only and hash-chained (`prev` = SHA-256 of the prior line).
+- **Crypto agility (decision 3):** the crypto-suite version (`cryptoVersion`,
+  v1 = BIP-340 Schnorr + SHA-256) is bound into every signed mutation envelope
+  and the sealed manifest header — authenticated state, not implementation
+  convention — so a future v2 can verify v1 while v1 refuses v2 (fail-closed).
+- **Confidentiality at rest (decision 4):** v1 provides integrity +
+  authenticity, **not** encryption-at-rest — blobs are stored as plaintext, so a
+  filesystem / backend reader can read document contents (though not alter them
+  undetected). Encryption-at-rest + key management is a **required phase-2
+  capability** (declared, not yet designed); until then confidentiality relies
+  on the storage layer's own encryption (disk, Drive, permissions).
 
 ## 15. Integration with PhantomOrg
 
@@ -521,7 +531,7 @@ persona's own files and consumes `org.yaml`.
   (fail-closed) + basic append-only audit + `pd update`.
 - **v0.2:** versioning + relationships + backup + queryable audit with retention.
 - **v2 (future):** multi-tenancy, folder Merkle aggregation, full local FTS5,
-  sync/replication.
+  sync/replication, encryption-at-rest + key management (decision 4).
 
 ## 17. Open questions
 
