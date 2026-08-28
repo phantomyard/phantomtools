@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Pre-push hook: run the CI-equivalent checks for the tools being pushed.
+# Wired via:  git config core.hooksPath .githooks   (see scripts/install-hooks.sh)
+# Skip deliberately with:  git push --no-verify
+set -u
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # New branch (no remote counterpart): remote_sha is all zeros.
+  # Anchor on origin/main so we check only the commits this branch adds,
+  # not the shared upstream history.
+  if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    if git rev-parse --verify -q origin/main >/dev/null 2>&1; then
+      range="origin/main..${local_sha}"
+    else
+      range="HEAD~10..HEAD"
+    fi
+  else
+    range="${remote_sha}..${local_sha}"
+  fi
+  echo "pre-push: comprobando $range (${local_ref##*/})"
+  if ! "$REPO_ROOT/scripts/prepush-check.sh" "$range"; then
+    echo "pre-push: checks fallaron — push abortado."
+    exit 1
+  fi
+done
+
+exit 0
