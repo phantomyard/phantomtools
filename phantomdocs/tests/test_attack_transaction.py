@@ -69,8 +69,18 @@ def test_audit_head_anchor_recorded(tmp_path):
         doc.write_text(f"content {i}", encoding="utf-8")
         assert (
             _run(
-                ["add", str(doc), "--slug", f"d{i}.txt", "--owners", "cfo",
-                 "--org-yaml", org, "--root", root]
+                [
+                    "add",
+                    str(doc),
+                    "--slug",
+                    f"d{i}.txt",
+                    "--owners",
+                    "cfo",
+                    "--org-yaml",
+                    org,
+                    "--root",
+                    root,
+                ]
             ).exit_code
             == 0
         )
@@ -92,8 +102,19 @@ def test_truncated_audit_tail_detected(tmp_path):
         doc = tmp_path / f"d{i}.txt"
         doc.write_text(f"c{i}", encoding="utf-8")
         assert (
-            _run(["add", str(doc), "--slug", f"d{i}.txt", "--owners", "cfo",
-                  "--org-yaml", org, "--root", root]
+            _run(
+                [
+                    "add",
+                    str(doc),
+                    "--slug",
+                    f"d{i}.txt",
+                    "--owners",
+                    "cfo",
+                    "--org-yaml",
+                    org,
+                    "--root",
+                    root,
+                ]
             ).exit_code
             == 0
         )
@@ -118,8 +139,19 @@ def test_audit_ahead_of_manifest_detected(tmp_path):
     doc = tmp_path / "a.txt"
     doc.write_text("data", encoding="utf-8")
     assert (
-        _run(["add", str(doc), "--slug", "a.txt", "--owners", "cfo",
-              "--org-yaml", org, "--root", root]
+        _run(
+            [
+                "add",
+                str(doc),
+                "--slug",
+                "a.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
         ).exit_code
         == 0
     )
@@ -166,9 +198,19 @@ def test_concurrent_adds_keep_audit_chain_intact(tmp_path):
         procs.append(
             subprocess.Popen(
                 [
-                    sys.executable, "-m", "phantomdocs.cli", "add",
-                    str(doc), "--slug", f"doc{i}.txt", "--owners", "cfo",
-                    "--org-yaml", str(org_p), "--root", root,
+                    sys.executable,
+                    "-m",
+                    "phantomdocs.cli",
+                    "add",
+                    str(doc),
+                    "--slug",
+                    f"doc{i}.txt",
+                    "--owners",
+                    "cfo",
+                    "--org-yaml",
+                    str(org_p),
+                    "--root",
+                    root,
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
