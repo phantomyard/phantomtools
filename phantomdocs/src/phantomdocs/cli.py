@@ -23,7 +23,9 @@ from .access import (
 )
 from .audit import append as audit_append
 from .audit import head as audit_head
+from .audit import max_seq as audit_max_seq
 from .audit import read as audit_read
+from .audit import sequence_issues as audit_sequence_issues
 from .audit import verify_chain as audit_verify_chain
 from .derive import derive_manifest as derive_from_org
 from .documents import DocumentError, DocumentService
@@ -717,6 +719,28 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
     for problem in audit_problems:
         failures += 1
         click.echo(f"FAIL audit: {problem}")
+
+    # Mutation-sequence contiguity (issue #73): the audit log is the
+    # authoritative record of every mutation (add/mkdir/tag/rollback); its
+    # ``seq`` must be exactly contiguous (init = 0, then 1, 2, ...). A gap,
+    # reset, or duplicate breaks the "exactly one valid successor relation"
+    # invariant.
+    for problem in audit_sequence_issues(root):
+        failures += 1
+        click.echo(f"FAIL audit: {problem}")
+
+    # headSeq must agree with the audit log's authoritative counter: a node
+    # whose seq/headSeq drifted from the audit log (with a valid signature)
+    # is a divergence the strictly-increasing node check alone cannot catch.
+    audit_max = audit_max_seq(root)
+    if audit_max is not None:
+        head_seq = manifest.get("manifest", {}).get("headSeq")
+        if head_seq is not None and int(head_seq) != audit_max:
+            failures += 1
+            click.echo(
+                f"FAIL audit: manifest.headSeq {head_seq} does not match "
+                f"audit max seq {audit_max}"
+            )
 
     # Audit head anchor (issue #74): the manifest records the expected audit
     # entry count and last-line hash. A crash between the audit append and the

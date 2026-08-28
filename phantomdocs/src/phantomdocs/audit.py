@@ -133,3 +133,70 @@ def verify_chain(root: str) -> list[str]:
             )
         previous_hash = _sha256(raw)
     return problems
+
+
+def entries(root: str) -> list[dict[str, Any]]:
+    """All audit entries, oldest first (missing/empty log -> [])."""
+    path = os.path.join(root, AUDIT_FILENAME)
+    if not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    out: list[dict[str, Any]] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def sequence_issues(root: str) -> list[str]:
+    """Mutation-sequence contiguity over the audit log (issue #73).
+
+    The audit log is the authoritative record of *every* mutation (add, mkdir,
+    tag, rollback), each with a monotonic ``seq`` (``init`` is ``seq=0``). The
+    invariant is "exactly one valid successor relation": entries carrying a
+    ``seq`` must be exactly contiguous — the first such entry anchors the
+    sequence and every later one must be exactly the previous + 1. Legacy
+    entries without ``seq`` are skipped without resetting the counter.
+    """
+    problems: list[str] = []
+    expected: int | None = None
+    for index, entry in enumerate(entries(root), 1):
+        seq = entry.get("seq")
+        if seq is None:
+            continue
+        if not isinstance(seq, int) or isinstance(seq, bool):
+            problems.append(f"audit line {index}: seq {seq!r} is not an integer")
+            continue
+        if expected is None:
+            expected = seq
+        elif seq != expected + 1:
+            problems.append(
+                f"audit line {index}: seq {seq!r} is not contiguous "
+                f"(expected {expected + 1!r})"
+            )
+        expected = seq
+    return problems
+
+
+def max_seq(root: str) -> int | None:
+    """The highest mutation ``seq`` in the audit log, or None if no entry has one.
+
+    This is the authoritative global mutation counter; ``manifest.headSeq`` must
+    agree with it (a node whose ``seq``/``headSeq`` drifted from the audit log
+    is a divergence the composed-tree check catches).
+    """
+    best: int | None = None
+    for entry in entries(root):
+        seq = entry.get("seq")
+        if (
+            isinstance(seq, int)
+            and not isinstance(seq, bool)
+            and (best is None or seq > best)
+        ):
+            best = seq
+    return best

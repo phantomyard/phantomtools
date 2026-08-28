@@ -19,6 +19,7 @@ must be resolved (or explicitly accepted as a policy decision) before the
 gate in the audit's GO/NO-GO section can clear.
 """
 
+import json
 import os
 import shutil
 import tempfile
@@ -377,16 +378,10 @@ def test_prevhead_wrong_seq_correct_detected(tmp_path):
     assert "prevHead" in r.output or "sequence" in r.output
 
 
-@pytest.mark.xfail(
-    reason=(
-        "KNOWN GAP: mutation_sequence_issues enforces strictly-increasing seq "
-        "but not *contiguity* — a gap (1 -> 3) is accepted. The audit's "
-        "invariant is 'exactly one valid successor relation between committed "
-        "states', which requires seq == prev_seq + 1."
-    ),
-    strict=False,
-)
-def test_seq_gap_detected(tmp_path):
+def test_seq_drift_from_audit_detected(tmp_path):
+    """A node whose ``seq`` (and the manifest ``headSeq``) drift ahead of the
+    authoritative audit log — a gap 1 -> 3 with a *valid* signature — is caught
+    because ``headSeq`` must agree with the audit log's max mutation seq."""
     ctx = _setup(tmp_path, n_docs=2, seal=False)
     data = _manifest(tmp_path)
     docs = _doc_nodes(data)
@@ -395,8 +390,27 @@ def test_seq_gap_detected(tmp_path):
     data["manifest"]["headSeq"] = 3
     _write_manifest(tmp_path, data)
     r = _verify(ctx)
-    # Desired: verify reports the gap. Currently it does not.
-    assert "seq" in r.output
+    assert r.exit_code != 0
+    assert "headSeq" in r.output or "audit" in r.output
+
+
+def test_audit_seq_gap_detected(tmp_path):
+    """A gap in the audit log's own ``seq`` field (0, 1, 4) is flagged as
+    non-contiguous by ``audit.sequence_issues``."""
+    from phantomdocs import audit
+
+    ctx = _setup(tmp_path, n_docs=2, seal=False)
+    audit_path = tmp_path / "audit.log"
+    lines = audit_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    # Only the tail entry is changed, so no downstream ``prev`` references it;
+    # this isolates the seq-contiguity check from the hash-chain check.
+    entry = json.loads(lines[-1])
+    entry["seq"] = 4  # gap: 0, 1, 4
+    lines[-1] = json.dumps(entry, sort_keys=True) + "\n"
+    audit_path.write_text("".join(lines), encoding="utf-8")
+
+    problems = audit.sequence_issues(ctx["root"])
+    assert any("contiguous" in p for p in problems)
 
 
 @pytest.mark.xfail(
