@@ -834,6 +834,17 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                     "FAIL seal: head advanced past the last seal "
                     "(mutations since `pd seal`)"
                 )
+    else:
+        # Fail-closed trust anchor (audit decision 2): a *sealed* namespace
+        # verified without --org-pubkey would silently skip the root + seal
+        # anchor, so the verification is refused rather than silently weaker.
+        m = manifest_header
+        if m.get("sealPubkey") is not None or m.get("signedRootMac") is not None:
+            failures += 1
+            click.echo(
+                "FAIL seal: namespace is sealed but --org-pubkey was not "
+                "supplied; refusing to skip the trust anchor"
+            )
 
     if failures:
         raise click.ClickException(f"{failures} node(s) failed verification")

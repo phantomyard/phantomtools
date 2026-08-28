@@ -232,6 +232,15 @@ external anchor sealed by the **org key**:
   sequence: a complete rollback of the namespace to an earlier head is
   detected even if the attacker re-seals.
 
+**Trust-anchor policy (decision 2):** `--org-pubkey` is **mandatory** for any
+*sealed* namespace — `pd verify` fails closed when a sealed manifest is
+verified without it, rather than silently skipping the root + seal anchor.
+`--expected-head-seq` is the *rollback* defense and is **required for
+high-assurance / audit verification** (where an out-of-band record of the
+current head exists); day-to-day verification may omit it, accepting that a
+whole-state rollback to an older internally-consistent sealed copy is then
+undetectable.
+
 ### 6.3 Single authoritative writer host (deployment boundary)
 
 PhantomDocs v1 supports **exactly one authoritative writer host per
