@@ -200,6 +200,48 @@ class DocumentService:
 
     # -- repository plumbing --
 
+    def _commit_transaction(
+        self,
+        repo: ManifestRepository,
+        *,
+        action: str,
+        urn: str,
+        mac: str,
+        ch: str | None,
+        sig: str | None = None,
+        sig_pubkey: str | None = None,
+        head_mac: str | None = None,
+    ) -> None:
+        """Commit one mutation as manifest + audit, under the caller's lock.
+
+        Ordering (issue #74): the audit entry is written *first*, then the
+        manifest is committed with the audit head anchor (``auditSeq`` +
+        ``auditHead``) and the monotonic mutation head (``headSeq`` +
+        ``headMac``). A crash between the two leaves the audit one entry
+        ahead of the manifest — a *detectable* state `verify` flags — instead
+        of a committed mutation with no matching audit entry (lost evidence).
+        """
+        head_seq = int(repo.data["manifest"].get("headSeq") or 0) + 1
+        audit_seq = int(repo.data["manifest"].get("auditSeq") or 0) + 1
+        line_hash = audit_append(
+            self.root,
+            self.actor_id,
+            action,
+            urn,
+            mac,
+            ch,
+            sig,
+            sig_pubkey,
+            seq=head_seq,
+        )
+        m = repo.data["manifest"]
+        m["headSeq"] = head_seq
+        if head_mac is not None:
+            m["headMac"] = head_mac
+        m["auditSeq"] = audit_seq
+        m["auditHead"] = line_hash
+        save(_manifest_path(self.root), repo.data)
+
     def _load_repo(self) -> ManifestRepository:
         """Load and wrap the manifest, or raise a user-facing error."""
         path = _manifest_path(self.root)
@@ -289,18 +331,17 @@ class DocumentService:
                 )
             )
             repo.add_node(node)
-            save(_manifest_path(self.root), repo.data)
+            self._commit_transaction(
+                repo,
+                action="mkdir",
+                urn=urn,
+                mac=mac,
+                ch=None,
+                sig=node.get("sig"),
+                sig_pubkey=node.get("sigPubkey"),
+                head_mac=mac,
+            )
 
-        audit_append(
-            self.root,
-            self.actor_id,
-            "mkdir",
-            urn,
-            mac,
-            None,
-            node.get("sig"),
-            node.get("sigPubkey"),
-        )
         return {"path": path, "urn": urn, "mac": mac}
 
     def add_document(
@@ -416,18 +457,17 @@ class DocumentService:
                 )
             )
             repo.add_node(node)
-            save(_manifest_path(self.root), repo.data)
+            self._commit_transaction(
+                repo,
+                action="add" if previous is None else "version",
+                urn=urn,
+                mac=mac,
+                ch=ch,
+                sig=node.get("sig"),
+                sig_pubkey=node.get("sigPubkey"),
+                head_mac=mac,
+            )
 
-        audit_append(
-            self.root,
-            self.actor_id,
-            "add" if previous is None else "version",
-            urn,
-            mac,
-            ch,
-            node.get("sig"),
-            node.get("sigPubkey"),
-        )
         return {
             "verb": "added" if previous is None else "versioned",
             "logical": logical,
@@ -466,18 +506,16 @@ class DocumentService:
             if sig_fields:
                 record.update(sig_fields)
             repo.set_ref(name, record)
-            save(_manifest_path(self.root), repo.data)
+            self._commit_transaction(
+                repo,
+                action="tag",
+                urn=node["urn"],
+                mac=node["mac"],
+                ch=node.get("contentHash"),
+                sig=record.get("sig"),
+                sig_pubkey=record.get("sigPubkey"),
+            )
 
-        audit_append(
-            self.root,
-            self.actor_id,
-            "tag",
-            node["urn"],
-            node["mac"],
-            node.get("contentHash"),
-            record.get("sig"),
-            record.get("sigPubkey"),
-        )
         return {"name": name, "mac": node["mac"], "urn": node["urn"]}
 
     def rollback(self, *, urn: str, to_mac: str, backend: str | None) -> dict[str, Any]:
@@ -566,16 +604,15 @@ class DocumentService:
                 )
             )
             repo.add_node(node)
-            save(_manifest_path(self.root), repo.data)
+            self._commit_transaction(
+                repo,
+                action="rollback",
+                urn=current["urn"],
+                mac=mac,
+                ch=ch,
+                sig=node.get("sig"),
+                sig_pubkey=node.get("sigPubkey"),
+                head_mac=mac,
+            )
 
-        audit_append(
-            self.root,
-            self.actor_id,
-            "rollback",
-            current["urn"],
-            mac,
-            ch,
-            node.get("sig"),
-            node.get("sigPubkey"),
-        )
         return {"urn": current["urn"], "mac": mac}
