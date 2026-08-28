@@ -751,8 +751,7 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
         if signed is None and seal_pubkey is None:
             failures += 1
             click.echo(
-                "FAIL seal: manifest has no head seal (run `pd seal` with the "
-                "org key)"
+                "FAIL seal: manifest has no head seal (run `pd seal` with the org key)"
             )
         elif signed is None or seal_pubkey is None:
             failures += 1

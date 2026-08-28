@@ -65,8 +65,17 @@ def _setup(tmp_path, n_docs=3):
     runner = CliRunner()
     r = runner.invoke(
         main,
-        ["init", "--org", "example-org", "--namespace", "docs",
-         "--org-pubkey", org_pubkey, "--root", str(tmp_path)],
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--org-pubkey",
+            org_pubkey,
+            "--root",
+            str(tmp_path),
+        ],
     )
     assert r.exit_code == 0, r.output
 
@@ -75,9 +84,22 @@ def _setup(tmp_path, n_docs=3):
         doc.write_text(f"content {i}", encoding="utf-8")
         r = runner.invoke(
             main,
-            ["add", str(doc), "--slug", f"d{i}.txt", "--category", "category-2",
-             "--owners", "ceo", "--org-yaml", str(org), "--actor", "paco",
-             "--root", str(tmp_path)],
+            [
+                "add",
+                str(doc),
+                "--slug",
+                f"d{i}.txt",
+                "--category",
+                "category-2",
+                "--owners",
+                "ceo",
+                "--org-yaml",
+                str(org),
+                "--actor",
+                "paco",
+                "--root",
+                str(tmp_path),
+            ],
         )
         assert r.exit_code == 0, r.output
 
@@ -242,9 +264,7 @@ def test_seal_wrong_key_detected(tmp_path):
     attacker_secret = coincurve.PrivateKey().secret.hex()
     attacker_nsec = tmp_path / "attacker.nsec"
     attacker_nsec.write_text(attacker_secret, encoding="utf-8")
-    r = runner.invoke(
-        main, ["seal", "--nsec-file", str(attacker_nsec), "--root", root]
-    )
+    r = runner.invoke(main, ["seal", "--nsec-file", str(attacker_nsec), "--root", root])
     assert r.exit_code == 0, r.output
     r = _verify(runner, root, pubkey)
     assert r.exit_code != 0
@@ -257,12 +277,19 @@ def test_unsealed_manifest_rejected_with_org_pubkey(tmp_path):
     root = str(tmp_path)
     r = runner.invoke(
         main,
-        ["init", "--org", "example-org", "--namespace", "docs",
-         "--org-pubkey", "ab" * 32, "--root", root],
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--org-pubkey",
+            "ab" * 32,
+            "--root",
+            root,
+        ],
     )
     assert r.exit_code == 0, r.output
-    r = runner.invoke(
-        main, ["verify", "--org-pubkey", "ab" * 32, "--root", root]
-    )
+    r = runner.invoke(main, ["verify", "--org-pubkey", "ab" * 32, "--root", root])
     assert r.exit_code != 0
     assert "seal" in r.output

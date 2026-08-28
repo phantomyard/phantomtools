@@ -267,11 +267,7 @@ def seal_message(envelope: bytes) -> bytes:
 def sign_seal(nsec: str, envelope: bytes) -> str:
     """Schnorr-sign a head seal envelope with the org's nsec. 128-hex."""
     secret = bytes.fromhex(nsec_to_secret_hex(nsec))
-    return (
-        coincurve.PrivateKey(secret)
-        .sign_schnorr(seal_message(envelope), None)
-        .hex()
-    )
+    return coincurve.PrivateKey(secret).sign_schnorr(seal_message(envelope), None).hex()
 
 
 def verify_seal(pubkey_hex: str, signature_hex: str, envelope: bytes) -> bool:
