@@ -232,6 +232,26 @@ external anchor sealed by the **org key**:
   sequence: a complete rollback of the namespace to an earlier head is
   detected even if the attacker re-seals.
 
+### 6.3 Single authoritative writer host (deployment boundary)
+
+PhantomDocs v1 supports **exactly one authoritative writer host per
+namespace** (Model A). All mutating commands (`mkdir`, `add`, `tag`,
+`rollback`, `seal`) must run on that host, serialized by the inter-process
+`manifest.lock`.
+
+The lock is **host-local**: it uses `fcntl.flock` (POSIX) or `msvcrt` range
+locking (Windows), which serializes concurrent *processes on the same host*
+but does **not** coordinate across hosts. Two hosts writing the same namespace
+would both read `head = N`, both commit `seq = N+1`, and fork the head —
+neither `verify` nor the seal can distinguish the two branches.
+
+Multi-host writing is therefore **not supported** in v1 and is a fail-closed
+boundary: a deployment with more than one writer host is misconfigured.
+Multi-writer support (Model B) requires a distributed compare-and-swap /
+locking primitive in the backend and is deferred to a future version. Until
+then the single-writer constraint is a *documented deployment requirement*,
+not a runtime-enforced guarantee across hosts.
+
 ## 7. Naming convention
 
 Deterministic, human-readable and bot-parseable:
