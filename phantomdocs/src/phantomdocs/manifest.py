@@ -60,6 +60,8 @@ def empty_manifest(org: str, namespace: str, root_mac: str) -> dict[str, Any]:
             "tenant": "single",
             "rootMac": root_mac,
             "signedRootMac": None,
+            "sealPubkey": None,
+            "sealedHeadSeq": None,
             "headSeq": 0,
             "headMac": root_mac,
             "auditSeq": 0,
@@ -165,7 +167,11 @@ def validate(data: dict[str, Any]) -> list[str]:
         errors.append("manifest.headSeq must be an integer")
     if m.get("auditSeq") is not None and not isinstance(m.get("auditSeq"), int):
         errors.append("manifest.auditSeq must be an integer")
-    for field in ("headMac",):
+    if m.get("sealedHeadSeq") is not None and not isinstance(
+        m.get("sealedHeadSeq"), int
+    ):
+        errors.append("manifest.sealedHeadSeq must be an integer")
+    for field in ("headMac", "sealPubkey"):
         value = m.get(field)
         if value is not None and (
             not isinstance(value, str) or not is_valid_hex64(value)

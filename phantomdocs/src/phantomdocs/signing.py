@@ -42,6 +42,10 @@ import coincurve
 # with a signature over the same bytes in another protocol.
 _SIGN_DOMAIN = b"phantomdocs-mutation-v1"
 
+# Domain separator for the org's head seal (issue #70/#71): a signature over
+# the namespace root + head commitment, never confused with a mutation sig.
+_SEAL_DOMAIN = b"phantomdocs-seal-v1"
+
 _BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 
 
@@ -224,5 +228,57 @@ def verify_mutation(pubkey_hex: str, signature_hex: str, envelope: bytes) -> boo
         pubkey = coincurve.PublicKeyXOnly(bytes.fromhex(pubkey_hex))
         signature = bytes.fromhex(signature_hex)
         return pubkey.verify(signature, mutation_message(envelope))
+    except (ValueError, TypeError):
+        return False
+
+
+def seal_envelope(
+    *,
+    root_mac: str,
+    head_seq: int,
+    head_mac: str,
+    audit_seq: int,
+    audit_head: str | None,
+) -> bytes:
+    """The canonical bytes the org signs to seal the namespace head.
+
+    Covers the root MAC **and** the monotonic head state (issues #70/#71), so
+    a forged root, a deleted version, a rolled-back head, or a truncated audit
+    log all change the envelope and invalidate the seal — which only the org
+    (holder of the org key) can re-make.
+    """
+    payload = {
+        "audit_head": audit_head or "",
+        "audit_seq": audit_seq,
+        "head_mac": head_mac,
+        "head_seq": head_seq,
+        "root_mac": root_mac,
+    }
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+
+
+def seal_message(envelope: bytes) -> bytes:
+    """The 32-byte message signed for a head seal: H(domain || envelope)."""
+    return _sha256(_SEAL_DOMAIN + envelope)
+
+
+def sign_seal(nsec: str, envelope: bytes) -> str:
+    """Schnorr-sign a head seal envelope with the org's nsec. 128-hex."""
+    secret = bytes.fromhex(nsec_to_secret_hex(nsec))
+    return (
+        coincurve.PrivateKey(secret)
+        .sign_schnorr(seal_message(envelope), None)
+        .hex()
+    )
+
+
+def verify_seal(pubkey_hex: str, signature_hex: str, envelope: bytes) -> bool:
+    """Verify a head seal signature over ``envelope`` against an x-only pubkey."""
+    try:
+        pubkey = coincurve.PublicKeyXOnly(bytes.fromhex(pubkey_hex))
+        signature = bytes.fromhex(signature_hex)
+        return pubkey.verify(signature, seal_message(envelope))
     except (ValueError, TypeError):
         return False
