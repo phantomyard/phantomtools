@@ -99,9 +99,7 @@ def _check_nsec_file(path: str) -> None:
         raise DocumentError(f"--nsec-file is not a regular file: {path}")
     if os.name == "posix":
         if st.st_uid != os.geteuid():
-            raise DocumentError(
-                f"--nsec-file is not owned by the calling user: {path}"
-            )
+            raise DocumentError(f"--nsec-file is not owned by the calling user: {path}")
         if stat.S_IMODE(st.st_mode) & 0o077:
             raise DocumentError(
                 f"--nsec-file must be 0600 (or more restrictive), got "

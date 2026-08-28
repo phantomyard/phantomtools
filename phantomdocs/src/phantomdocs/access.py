@@ -68,9 +68,7 @@ def actor_key_records(org: dict[str, Any], actor_id: str) -> list[dict[str, Any]
     active key; optional ``keys`` entries add rotation windows and revocations
     (key A valid T0–T1, key B valid from T1, key X revoked at T).
     """
-    actor = next(
-        (a for a in org.get("actors", []) if a.get("id") == actor_id), None
-    )
+    actor = next((a for a in org.get("actors", []) if a.get("id") == actor_id), None)
     if not actor:
         return []
     records: list[dict[str, Any]] = []

@@ -90,8 +90,13 @@ def test_nsec_0600_accepted(tmp_path):
     org = _write_org(tmp_path, _npub(signing.pubkey_from_nsec(secret)))
     svc = DocumentService(root, org, "paco", str(nsec))
     svc.add_document(
-        content=b"ok", ref_location=None, slug="a.txt", category="category-1",
-        folder=None, owners=["ceo"], backend=None,
+        content=b"ok",
+        ref_location=None,
+        slug="a.txt",
+        category="category-1",
+        folder=None,
+        owners=["ceo"],
+        backend=None,
     )
 
 
@@ -277,8 +282,8 @@ actors:
     root = str(tmp_path)
     assert (
         runner.invoke(
-            main, ["init", "--org", "example-org", "--namespace", "docs",
-                   "--root", root]
+            main,
+            ["init", "--org", "example-org", "--namespace", "docs", "--root", root],
         ).exit_code
         == 0
     )
@@ -288,9 +293,24 @@ actors:
     # "now", so verify --org-yaml must flag the signature.
     r = runner.invoke(
         main,
-        ["add", str(doc), "--slug", "a.txt", "--category", "category-2",
-         "--owners", "ceo", "--org-yaml", str(org), "--actor", "paco",
-         "--nsec-file", str(nsec), "--root", root],
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "a.txt",
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            str(nsec),
+            "--root",
+            root,
+        ],
     )
     # The service itself refuses to sign with a revoked key.
     assert r.exit_code != 0
