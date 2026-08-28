@@ -1631,10 +1631,14 @@ function sweepLoopState(now) {
 }
 
 // Resolves the rid to track for a message (used by check and rollback).
-// If there is a valid envelope -> ONLY env.rid (authoritative, does not scan text).
-// Without envelope -> best-effort textual fallback (F2-04).
+// Only an AUTHENTICATED envelope's rid is authoritative (issue #82): a forged
+// or unauthenticated [env] line must not inject a rid into the request_id
+// short-circuit, otherwise an attacker could inflate a victim's request
+// counter (false dedup / quota exhaustion) without forging the HMAC. Without
+// an envelope we fall back to the best-effort textual rid (F2-04) — free text
+// is create/track only, never authoritative.
 function resolveRid(parsed, textStr) {
-  if (parsed && parsed.env.rid) return parsed.env.rid;
+  if (parsed && parsed.authenticated && parsed.env.rid) return parsed.env.rid;
   if (!parsed) return extractRid(textStr);
   return null;
 }
