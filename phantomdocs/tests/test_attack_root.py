@@ -115,14 +115,14 @@ def _verify(runner, root, org_pubkey, extra=None):
 
 
 def test_sealed_namespace_verifies(tmp_path):
-    root, org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 3)
+    root, _org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 3)
     r = _verify(runner, root, pubkey)
     assert r.exit_code == 0, r.output
 
 
 def test_forged_root_detected(tmp_path):
     """Replace rootMac and recompute descendants → verify must fail (#70)."""
-    root, org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 1)
+    root, _org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 1)
     mp = tmp_path / "manifest.yaml"
     data = yaml.safe_load(mp.read_text(encoding="utf-8"))
 
@@ -154,7 +154,7 @@ def test_forged_root_detected(tmp_path):
 
 def test_delete_latest_version_detected(tmp_path):
     """Delete the latest version → head advances/changes → seal fails (#70)."""
-    root, org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 3)
+    root, _org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 3)
     mp = tmp_path / "manifest.yaml"
     data = yaml.safe_load(mp.read_text(encoding="utf-8"))
     data["nodes"] = data["nodes"][:-1]
@@ -167,7 +167,7 @@ def test_delete_latest_version_detected(tmp_path):
 
 def test_delete_intermediate_version_detected(tmp_path):
     """Delete an intermediate version → version lineage breaks (#70)."""
-    root, org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 3)
+    root, _org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 3)
     mp = tmp_path / "manifest.yaml"
     data = yaml.safe_load(mp.read_text(encoding="utf-8"))
     # Remove the middle node; the version chain/head anchors must catch it.
@@ -181,7 +181,7 @@ def test_delete_intermediate_version_detected(tmp_path):
 def test_rollback_to_older_copy_detected(tmp_path):
     """Replace the manifest with an older valid copy → --expected-head-seq
     (the external notion of current head) must catch the rollback (#70)."""
-    root, org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 4)
+    root, _org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 4)
     mp = tmp_path / "manifest.yaml"
     full = mp.read_text(encoding="utf-8")
 
@@ -203,7 +203,7 @@ def test_rollback_to_older_copy_detected(tmp_path):
 
 def test_audit_tail_truncation_detected(tmp_path):
     """Delete the last N audit lines → count/head mismatch (#71)."""
-    root, org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 4)
+    root, _org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 4)
     audit_path = tmp_path / "audit.log"
     lines = audit_path.read_text(encoding="utf-8").splitlines(keepends=True)
     audit_path.write_text("".join(lines[:-3]), encoding="utf-8")
@@ -214,7 +214,7 @@ def test_audit_tail_truncation_detected(tmp_path):
 
 def test_audit_whole_log_rollback_detected(tmp_path):
     """Replace the audit log with an older copy → count mismatch (#71)."""
-    root, org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 5)
+    root, _org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 5)
     audit_path = tmp_path / "audit.log"
     lines = audit_path.read_text(encoding="utf-8").splitlines(keepends=True)
     # An "older copy": keep only the init + first mutation.
@@ -226,7 +226,7 @@ def test_audit_whole_log_rollback_detected(tmp_path):
 
 def test_audit_middle_line_modified_detected(tmp_path):
     """Modify a middle audit line → prev chain breaks (#71)."""
-    root, org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 4)
+    root, _org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 4)
     audit_path = tmp_path / "audit.log"
     lines = audit_path.read_text(encoding="utf-8").splitlines(keepends=True)
     import json as _json
@@ -243,7 +243,7 @@ def test_audit_middle_line_modified_detected(tmp_path):
 
 def test_audit_historical_line_inserted_detected(tmp_path):
     """Insert a valid historical line → prev chain + count mismatch (#71)."""
-    root, org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 4)
+    root, _org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 4)
     audit_path = tmp_path / "audit.log"
     lines = audit_path.read_text(encoding="utf-8").splitlines(keepends=True)
     # Insert a duplicate of an earlier (valid) line in the middle.
@@ -256,7 +256,7 @@ def test_audit_historical_line_inserted_detected(tmp_path):
 
 def test_seal_wrong_key_detected(tmp_path):
     """A seal made by a different key must not verify (#70)."""
-    root, org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 1)
+    root, _org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 1)
     # Re-seal with a different (attacker) key.
     attacker_secret = coincurve.PrivateKey().secret.hex()
     attacker_nsec = tmp_path / "attacker.nsec"
