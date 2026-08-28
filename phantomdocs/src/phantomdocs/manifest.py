@@ -25,6 +25,7 @@ from typing import Any
 import yaml
 
 from .identity import is_valid_hex64
+from .signing import CRYPTO_VERSION
 
 MANIFEST_VERSION = 1
 MANIFEST_FILENAME = "manifest.yaml"
@@ -55,6 +56,7 @@ def empty_manifest(org: str, namespace: str, root_mac: str) -> dict[str, Any]:
     return {
         "manifest": {
             "version": MANIFEST_VERSION,
+            "cryptoVersion": CRYPTO_VERSION,
             "org": org,
             "namespace": namespace,
             "tenant": "single",
@@ -166,6 +168,10 @@ def validate(data: dict[str, Any]) -> list[str]:
         errors.append("multi-tenancy is not supported in this version")
     if not m.get("org"):
         errors.append("manifest.org is required")
+    if m.get("cryptoVersion") is not None and not isinstance(
+        m.get("cryptoVersion"), int
+    ):
+        errors.append("manifest.cryptoVersion must be an integer")
     # Head/anchor fields are optional (older manifests lack them) but, when
     # present, must have the right shape so verify can trust them.
     if m.get("headSeq") is not None and not isinstance(m.get("headSeq"), int):

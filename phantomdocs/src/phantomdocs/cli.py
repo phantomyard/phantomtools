@@ -60,6 +60,7 @@ from .setup import (
     write_wrapper,
 )
 from .signing import (
+    CRYPTO_VERSION,
     mutation_envelope,
     npub_to_pubkey_hex,
     pubkey_from_nsec,
@@ -522,6 +523,14 @@ def search(query, org_yaml, actor, root):
 def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
     """Recompute MAC chain + content hashes against the manifest."""
     manifest = _load_or_die(root)
+    # Crypto agility (audit decision 3): the namespace declares its crypto
+    # suite version; an unsupported version is refused fail-closed (we cannot
+    # interpret the node/seal signatures for it).
+    _crypto = manifest.get("manifest", {}).get("cryptoVersion")
+    if _crypto is not None and _crypto != CRYPTO_VERSION:
+        raise click.ClickException(
+            f"unsupported crypto version {_crypto!r} (supported: v{CRYPTO_VERSION})"
+        )
     store = _resolve_store(root, backend)
     known_macs = {n["mac"] for n in manifest.get("nodes", [])}
     known_macs.add(manifest["manifest"]["rootMac"])
@@ -603,9 +612,15 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
         # some declared actor.
         sig = node.get("sig")
         sig_pubkey = node.get("sigPubkey")
+        node_crypto = node.get("cryptoVersion", CRYPTO_VERSION)
         if sig is not None or sig_pubkey is not None:
             if not sig or not sig_pubkey:
                 issues.append("incomplete mutation signature")
+            elif node_crypto != CRYPTO_VERSION:
+                issues.append(
+                    f"unsupported crypto version {node_crypto!r} "
+                    f"(supported: v{CRYPTO_VERSION})"
+                )
             else:
                 envelope = mutation_envelope(
                     mac=node["mac"],
@@ -618,6 +633,7 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                     seq=node.get("seq"),
                     prev_head=node.get("prevHead"),
                     ts=node.get("ts"),
+                    crypto_version=node_crypto,
                 )
                 if not verify_mutation(sig_pubkey, sig, envelope):
                     issues.append("signature invalid")
@@ -663,8 +679,14 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
         elif isinstance(value, dict):
             sig = value.get("sig")
             sig_pubkey = value.get("sigPubkey")
+            ref_crypto = value.get("cryptoVersion", CRYPTO_VERSION)
             if (sig is None) != (sig_pubkey is None):
                 issues.append("incomplete ref signature")
+            elif sig is not None and ref_crypto != CRYPTO_VERSION:
+                issues.append(
+                    f"unsupported crypto version {ref_crypto!r} "
+                    f"(supported: v{CRYPTO_VERSION})"
+                )
             elif sig is not None:
                 envelope = mutation_envelope(
                     mac=mac,
@@ -678,6 +700,7 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                     seq=value.get("seq"),
                     prev_head=value.get("prevHead"),
                     ts=value.get("ts"),
+                    crypto_version=ref_crypto,
                 )
                 if not verify_mutation(sig_pubkey, sig, envelope):
                     issues.append("ref signature invalid")
@@ -818,6 +841,7 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                 head_mac=m.get("headMac") or m["rootMac"],
                 audit_seq=int(m.get("auditSeq") or 0),
                 audit_head=m.get("auditHead"),
+                crypto_version=int(m.get("cryptoVersion", CRYPTO_VERSION)),
             )
             if seal_pubkey != pubkey_hex:
                 failures += 1
@@ -981,6 +1005,7 @@ def seal(nsec_file, root):
         head_mac=m.get("headMac") or m["rootMac"],
         audit_seq=int(m.get("auditSeq") or 0),
         audit_head=m.get("auditHead"),
+        crypto_version=int(m.get("cryptoVersion", CRYPTO_VERSION)),
     )
     pubkey = pubkey_from_nsec(nsec)
     m["signedRootMac"] = sign_seal(nsec, envelope)

@@ -46,6 +46,14 @@ _SIGN_DOMAIN = b"phantomdocs-mutation-v1"
 # the namespace root + head commitment, never confused with a mutation sig.
 _SEAL_DOMAIN = b"phantomdocs-seal-v1"
 
+# The authenticated crypto-suite version (crypto agility, audit #5).
+# v1 = BIP-340 Schnorr signatures (secp256k1) + SHA-256. This build can only
+# produce/verify v1; a mutation or manifest declaring another version is
+# refused fail-closed, so a future v2 (new primitives) can verify v1 while v1
+# refuses v2. The version is bound into every signed envelope and the sealed
+# manifest header — it is authenticated state, not implementation convention.
+CRYPTO_VERSION = 1
+
 _BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 
 
@@ -167,6 +175,7 @@ def mutation_envelope(
     seq: int | None = None,
     prev_head: str | None = None,
     ts: str | None = None,
+    crypto_version: int = CRYPTO_VERSION,
 ) -> bytes:
     """The canonical bytes signed for a mutation (issue #30 v2, #73).
 
@@ -196,6 +205,7 @@ def mutation_envelope(
         "actor": actor,
         "action": action,
         "category": category,
+        "crypto_version": crypto_version,
         "locations": list(locations) if locations else [],
         "mac": mac,
         "owners": list(owners) if owners else [],
@@ -246,6 +256,7 @@ def seal_envelope(
     head_mac: str,
     audit_seq: int,
     audit_head: str | None,
+    crypto_version: int = CRYPTO_VERSION,
 ) -> bytes:
     """The canonical bytes the org signs to seal the namespace head.
 
@@ -257,6 +268,7 @@ def seal_envelope(
     payload = {
         "audit_head": audit_head or "",
         "audit_seq": audit_seq,
+        "crypto_version": crypto_version,
         "head_mac": head_mac,
         "head_seq": head_seq,
         "root_mac": root_mac,
