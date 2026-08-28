@@ -6,10 +6,7 @@ the org identity and verifies the seal. A forged root, a deleted version, or a
 rolled-back/truncated audit head all change the sealed envelope and must fail.
 """
 
-import os
-
 import coincurve
-import pytest
 import yaml
 from click.testing import CliRunner
 
