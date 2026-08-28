@@ -6,8 +6,9 @@ the actor at mutation time. These tests try to bypass the boundary and assert
 it holds.
 """
 
-import coincurve
 import os
+
+import coincurve
 import pytest
 
 from phantomdocs import identity, manifest, signing

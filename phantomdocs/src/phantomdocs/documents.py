@@ -37,7 +37,6 @@ from .manifest import (
 )
 from .signing import (
     mutation_envelope,
-    npub_to_pubkey_hex,
     pubkey_from_nsec,
     sign_mutation,
 )
