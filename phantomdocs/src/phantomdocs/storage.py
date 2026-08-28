@@ -188,6 +188,18 @@ class GdriveBackend:
     as a ``ref`` location so ``get``/``verify`` re-download it through
     ``read_reference`` (the only Drive read path PhantomDocs implements).
     ``get``/``has`` by content hash therefore remain unimplemented.
+
+    Idempotency contract (issue #79): the persona tooling must treat the
+    ``--content-hash`` flag as the upload's idempotency key — identical bytes
+    MUST resolve to the same Drive file id (content-addressed dedup) rather
+    than duplicating the object. This is what makes a retry after a lost
+    upload response safe.
+
+    Ambiguous-success semantics: a failed ``put`` does NOT necessarily mean
+    no remote object was created — the upload may have succeeded on Drive
+    while the response (and thus the file id) was lost. Callers must treat
+    ``put`` failures as retryable, not as proof of absence; the idempotency
+    contract above is what keeps those retries duplicate-free.
     """
 
     def __init__(self, workspace_py: str | None = None):
@@ -210,7 +222,15 @@ class GdriveBackend:
             f.write(data)
         try:
             proc = _run_checked(
-                [self.workspace_py, "drive-upload", tmp, "--folder", "phantomdocs"],
+                [
+                    self.workspace_py,
+                    "drive-upload",
+                    tmp,
+                    "--folder",
+                    "phantomdocs",
+                    "--content-hash",
+                    content_hash,
+                ],
                 text=True,
             )
         finally:
@@ -221,7 +241,11 @@ class GdriveBackend:
                 f"drive upload failed: {detail}" if detail else "drive upload failed"
             )
         # The upload must yield a re-downloadable file id; without one the
-        # document can never be read back (fail-closed).
+        # document can never be read back (fail-closed). Note (issue #79):
+        # reaching this line does not prove the upload FAILED remotely — the
+        # response (and file id) may simply have been lost after Drive accepted
+        # the object. Retrying is safe *because* the tooling is content-addressed
+        # (see the class idempotency contract).
         file_id = proc.stdout.strip()
         file_id = file_id.removeprefix("gdrive://")
         if not file_id:
