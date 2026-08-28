@@ -160,8 +160,10 @@ def mutation_envelope(
     locations: list[dict] | None,
     urn: str,
     ref: str | None = None,
+    seq: int | None = None,
+    prev_head: str | None = None,
 ) -> bytes:
-    """The canonical bytes signed for a mutation (issue #30 v2).
+    """The canonical bytes signed for a mutation (issue #30 v2, #73).
 
     Deterministic JSON (sorted keys, compact separators, ASCII-escaped) so
     ``verify`` can rebuild the exact message from the stored node fields and
@@ -172,8 +174,14 @@ def mutation_envelope(
 
     ``ref`` is set only for ``tag`` mutations: the mutable ref name is bound
     into the envelope so a ref renamed or repointed after signing no longer
-    verifies (issue #30 v2 / PR #38). It is omitted for node mutations so
-    existing signed nodes verify byte-identically.
+    verifies (issue #30 v2 / PR #38).
+
+    ``seq`` and ``prev_head`` bind the mutation to a specific committed
+    state (issue #73): ``seq`` is the monotonic mutation sequence and
+    ``prev_head`` is the committed head MAC this mutation builds on. A
+    mutation whose signature was produced for an older state (a replay, or a
+    re-insertion after rollback) no longer verifies against the current
+    state, because its ``seq``/``prev_head`` do not match the chain.
     """
     payload = {
         "actor": actor,
@@ -186,6 +194,10 @@ def mutation_envelope(
     }
     if ref is not None:
         payload["ref"] = ref
+    if seq is not None:
+        payload["seq"] = seq
+    if prev_head is not None:
+        payload["prev_head"] = prev_head
     return json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode("utf-8")

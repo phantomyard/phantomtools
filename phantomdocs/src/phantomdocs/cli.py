@@ -41,6 +41,7 @@ from .manifest import (
     empty_manifest,
     load,
     node_by_mac,
+    mutation_sequence_issues,
     ref_target_mac,
     resolve_node,
     save,
@@ -593,6 +594,8 @@ def verify(backend, org_yaml, root):
                     owners=node.get("owners"),
                     locations=node.get("locations"),
                     urn=node.get("urn", ""),
+                    seq=node.get("seq"),
+                    prev_head=node.get("prevHead"),
                 )
                 if not verify_mutation(sig_pubkey, sig, envelope):
                     issues.append("signature invalid")
@@ -636,6 +639,8 @@ def verify(backend, org_yaml, root):
                     locations=node.get("locations"),
                     urn=node.get("urn", ""),
                     ref=ref_name,
+                    seq=value.get("seq"),
+                    prev_head=value.get("prevHead"),
                 )
                 if not verify_mutation(sig_pubkey, sig, envelope):
                     issues.append("ref signature invalid")
@@ -657,6 +662,11 @@ def verify(backend, org_yaml, root):
     for problem in structure_problems:
         failures += 1
         click.echo(f"FAIL structure: {problem}")
+
+    sequence_problems = mutation_sequence_issues(manifest)
+    for problem in sequence_problems:
+        failures += 1
+        click.echo(f"FAIL sequence: {problem}")
 
     audit_problems = audit_verify_chain(root)
     for problem in audit_problems:

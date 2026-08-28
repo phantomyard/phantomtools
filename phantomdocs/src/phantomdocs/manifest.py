@@ -420,6 +420,76 @@ def ref_target_mac(value: Any) -> str | None:
     return None
 
 
+def mutation_sequence_issues(data: dict[str, Any]) -> list[str]:
+    """Mutation-sequence integrity problems (issue #73), or empty.
+
+    Each mutation binds a monotonic ``seq`` and a ``prevHead`` (the committed
+    head MAC it builds on) into its signed envelope. verify checks:
+
+    - node ``seq`` is strictly increasing (no replay, duplicate or reorder);
+    - node ``prevHead`` equals the previous node's MAC (or ``rootMac`` for the
+      first), so a node re-inserted after a rollback fails;
+    - ``manifest.headMac`` equals the last node's MAC;
+    - ``manifest.headSeq`` is not lower than the last node's ``seq``.
+
+    Returns one human-readable string per problem.
+    """
+    issues: list[str] = []
+    root_mac = data["manifest"]["rootMac"]
+    nodes = data.get("nodes", [])
+
+    # 1. Node seq must be strictly increasing.
+    last_seq = 0
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        seq = node.get("seq")
+        if seq is not None:
+            if seq <= last_seq:
+                issues.append(
+                    f"nodes[{index}]: seq {seq!r} is not strictly increasing"
+                )
+            last_seq = max(last_seq, seq)
+
+    # 2. prevHead chaining over the ordered node list.
+    prev_mac = root_mac
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        prev_head = node.get("prevHead")
+        if prev_head is None:
+            # A node without prevHead (legacy) ends the chainable prefix;
+            # keep walking but only report when the field is present.
+            prev_mac = node.get("mac", prev_mac)
+            continue
+        if prev_head != prev_mac:
+            issues.append(
+                f"nodes[{index}]: prevHead {prev_head!r} does not match "
+                f"previous head {prev_mac!r}"
+            )
+        prev_mac = node.get("mac", prev_mac)
+
+    # 3. The manifest head must agree with the last node.
+    header = data["manifest"]
+    head_mac = header.get("headMac")
+    if head_mac and nodes:
+        last = nodes[-1]
+        last_mac = last.get("mac") if isinstance(last, dict) else None
+        if last_mac and last_mac != head_mac:
+            issues.append(
+                f"manifest.headMac {head_mac!r} does not match last node {last_mac!r}"
+            )
+
+    # 4. headSeq must not lag behind the node history.
+    head_seq = header.get("headSeq")
+    if head_seq is not None and last_seq and head_seq < last_seq:
+        issues.append(
+            f"manifest.headSeq {head_seq!r} is lower than the last node seq "
+            f"{last_seq!r}"
+        )
+    return issues
+
+
 def resolve_node(data: dict[str, Any], ref: str) -> dict[str, Any] | None:
     """Resolve a node by urn, logical path, slug, or ref name (a MAC)."""
     node = node_by_urn(data, ref) or node_by_path(data, ref) or node_by_slug(data, ref)
