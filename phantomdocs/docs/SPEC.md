@@ -253,6 +253,16 @@ everything flows through this layer.
 
 A node may declare several `locations` (replicas), each verified by hash.
 
+**Drive upload idempotency + ambiguous success (issue #79).** `gdrive://`
+`put` forwards the content hash as `--content-hash <hex>`, which the persona's
+`workspace.py drive-upload --folder <name>` MUST treat as the upload's
+idempotency key: identical bytes resolve to the **same** Drive file id
+(content-addressed dedup) instead of duplicating the object. A failed `put`
+does **not** prove that no remote object was created — the upload may have
+succeeded while the response (and file id) was lost. Callers must treat `put`
+failures as retryable, and the idempotency contract is what keeps those
+retries duplicate-free.
+
 **Index by reference:** `add --ref <uri>` indexes an object that already
 lives elsewhere without copying it into a content-addressed store. The
 location stores a `ref` key. For `ssh://` the `ref` is kept as the **full
