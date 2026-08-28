@@ -8,6 +8,8 @@ mutation authorized for an *older* committed state no longer verifies against
 the current one.
 """
 
+import os
+
 import coincurve
 import yaml
 from click.testing import CliRunner
