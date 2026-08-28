@@ -16,7 +16,7 @@ import yaml
 from click.testing import CliRunner
 
 from phantomdocs import audit as audit_mod
-from phantomdocs import identity, manifest
+from phantomdocs import identity
 from phantomdocs.cli import main
 
 ORG_YAML = """\
@@ -247,8 +247,7 @@ def test_local_put_is_atomic_no_partial_blob(tmp_path):
 def test_local_put_crash_leaves_no_partial_blob(tmp_path, monkeypatch):
     """If the write fails mid-way, the content-addressable path must not
     contain a partial blob (temp file is cleaned up)."""
-    from phantomdocs import storage as storage_mod
-    from phantomdocs.storage import LocalBackend, StorageError
+    from phantomdocs.storage import LocalBackend
 
     b = LocalBackend(str(tmp_path))
     h = identity.content_hash(b"hello world")
