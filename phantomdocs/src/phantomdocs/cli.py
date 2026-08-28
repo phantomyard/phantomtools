@@ -16,6 +16,7 @@ from . import __version__
 from .access import (
     can_read,
     key_valid_at,
+    key_valid_now,
     load_org,
     normalize_category,
     resolved_categories,
@@ -624,13 +625,23 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                     ts = node.get("ts")
                     if not actor:
                         issues.append("signature has no actor")
-                    elif ts is None:
-                        issues.append("signature has no timestamp")
-                    elif not key_valid_at(org_model, actor, sig_pubkey, ts):
-                        issues.append(
-                            "signature key is not valid for the actor at "
-                            "mutation time (undeclared, rotated out, or revoked)"
-                        )
+                    elif ts is not None:
+                        if not key_valid_at(org_model, actor, sig_pubkey, ts):
+                            issues.append(
+                                "signature key is not valid for the actor at "
+                                "mutation time (undeclared, rotated out, or revoked)"
+                            )
+                    else:
+                        # Legacy node predating #76: no mutation timestamp, so
+                        # the rotation window cannot be evaluated. Fall back to
+                        # the CURRENT key registry: the node stays verifiable
+                        # while the key is still declared and not revoked
+                        # (revocation remains fail-closed).
+                        if not key_valid_now(org_model, actor, sig_pubkey):
+                            issues.append(
+                                "signature key is not a currently-valid key for "
+                                "the actor (legacy node without ts; re-sign or rotate)"
+                            )
 
         if issues:
             failures += 1
@@ -674,13 +685,19 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                     ts = value.get("ts")
                     if not actor:
                         issues.append("ref signature has no actor")
-                    elif ts is None:
-                        issues.append("ref signature has no timestamp")
-                    elif not key_valid_at(org_model, actor, sig_pubkey, ts):
-                        issues.append(
-                            "ref signature key is not valid for the actor at "
-                            "mutation time (undeclared, rotated out, or revoked)"
-                        )
+                    elif ts is not None:
+                        if not key_valid_at(org_model, actor, sig_pubkey, ts):
+                            issues.append(
+                                "ref signature key is not valid for the actor at "
+                                "mutation time (undeclared, rotated out, or revoked)"
+                            )
+                    else:
+                        # Legacy ref predating #76: see the node path above.
+                        if not key_valid_now(org_model, actor, sig_pubkey):
+                            issues.append(
+                                "ref signature key is not a currently-valid key "
+                                "for the actor (legacy ref without ts; re-sign or rotate)"
+                            )
         if issues:
             failures += 1
             click.echo(f"FAIL ref:{ref_name}: {', '.join(issues)}")

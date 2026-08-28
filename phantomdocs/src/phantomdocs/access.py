@@ -16,6 +16,7 @@ denied (fail-closed).
 from __future__ import annotations
 
 import re
+import time
 import warnings
 from typing import Any
 
@@ -124,8 +125,6 @@ def key_valid_at(org: dict[str, Any], actor_id: str, pubkey_hex: str, ts: str) -
 
 def key_valid_now(org: dict[str, Any], actor_id: str, pubkey_hex: str) -> bool:
     """True iff the key is a currently-valid (non-revoked) key for the actor."""
-    import time
-
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return key_valid_at(org, actor_id, pubkey_hex, now)
 

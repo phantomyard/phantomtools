@@ -10,6 +10,7 @@ Three properties:
 """
 
 import os
+from pathlib import Path
 
 import coincurve
 import pytest
@@ -315,3 +316,135 @@ actors:
     # The service itself refuses to sign with a revoked key.
     assert r.exit_code != 0
     assert "declared npub" in r.output
+
+
+def _legacy_manifest(root, org, nsec_path, secret, slug="one.txt"):
+    """Create a manifest with a signed node that predates #76: it carries
+    sig/sigPubkey but NO ts (the legacy pre-rotation binding). Returns root."""
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            main,
+            [
+                "init",
+                "--org",
+                "example-org",
+                "--namespace",
+                "docs",
+                "--root",
+                str(root),
+            ],
+        ).exit_code
+        == 0
+    )
+    doc = root / slug
+    doc.write_text("legacy content", encoding="utf-8")
+    r = runner.invoke(
+        main,
+        [
+            "add",
+            str(doc),
+            "--slug",
+            slug,
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            str(nsec_path),
+            "--root",
+            str(root),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    # Rewrite the node as a legacy (#76-predating) signed node: drop ts and
+    # re-sign the envelope WITHOUT it, using the same nsec.
+    mp = root / "manifest.yaml"
+    data = yaml.safe_load(mp.read_text(encoding="utf-8"))
+    node = data["nodes"][0]
+    node.pop("ts", None)
+    envelope = signing.mutation_envelope(
+        mac=node["mac"],
+        actor=node["actor"],
+        action=node["action"],
+        category=node["category"],
+        owners=node.get("owners"),
+        locations=node.get("locations"),
+        urn=node["urn"],
+        seq=node.get("seq"),
+        prev_head=node.get("prevHead"),
+    )
+    node["sig"] = signing.sign_mutation(secret, envelope)
+    node["sigPubkey"] = signing.pubkey_from_nsec(secret)
+    with open(mp, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+    return root
+
+
+def test_legacy_signed_node_without_ts_still_verifies(tmp_path):
+    """A signed node created before #76 (no ts) stays verifiable when the
+    actor's key is still current — the rotation window check is skipped and
+    the key is validated against the current registry instead (issue #76
+    review: no undocumented break of pre-#76 manifests)."""
+    secret = coincurve.PrivateKey().secret.hex()
+    pubkey = signing.pubkey_from_nsec(secret)
+    npub = _npub(pubkey)
+    org = _write_org(tmp_path, npub)
+    nsec = tmp_path / "nsec.txt"
+    nsec.write_text(secret)
+    os.chmod(nsec, 0o600)
+    root = _legacy_manifest(tmp_path, org, nsec, secret)
+
+    runner = CliRunner()
+    r = runner.invoke(main, ["verify", "--org-yaml", str(org), "--root", str(root)])
+    assert r.exit_code == 0, r.output
+
+
+def test_legacy_signed_node_revoked_key_still_fails(tmp_path):
+    """A legacy (no ts) signed node whose key is now REVOKED is still flagged
+    fail-closed: the fallback validates the key against the current registry,
+    so revocation is honored even without a mutation timestamp."""
+    secret = coincurve.PrivateKey().secret.hex()
+    pubkey = signing.pubkey_from_nsec(secret)
+    npub = _npub(pubkey)
+    # Create the legacy node with the key still CURRENT (so `add` signs fine),
+    # then re-declare the org with the key REVOKED and re-run verify.
+    org = _write_org(tmp_path, npub)
+    nsec = tmp_path / "nsec.txt"
+    nsec.write_text(secret)
+    os.chmod(nsec, 0o600)
+    root = _legacy_manifest(tmp_path, org, nsec, secret)
+
+    Path(org).write_text(
+        """
+version: 1
+organization:
+  id: example-org
+policies:
+  access_levels:
+    level-2: { categories: [1, 2] }
+roles:
+  - id: ceo
+    access_level: level-2
+    security_exceptions: []
+actors:
+  - id: paco
+    role: ceo
+    npub: NPUB_X
+    keys:
+      - npub: NPUB_X
+        revoked_at: "2020-01-01T00:00:00Z"
+    actor_exceptions: []
+""".replace("NPUB_X", npub),
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    r = runner.invoke(main, ["verify", "--org-yaml", str(org), "--root", str(root)])
+    assert r.exit_code != 0
+    assert "legacy" in r.output
