@@ -42,6 +42,7 @@ from .manifest import (
     load,
     mutation_sequence_issues,
     node_by_mac,
+    mutation_sequence_issues,
     ref_target_mac,
     resolve_node,
     save,
