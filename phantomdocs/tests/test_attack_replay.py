@@ -8,14 +8,11 @@ mutation authorized for an *older* committed state no longer verifies against
 the current one.
 """
 
-import os
-
 import coincurve
-import pytest
 import yaml
 from click.testing import CliRunner
 
-from phantomdocs import identity, manifest, signing
+from phantomdocs import signing
 from phantomdocs.cli import main
 
 ORG = """\
