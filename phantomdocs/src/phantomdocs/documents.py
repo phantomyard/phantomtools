@@ -1,13 +1,19 @@
 """Document application service — the mutating document workflows (issue #46).
 
-The CLI resolves the actor and the PhantomOrg org model (infrastructure) and
-delegates the domain workflow — authorize, resolve the parent, compute the
-MAC chain, store the blob, build and sign the node, mutate the manifest, and
-append the audit entry — to this service. Commands only render the result.
+The service is the *enforcement point*, not a convenience wrapper around the
+CLI (issue #69). It establishes its own security context:
 
-All failures raise :class:`DocumentError` with a user-facing message; the CLI
-maps it onto ``click.ClickException`` so the messages stay byte-identical to
-the pre-service behavior.
+  1. loads the org.yaml from a trusted location and validates its schema;
+  2. requires the claimed actor to be a declared actor in that org model;
+  3. when signing is configured, derives the signing key's pubkey and verifies
+     it maps to the claimed actor's declared ``npub`` **at mutation time** —
+     so a caller cannot assert "I am actor X" and sign with an unrelated key,
+     and cannot forge the org model to grant itself access.
+
+The caller supplies *intent* (a slug, a category, owners, content); the
+service supplies and verifies *authority*. All failures raise
+:class:`DocumentError` with a user-facing message; the CLI maps it onto
+``click.ClickException``.
 """
 
 from __future__ import annotations
@@ -15,7 +21,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .access import can_write, normalize_category
+from .access import can_write, load_org, normalize_category
 from .audit import append as audit_append
 from .identity import component_for_folder, content_hash, doc_version_mac, node_mac
 from .manifest import (
@@ -27,7 +33,12 @@ from .manifest import (
     save,
     urn_path,
 )
-from .signing import mutation_envelope, pubkey_from_nsec, sign_mutation
+from .signing import (
+    mutation_envelope,
+    npub_to_pubkey_hex,
+    pubkey_from_nsec,
+    sign_mutation,
+)
 from .storage import (
     LocalBackend,
     location_uri,
@@ -58,6 +69,15 @@ def _signing_key(nsec_file: str | None) -> str | None:
         except OSError as exc:
             raise DocumentError(f"cannot read --nsec-file: {exc}")
     return os.environ.get("PHANTOMDOCS_NSEC", "").strip() or None
+
+
+def _declared_npub(org: dict[str, Any], actor_id: str) -> str | None:
+    """The ``npub`` declared for ``actor_id`` in the org model, or None."""
+    for a in org.get("actors", []):
+        if isinstance(a, dict) and a.get("id") == actor_id:
+            npub = a.get("npub")
+            return npub if isinstance(npub, str) and npub.strip() else None
+    return None
 
 
 def _sign_fields(
@@ -98,10 +118,87 @@ def _sign_fields(
 
 
 class DocumentService:
-    """Mutating document workflows: create a folder, add/version a doc, set a ref."""
+    """Mutating document workflows: create a folder, add/version a doc, set a ref.
 
-    def __init__(self, root: str):
+    The service resolves and verifies the security context itself (issue #69);
+    it does not accept a caller-supplied org model or a caller-asserted actor
+    as authority.
+    """
+
+    def __init__(
+        self,
+        root: str,
+        org_yaml_path: str,
+        actor_id: str,
+        nsec_file: str | None = None,
+    ):
         self.root = root
+        self.org = self._load_org(org_yaml_path)
+        self.actor_id = self._require_declared_actor(actor_id)
+        self.nsec = _signing_key(nsec_file)
+        self._bind_key_to_actor()
+
+    # -- security context (issue #69) --
+
+    def _load_org(self, org_yaml_path: str) -> dict[str, Any]:
+        """Load the org model from a *trusted location* and validate its schema.
+
+        The org model is the root of the authorization decision; the service
+        loads it itself rather than trusting a caller-supplied dict, so a
+        caller cannot forge a permissive org to grant itself access.
+        """
+        try:
+            return load_org(org_yaml_path)
+        except (OSError, ValueError) as exc:
+            raise DocumentError(
+                f"cannot load org model from {org_yaml_path!r}: {exc}"
+            ) from exc
+
+    def _require_declared_actor(self, actor_id: str) -> str:
+        """The actor must be declared in the org model (fail-closed)."""
+        known = {
+            a.get("id")
+            for a in self.org.get("actors", [])
+            if isinstance(a, dict) and a.get("id")
+        }
+        if actor_id not in known:
+            raise DocumentError(
+                f"denied: {actor_id!r} is not an actor in the org model; "
+                "PhantomDocs refuses unmapped actors (fail-closed)"
+            )
+        return actor_id
+
+    def _bind_key_to_actor(self) -> None:
+        """Verify the signing key maps to the claimed actor (issue #69).
+
+        When signing is configured, the nsec's pubkey must equal the actor's
+        declared ``npub``. This is enforced at mutation time (not opt-in at
+        ``verify``), so a caller cannot assert one actor and sign with another
+        actor's key — the exact "actor impersonation" gap the service boundary
+        must close. An actor with no declared npub cannot sign.
+        """
+        if not self.nsec:
+            return
+        signing_pubkey = pubkey_from_nsec(self.nsec)
+        npub = _declared_npub(self.org, self.actor_id)
+        if not npub:
+            raise DocumentError(
+                f"denied: actor {self.actor_id!r} has no declared npub in the "
+                "org model; cannot sign mutations on its behalf"
+            )
+        try:
+            declared_pubkey = npub_to_pubkey_hex(npub)
+        except ValueError as exc:
+            raise DocumentError(
+                f"denied: actor {self.actor_id!r} has an invalid npub {npub!r}: {exc}"
+            ) from exc
+        if signing_pubkey != declared_pubkey:
+            raise DocumentError(
+                f"denied: signing key does not match actor {self.actor_id!r}'s "
+                "declared npub"
+            )
+
+    # -- repository plumbing --
 
     def _load_repo(self) -> ManifestRepository:
         """Load and wrap the manifest, or raise a user-facing error."""
@@ -113,21 +210,43 @@ class DocumentService:
         except ManifestError as exc:
             raise DocumentError(str(exc))
 
+    def _sign_fields(
+        self,
+        *,
+        mac: str,
+        action: str,
+        category: str,
+        owners: list[str] | None,
+        locations: list[dict] | None,
+        urn: str,
+        ref: str | None = None,
+    ) -> dict[str, str]:
+        return _sign_fields(
+            self.nsec,
+            mac=mac,
+            actor=self.actor_id,
+            action=action,
+            category=category,
+            owners=owners,
+            locations=locations,
+            urn=urn,
+            ref=ref,
+        )
+
+    # -- workflows --
+
     def create_folder(
         self,
-        org: dict[str, Any],
-        actor_id: str,
         *,
         name: str,
         parent: str | None,
         category: str,
         owners: list[str],
-        nsec_file: str | None,
     ) -> dict[str, Any]:
         """Create a folder node (a link in the chained MAC hierarchy)."""
         category = normalize_category(category)
-        if not can_write(org, actor_id, category, list(owners)):
-            raise DocumentError(f"denied: {actor_id} cannot write {category}")
+        if not can_write(self.org, self.actor_id, category, list(owners)):
+            raise DocumentError(f"denied: {self.actor_id} cannot write {category}")
 
         with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
@@ -156,14 +275,12 @@ class DocumentService:
                 "owners": list(owners),
                 "meta": {},
                 "relations": {},
-                "actor": actor_id,
+                "actor": self.actor_id,
                 "action": "mkdir",
             }
             node.update(
-                _sign_fields(
-                    _signing_key(nsec_file),
+                self._sign_fields(
                     mac=mac,
-                    actor=actor_id,
                     action="mkdir",
                     category=category,
                     owners=list(owners),
@@ -176,7 +293,7 @@ class DocumentService:
 
         audit_append(
             self.root,
-            actor_id,
+            self.actor_id,
             "mkdir",
             urn,
             mac,
@@ -188,8 +305,6 @@ class DocumentService:
 
     def add_document(
         self,
-        org: dict[str, Any],
-        actor_id: str,
         *,
         content: bytes,
         ref_location: dict[str, Any] | None,
@@ -198,7 +313,6 @@ class DocumentService:
         folder: str | None,
         owners: list[str],
         backend: str | None,
-        nsec_file: str | None,
     ) -> dict[str, Any]:
         """Ingest a document: compute the MAC chain, store the blob, register
         the node (or version an existing node)."""
@@ -252,9 +366,11 @@ class DocumentService:
             effective_owners = (
                 list(existing.get("owners", []) or []) if existing else list(owners)
             )
-            if not can_write(org, actor_id, effective_category, effective_owners):
+            if not can_write(
+                self.org, self.actor_id, effective_category, effective_owners
+            ):
                 raise DocumentError(
-                    f"denied: {actor_id} cannot write "
+                    f"denied: {self.actor_id} cannot write "
                     f"{normalize_category(effective_category)} "
                     f"{'(owner required)' if effective_owners else ''}"
                 )
@@ -286,14 +402,12 @@ class DocumentService:
                 "meta": {"title": slug},
                 "relations": {},
                 "previous": previous,
-                "actor": actor_id,
+                "actor": self.actor_id,
                 "action": "add" if previous is None else "version",
             }
             node.update(
-                _sign_fields(
-                    _signing_key(nsec_file),
+                self._sign_fields(
                     mac=mac,
-                    actor=actor_id,
                     action="add" if previous is None else "version",
                     category=effective_category,
                     owners=effective_owners,
@@ -306,7 +420,7 @@ class DocumentService:
 
         audit_append(
             self.root,
-            actor_id,
+            self.actor_id,
             "add" if previous is None else "version",
             urn,
             mac,
@@ -321,15 +435,7 @@ class DocumentService:
             "mac": mac,
         }
 
-    def set_ref(
-        self,
-        org: dict[str, Any],
-        actor_id: str,
-        *,
-        name: str,
-        ref: str,
-        nsec_file: str | None,
-    ) -> dict[str, Any]:
+    def set_ref(self, *, name: str, ref: str) -> dict[str, Any]:
         """Point a mutable ref (e.g. `latest`) at a version MAC."""
         with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
@@ -337,16 +443,14 @@ class DocumentService:
             if node is None:
                 raise DocumentError(f"not found: {ref}")
             if not can_write(
-                org, actor_id, node.get("category", 0), node.get("owners")
+                self.org, self.actor_id, node.get("category", 0), node.get("owners")
             ):
                 raise DocumentError(
-                    f"denied: {actor_id} cannot write "
+                    f"denied: {self.actor_id} cannot write "
                     f"{normalize_category(node.get('category', 0))} ({node['urn']})"
                 )
-            sig_fields = _sign_fields(
-                _signing_key(nsec_file),
+            sig_fields = self._sign_fields(
                 mac=node["mac"],
-                actor=actor_id,
                 action="tag",
                 category=node.get("category", ""),
                 owners=node.get("owners"),
@@ -356,7 +460,7 @@ class DocumentService:
             )
             record = {
                 "mac": node["mac"],
-                "actor": actor_id,
+                "actor": self.actor_id,
                 "action": "tag",
             }
             if sig_fields:
@@ -366,7 +470,7 @@ class DocumentService:
 
         audit_append(
             self.root,
-            actor_id,
+            self.actor_id,
             "tag",
             node["urn"],
             node["mac"],
@@ -376,16 +480,7 @@ class DocumentService:
         )
         return {"name": name, "mac": node["mac"], "urn": node["urn"]}
 
-    def rollback(
-        self,
-        org: dict[str, Any],
-        actor_id: str,
-        *,
-        urn: str,
-        to_mac: str,
-        backend: str | None,
-        nsec_file: str | None,
-    ) -> dict[str, Any]:
+    def rollback(self, *, urn: str, to_mac: str, backend: str | None) -> dict[str, Any]:
         """Restore an older version's content as a new, current version.
 
         Creates a new version whose content equals the target version's
@@ -418,9 +513,9 @@ class DocumentService:
                 )
 
             category = current.get("category", 0)
-            if not can_write(org, actor_id, category, current.get("owners")):
+            if not can_write(self.org, self.actor_id, category, current.get("owners")):
                 raise DocumentError(
-                    f"denied: {actor_id} cannot write "
+                    f"denied: {self.actor_id} cannot write "
                     f"{normalize_category(category)} ({current['urn']})"
                 )
 
@@ -457,14 +552,12 @@ class DocumentService:
                 "meta": dict(current.get("meta", {})),
                 "relations": dict(current.get("relations", {})),
                 "previous": current["mac"],
-                "actor": actor_id,
+                "actor": self.actor_id,
                 "action": "rollback",
             }
             node.update(
-                _sign_fields(
-                    _signing_key(nsec_file),
+                self._sign_fields(
                     mac=mac,
-                    actor=actor_id,
                     action="rollback",
                     category=category,
                     owners=effective_owners,
@@ -477,7 +570,7 @@ class DocumentService:
 
         audit_append(
             self.root,
-            actor_id,
+            self.actor_id,
             "rollback",
             current["urn"],
             mac,

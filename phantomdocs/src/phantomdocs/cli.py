@@ -250,17 +250,14 @@ def mkdir(name, parent, category, owners, org_yaml, actor, nsec_file, root):
     actor must be able to write the folder's category (fail-closed).
     """
     _validate_slug(name, "name")
-    actor_id, org = _require_acl(org_yaml, actor)
-    service = DocumentService(root)
+    actor_id, _org = _require_acl(org_yaml, actor)
     try:
+        service = DocumentService(root, org_yaml, actor_id, nsec_file)
         result = service.create_folder(
-            org,
-            actor_id,
             name=name,
             parent=parent,
             category=category,
             owners=list(owners),
-            nsec_file=nsec_file,
         )
     except DocumentError as exc:
         raise click.ClickException(str(exc))
@@ -329,12 +326,10 @@ def add(
             content = f.read()
         ref_location = None
 
-    actor_id, org = _require_acl(org_yaml, actor)
-    service = DocumentService(root)
+    actor_id, _org = _require_acl(org_yaml, actor)
     try:
+        service = DocumentService(root, org_yaml, actor_id, nsec_file)
         result = service.add_document(
-            org,
-            actor_id,
             content=content,
             ref_location=ref_location,
             slug=slug,
@@ -342,7 +337,6 @@ def add(
             folder=folder,
             owners=list(owners),
             backend=backend,
-            nsec_file=nsec_file,
         )
     except DocumentError as exc:
         raise click.ClickException(str(exc))
@@ -688,10 +682,10 @@ def tag(name, ref, org_yaml, actor, nsec_file, root):
     renaming or repointing ``manifest.refs`` after tagging is detected by
     ``verify``.
     """
-    actor_id, org = _require_acl(org_yaml, actor)
-    service = DocumentService(root)
+    actor_id, _org = _require_acl(org_yaml, actor)
     try:
-        result = service.set_ref(org, actor_id, name=name, ref=ref, nsec_file=nsec_file)
+        service = DocumentService(root, org_yaml, actor_id, nsec_file)
+        result = service.set_ref(name=name, ref=ref)
     except DocumentError as exc:
         raise click.ClickException(str(exc))
     click.echo(f"{result['name']} -> {display_id(result['mac'])}  ({result['urn']})")
@@ -724,16 +718,13 @@ def rollback(urn, to_mac, backend, org_yaml, actor, nsec_file, root):
     fresh MAC rather than colliding with the target. History is never
     rewritten or deleted.
     """
-    actor_id, org = _require_acl(org_yaml, actor)
-    service = DocumentService(root)
+    actor_id, _org = _require_acl(org_yaml, actor)
     try:
+        service = DocumentService(root, org_yaml, actor_id, nsec_file)
         result = service.rollback(
-            org,
-            actor_id,
             urn=urn,
             to_mac=to_mac,
             backend=backend,
-            nsec_file=nsec_file,
         )
     except DocumentError as exc:
         raise click.ClickException(str(exc))
