@@ -14,7 +14,6 @@ signing key to the actor. Tests therefore construct it with
 import os
 
 import pytest
-import yaml
 
 from phantomdocs import identity, manifest
 from phantomdocs.documents import DocumentError, DocumentService
