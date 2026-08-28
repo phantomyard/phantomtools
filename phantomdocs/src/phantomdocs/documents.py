@@ -19,9 +19,11 @@ service supplies and verifies *authority*. All failures raise
 from __future__ import annotations
 
 import os
+import stat
+import time
 from typing import Any
 
-from .access import can_write, load_org, normalize_category
+from .access import can_write, key_valid_now, load_org, normalize_category
 from .audit import append as audit_append
 from .identity import component_for_folder, content_hash, doc_version_mac, node_mac
 from .manifest import (
@@ -55,20 +57,56 @@ def _manifest_path(root: str) -> str:
     return os.path.join(root, MANIFEST_FILENAME)
 
 
+def _now_iso() -> str:
+    """Current UTC time as an ISO-8601 string (seconds precision)."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
 def _signing_key(nsec_file: str | None) -> str | None:
-    """Resolve the mutation-signing nsec (SPEC §9, issue #30 v2).
+    """Resolve the mutation-signing nsec (SPEC §9, issue #30 v2, #76).
 
     Precedence: ``--nsec-file`` → ``$PHANTOMDOCS_NSEC``. Returns None when the
     operator has not configured signing, in which case mutations are unsigned
     (v1 behavior).
+
+    The nsec file must be private (issue #76.1): a regular file (no symlink),
+    owned by the calling user, with mode 0600 or more restrictive. A
+    world/group-readable or writable key file is refused fail-closed.
     """
     if nsec_file:
+        _check_nsec_file(nsec_file)
         try:
             with open(nsec_file, "r", encoding="utf-8") as f:
                 return f.read().strip() or None
         except OSError as exc:
             raise DocumentError(f"cannot read --nsec-file: {exc}")
     return os.environ.get("PHANTOMDOCS_NSEC", "").strip() or None
+
+
+def _check_nsec_file(path: str) -> None:
+    """Enforce private-file hygiene on a signing key file (issue #76.1).
+
+    Rejects: symlinks, non-regular files, group/other access bits, and — on
+    POSIX — a file not owned by the calling user.
+    """
+    try:
+        st = os.lstat(path)
+    except OSError as exc:
+        raise DocumentError(f"cannot read --nsec-file: {exc}")
+    if stat.S_ISLNK(st.st_mode):
+        raise DocumentError(f"refusing symlinked --nsec-file: {path}")
+    if not stat.S_ISREG(st.st_mode):
+        raise DocumentError(f"--nsec-file is not a regular file: {path}")
+    if os.name == "posix":
+        if st.st_uid != os.geteuid():
+            raise DocumentError(
+                f"--nsec-file is not owned by the calling user: {path}"
+            )
+        if stat.S_IMODE(st.st_mode) & 0o077:
+            raise DocumentError(
+                f"--nsec-file must be 0600 (or more restrictive), got "
+                f"{oct(stat.S_IMODE(st.st_mode))}: {path}"
+            )
 
 
 def _declared_npub(org: dict[str, Any], actor_id: str) -> str | None:
@@ -93,6 +131,7 @@ def _sign_fields(
     ref: str | None = None,
     seq: int | None = None,
     prev_head: str | None = None,
+    ts: str | None = None,
 ) -> dict[str, str]:
     """The ``sig`` / ``sigPubkey`` fields for a mutation, or ``{}`` unsigned.
 
@@ -101,7 +140,9 @@ def _sign_fields(
     mutation envelope (issue #30 v2). ``ref`` is bound only for ``tag``
     mutations, tying the mutable ref name to its target MAC. ``seq`` and
     ``prev_head`` bind the mutation to a specific committed state (issue #73),
-    so a replayed or out-of-order mutation no longer verifies.
+    so a replayed or out-of-order mutation no longer verifies. ``ts`` is the
+    mutation timestamp, bound so key rotation/revocation (issue #76) is judged
+    against the moment the mutation was authorized.
     """
     if not nsec:
         return {}
@@ -116,6 +157,7 @@ def _sign_fields(
         ref=ref,
         seq=seq,
         prev_head=prev_head,
+        ts=ts,
     )
     return {
         "sig": sign_mutation(nsec, envelope),
@@ -175,13 +217,14 @@ class DocumentService:
         return actor_id
 
     def _bind_key_to_actor(self) -> None:
-        """Verify the signing key maps to the claimed actor (issue #69).
+        """Verify the signing key maps to the claimed actor (issue #69, #76).
 
-        When signing is configured, the nsec's pubkey must equal the actor's
-        declared ``npub``. This is enforced at mutation time (not opt-in at
-        ``verify``), so a caller cannot assert one actor and sign with another
-        actor's key — the exact "actor impersonation" gap the service boundary
-        must close. An actor with no declared npub cannot sign.
+        When signing is configured, the nsec's pubkey must be a *currently
+        valid* key for the actor — declared, not revoked, and within its
+        rotation window (issue #76.2/#76.3). This is enforced at mutation time
+        (not opt-in at ``verify``), so a caller cannot assert one actor and
+        sign with another actor's key, nor sign with a revoked/expired key.
+        An actor with no declared npub cannot sign.
         """
         if not self.nsec:
             return
@@ -192,16 +235,11 @@ class DocumentService:
                 f"denied: actor {self.actor_id!r} has no declared npub in the "
                 "org model; cannot sign mutations on its behalf"
             )
-        try:
-            declared_pubkey = npub_to_pubkey_hex(npub)
-        except ValueError as exc:
+        if not key_valid_now(self.org, self.actor_id, signing_pubkey):
             raise DocumentError(
-                f"denied: actor {self.actor_id!r} has an invalid npub {npub!r}: {exc}"
-            ) from exc
-        if signing_pubkey != declared_pubkey:
-            raise DocumentError(
-                f"denied: signing key does not match actor {self.actor_id!r}'s "
-                "declared npub"
+                f"denied: signing key does not match a currently-valid declared "
+                f"npub for actor {self.actor_id!r} (revoked, rotated out, or "
+                "undeclared)"
             )
 
     # -- repository plumbing --
@@ -287,6 +325,7 @@ class DocumentService:
         ref: str | None = None,
         seq: int | None = None,
         prev_head: str | None = None,
+        ts: str | None = None,
     ) -> dict[str, str]:
         return _sign_fields(
             self.nsec,
@@ -300,6 +339,7 @@ class DocumentService:
             ref=ref,
             seq=seq,
             prev_head=prev_head,
+            ts=ts,
         )
 
     # -- workflows --
@@ -320,6 +360,7 @@ class DocumentService:
         with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
             seq, prev_head = self._next_head(repo)
+            ts = _now_iso()
             parent_mac = repo.root_mac
             parent_path = ""
             if parent:
@@ -349,6 +390,7 @@ class DocumentService:
                 "action": "mkdir",
                 "seq": seq,
                 "prevHead": prev_head,
+                "ts": ts,
             }
             node.update(
                 self._sign_fields(
@@ -360,6 +402,7 @@ class DocumentService:
                     urn=urn,
                     seq=seq,
                     prev_head=prev_head,
+                    ts=ts,
                 )
             )
             repo.add_node(node)
@@ -393,6 +436,7 @@ class DocumentService:
         with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
             seq, prev_head = self._next_head(repo)
+            ts = _now_iso()
             parent_mac = repo.root_mac
             parent_path = ""
             if folder:
@@ -481,6 +525,7 @@ class DocumentService:
                 "action": "add" if previous is None else "version",
                 "seq": seq,
                 "prevHead": prev_head,
+                "ts": ts,
             }
             node.update(
                 self._sign_fields(
@@ -492,6 +537,7 @@ class DocumentService:
                     urn=urn,
                     seq=seq,
                     prev_head=prev_head,
+                    ts=ts,
                 )
             )
             repo.add_node(node)
@@ -519,6 +565,7 @@ class DocumentService:
         with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
             seq, prev_head = self._next_head(repo)
+            ts = _now_iso()
             node = repo.resolve_node(ref)
             if node is None:
                 raise DocumentError(f"not found: {ref}")
@@ -539,6 +586,7 @@ class DocumentService:
                 ref=name,
                 seq=seq,
                 prev_head=prev_head,
+                ts=ts,
             )
             record = {
                 "mac": node["mac"],
@@ -546,6 +594,7 @@ class DocumentService:
                 "action": "tag",
                 "seq": seq,
                 "prevHead": prev_head,
+                "ts": ts,
             }
             if sig_fields:
                 record.update(sig_fields)
@@ -575,6 +624,7 @@ class DocumentService:
         with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
             seq, prev_head = self._next_head(repo)
+            ts = _now_iso()
             target = repo.node_by_mac(to_mac)
             if target is None:
                 raise DocumentError(f"no version with MAC: {to_mac}")
@@ -640,6 +690,7 @@ class DocumentService:
                 "action": "rollback",
                 "seq": seq,
                 "prevHead": prev_head,
+                "ts": ts,
             }
             node.update(
                 self._sign_fields(
@@ -651,6 +702,7 @@ class DocumentService:
                     urn=current["urn"],
                     seq=seq,
                     prev_head=prev_head,
+                    ts=ts,
                 )
             )
             repo.add_node(node)

@@ -61,6 +61,7 @@ def _setup(tmp_path):
     )
     nsec = tmp_path / "nsec.txt"
     nsec.write_text(secret)
+    os.chmod(nsec, 0o600)  # issue #76: signing keys must be private
     runner = CliRunner()
     r = runner.invoke(
         main,

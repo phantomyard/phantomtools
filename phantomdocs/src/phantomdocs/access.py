@@ -21,6 +21,8 @@ from typing import Any
 
 import yaml
 
+from .signing import npub_to_pubkey_hex
+
 # The PhantomOrg org.yaml schema version PhantomDocs resolves access from.
 # PhantomOrg's own model declares ``version: 1`` (top-level int) and validates
 # it as ``Organization.version``. PhantomDocs does not assume forward
@@ -56,6 +58,78 @@ def load_org(org_yaml_path: str) -> dict[str, Any]:
         org = yaml.safe_load(f) or {}
     validate_org_schema(org)
     return org
+
+
+def actor_key_records(org: dict[str, Any], actor_id: str) -> list[dict[str, Any]]:
+    """The actor's declared signing keys as lifecycle records (issue #76).
+
+    Each record: ``{npub, valid_from, valid_until, revoked_at}``, where the
+    timestamps are ISO-8601 UTC strings (or None). The actor's ``npub`` is the
+    active key; optional ``keys`` entries add rotation windows and revocations
+    (key A valid T0–T1, key B valid from T1, key X revoked at T).
+    """
+    actor = next(
+        (a for a in org.get("actors", []) if a.get("id") == actor_id), None
+    )
+    if not actor:
+        return []
+    records: list[dict[str, Any]] = []
+    key_map: dict[str, dict[str, Any]] = {}
+    for k in actor.get("keys") or []:
+        if isinstance(k, dict) and k.get("npub"):
+            key_map[k["npub"]] = {
+                "npub": k["npub"],
+                "valid_from": k.get("valid_from"),
+                "valid_until": k.get("valid_until"),
+                "revoked_at": k.get("revoked_at"),
+            }
+    npub = actor.get("npub")
+    if npub and isinstance(npub, str) and npub.strip():
+        if npub in key_map:
+            records.append(key_map.pop(npub))
+        else:
+            records.append(
+                {
+                    "npub": npub,
+                    "valid_from": None,
+                    "valid_until": None,
+                    "revoked_at": None,
+                }
+            )
+    # Historical keys (rotation/revocation) that are not the active npub.
+    records.extend(key_map.values())
+    return records
+
+
+def key_valid_at(org: dict[str, Any], actor_id: str, pubkey_hex: str, ts: str) -> bool:
+    """True iff ``pubkey_hex`` is a declared key for ``actor_id`` that was
+    valid at ``ts`` — not yet revoked, within its ``valid_from``/``valid_until``
+    window. ``ts`` is an ISO-8601 UTC string (lexicographic comparison)."""
+    for rec in actor_key_records(org, actor_id):
+        try:
+            if npub_to_pubkey_hex(rec["npub"]) != pubkey_hex:
+                continue
+        except ValueError:
+            continue
+        revoked_at = rec.get("revoked_at")
+        if revoked_at and ts >= revoked_at:
+            return False
+        valid_from = rec.get("valid_from")
+        if valid_from and ts < valid_from:
+            continue
+        valid_until = rec.get("valid_until")
+        if valid_until and ts >= valid_until:
+            continue
+        return True
+    return False
+
+
+def key_valid_now(org: dict[str, Any], actor_id: str, pubkey_hex: str) -> bool:
+    """True iff the key is a currently-valid (non-revoked) key for the actor."""
+    import time
+
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return key_valid_at(org, actor_id, pubkey_hex, now)
 
 
 def normalize_category(category: int | str) -> str:

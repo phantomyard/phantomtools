@@ -29,6 +29,7 @@ def nsec_file(tmp_path):
     pubkey = signing.pubkey_from_nsec(secret)
     f = tmp_path / "nsec.txt"
     f.write_text(secret)
+    os.chmod(f, 0o600)  # issue #76: signing keys must be private
     return str(f), pubkey, secret
 
 
@@ -324,6 +325,7 @@ actors:
 
     nsec_file = tmp_path / "paco.nsec"
     nsec_file.write_text(paco_secret)
+    os.chmod(nsec_file, 0o600)
 
     doc = tmp_path / "report.txt"
     doc.write_text("quarterly report")

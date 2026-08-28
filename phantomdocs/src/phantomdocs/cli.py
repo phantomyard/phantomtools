@@ -15,6 +15,7 @@ import click
 from . import __version__
 from .access import (
     can_read,
+    key_valid_at,
     load_org,
     normalize_category,
     resolved_categories,
@@ -523,23 +524,12 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
     known_macs = {n["mac"] for n in manifest.get("nodes", [])}
     known_macs.add(manifest["manifest"]["rootMac"])
 
-    # Declared actor pubkeys (from org.yaml) for the signature authorization
-    # check. Only enforced when --org-yaml is supplied (issue #30 v2). The
-    # mapping is actor id -> pubkey hex so a signature is validated against
-    # the *specific* actor recorded on the node, not merely "some" declared
-    # actor.
-    declared_pubkeys: dict[str, str] | None = None
-    if org_yaml:
-        org = load_org(org_yaml)
-        declared_pubkeys = {}
-        for a in org.get("actors", []):
-            npub = a.get("npub")
-            actor_id = a.get("id")
-            if npub and actor_id:
-                try:
-                    declared_pubkeys[actor_id] = npub_to_pubkey_hex(npub)
-                except ValueError:
-                    pass
+    # Declared actor keys (from org.yaml) for the signature authorization
+    # check. Only enforced when --org-yaml is supplied (issue #30 v2). The org
+    # model is kept so a signature is validated against the *specific* actor's
+    # key *at the mutation timestamp* — honoring rotation windows and
+    # revocations (issue #76), not merely "some current declared key".
+    org_model = load_org(org_yaml) if org_yaml else None
 
     failures = 0
     for node in manifest.get("nodes", []):
@@ -625,16 +615,21 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                     urn=node.get("urn", ""),
                     seq=node.get("seq"),
                     prev_head=node.get("prevHead"),
+                    ts=node.get("ts"),
                 )
                 if not verify_mutation(sig_pubkey, sig, envelope):
                     issues.append("signature invalid")
-                elif declared_pubkeys is not None:
-                    declared = declared_pubkeys.get(node.get("actor"))
-                    if declared is None:
-                        issues.append("signature from undeclared actor")
-                    elif sig_pubkey != declared:
+                elif org_model is not None:
+                    actor = node.get("actor")
+                    ts = node.get("ts")
+                    if not actor:
+                        issues.append("signature has no actor")
+                    elif ts is None:
+                        issues.append("signature has no timestamp")
+                    elif not key_valid_at(org_model, actor, sig_pubkey, ts):
                         issues.append(
-                            "signature key does not match the actor's declared npub"
+                            "signature key is not valid for the actor at "
+                            "mutation time (undeclared, rotated out, or revoked)"
                         )
 
         if issues:
@@ -670,16 +665,21 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                     ref=ref_name,
                     seq=value.get("seq"),
                     prev_head=value.get("prevHead"),
+                    ts=value.get("ts"),
                 )
                 if not verify_mutation(sig_pubkey, sig, envelope):
                     issues.append("ref signature invalid")
-                elif declared_pubkeys is not None:
-                    declared = declared_pubkeys.get(value.get("actor"))
-                    if declared is None:
-                        issues.append("ref signature from undeclared actor")
-                    elif sig_pubkey != declared:
+                elif org_model is not None:
+                    actor = value.get("actor")
+                    ts = value.get("ts")
+                    if not actor:
+                        issues.append("ref signature has no actor")
+                    elif ts is None:
+                        issues.append("ref signature has no timestamp")
+                    elif not key_valid_at(org_model, actor, sig_pubkey, ts):
                         issues.append(
-                            "ref signature key does not match actor's declared npub"
+                            "ref signature key is not valid for the actor at "
+                            "mutation time (undeclared, rotated out, or revoked)"
                         )
         if issues:
             failures += 1
