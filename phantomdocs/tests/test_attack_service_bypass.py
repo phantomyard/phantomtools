@@ -22,9 +22,7 @@ def _write_org(tmp_path, text):
 def _init_root(tmp_path):
     root = str(tmp_path)
     mac = identity.root_mac("org", "", "docs")
-    manifest.save(
-        root + "/manifest.yaml", manifest.empty_manifest("org", "docs", mac)
-    )
+    manifest.save(root + "/manifest.yaml", manifest.empty_manifest("org", "docs", mac))
     return root
 
 
@@ -131,7 +129,9 @@ def test_undeclared_actor_rejected_at_boundary(tmp_path):
     """An actor not present in the trusted org model is refused before any
     mutation (fail-closed), even without signing."""
     root = _init_root(tmp_path)
-    org_path = _write_org(tmp_path, GOOD_ORG.replace("NPUB_PLACEHOLDER", _npub("ab" * 32)))
+    org_path = _write_org(
+        tmp_path, GOOD_ORG.replace("NPUB_PLACEHOLDER", _npub("ab" * 32))
+    )
     with pytest.raises(DocumentError, match="not an actor"):
         DocumentService(root, org_path, "intruder")
 

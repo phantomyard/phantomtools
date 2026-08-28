@@ -246,9 +246,7 @@ class DocumentService:
         """Create a folder node (a link in the chained MAC hierarchy)."""
         category = normalize_category(category)
         if not can_write(self.org, self.actor_id, category, list(owners)):
-            raise DocumentError(
-                f"denied: {self.actor_id} cannot write {category}"
-            )
+            raise DocumentError(f"denied: {self.actor_id} cannot write {category}")
 
         with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
