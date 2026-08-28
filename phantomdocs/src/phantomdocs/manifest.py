@@ -446,9 +446,7 @@ def mutation_sequence_issues(data: dict[str, Any]) -> list[str]:
         seq = node.get("seq")
         if seq is not None:
             if seq <= last_seq:
-                issues.append(
-                    f"nodes[{index}]: seq {seq!r} is not strictly increasing"
-                )
+                issues.append(f"nodes[{index}]: seq {seq!r} is not strictly increasing")
             last_seq = max(last_seq, seq)
 
     # 2. prevHead chaining over the ordered node list.

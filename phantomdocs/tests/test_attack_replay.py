@@ -66,8 +66,16 @@ def _setup(tmp_path):
     nsec.write_text(secret)
     runner = CliRunner()
     r = runner.invoke(
-        main, ["init", "--org", "example-org", "--namespace", "docs",
-               "--root", str(tmp_path)]
+        main,
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--root",
+            str(tmp_path),
+        ],
     )
     assert r.exit_code == 0, r.output
     return tmp_path, str(org), str(nsec), secret, pubkey, runner
@@ -78,9 +86,24 @@ def _add(runner, root, org, nsec, slug, content):
     doc.write_text(content, encoding="utf-8")
     return runner.invoke(
         main,
-        ["add", str(doc), "--slug", slug, "--category", "category-2",
-         "--owners", "ceo", "--org-yaml", org, "--actor", "paco",
-         "--nsec-file", nsec, "--root", str(root)],
+        [
+            "add",
+            str(doc),
+            "--slug",
+            slug,
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            org,
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec,
+            "--root",
+            str(root),
+        ],
     )
 
 
@@ -90,9 +113,7 @@ def test_signed_mutation_binds_sequence_and_prev_head(tmp_path):
     assert _add(runner, root, org, nsec, "a", "v1").exit_code == 0
     assert _add(runner, root, org, nsec, "b", "v1").exit_code == 0
 
-    data = yaml.safe_load(
-        (root / "manifest.yaml").read_text(encoding="utf-8")
-    )
+    data = yaml.safe_load((root / "manifest.yaml").read_text(encoding="utf-8"))
     nodes = [n for n in data["nodes"] if n.get("kind") == "doc"]
     assert len(nodes) == 2
     assert [n["seq"] for n in nodes] == [1, 2]
@@ -157,8 +178,13 @@ def test_envelope_without_sequence_still_verifies_for_legacy(tmp_path):
     compatibility."""
     mac = "ab" * 32
     env = signing.mutation_envelope(
-        mac=mac, actor="paco", action="add", category="category-2",
-        owners=["ceo"], locations=None, urn="urn:ex:doc:x",
+        mac=mac,
+        actor="paco",
+        action="add",
+        category="category-2",
+        owners=["ceo"],
+        locations=None,
+        urn="urn:ex:doc:x",
     )
     sig = signing.sign_mutation("cd" * 32, env)
     pub = signing.pubkey_from_nsec("cd" * 32)
