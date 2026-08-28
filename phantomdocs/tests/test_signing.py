@@ -222,7 +222,9 @@ def test_add_signs_node_and_verify_accepts(tmp_path, nsec_file):
     assert r.exit_code == 0, r.output
 
 
-def test_verify_flags_undeclared_signing_key(tmp_path, nsec_file):
+def test_add_rejects_undeclared_signing_key(tmp_path, nsec_file):
+    """Issue #69: a signing key that is not the actor's declared npub is
+    rejected at mutation time (not merely flagged by `verify --org-yaml`)."""
     import coincurve
 
     nsec_path, _pubkey, _secret = nsec_file
@@ -254,43 +256,36 @@ def test_verify_flags_undeclared_signing_key(tmp_path, nsec_file):
         ).exit_code
         == 0
     )
-    assert (
-        runner.invoke(
-            main,
-            [
-                "add",
-                str(doc),
-                "--slug",
-                "report",
-                "--category",
-                "category-2",
-                "--owners",
-                "ceo",
-                "--org-yaml",
-                str(org),
-                "--actor",
-                "paco",
-                "--nsec-file",
-                nsec_path,
-                "--root",
-                str(tmp_path),
-            ],
-        ).exit_code
-        == 0
+    # The mutation must be refused: the key does not belong to actor paco.
+    r = runner.invoke(
+        main,
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "report",
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
     )
-
-    # verify without org-yaml: signature is cryptographically valid -> passes
-    assert runner.invoke(main, ["verify", "--root", str(tmp_path)]).exit_code == 0
-    # verify with org-yaml: signing key is not the actor's declared npub -> fails
-    r = runner.invoke(main, ["verify", "--org-yaml", str(org), "--root", str(tmp_path)])
     assert r.exit_code != 0
     assert "declared npub" in r.output
 
 
-def test_verify_rejects_actor_impersonation(tmp_path):
+def test_add_rejects_actor_impersonation(tmp_path):
     """One declared actor's key must not authenticate a mutation asserted as
-    a DIFFERENT actor (the reviewer reproduction). paco signs with his nsec
-    but the node is recorded with actor=pepa; verify --org-yaml flags it."""
+    a DIFFERENT actor (issue #69). paco signs with his nsec but claims
+    actor=pepa; the mutation is refused at the service boundary."""
     import coincurve
 
     paco_secret = coincurve.PrivateKey().secret.hex()
@@ -349,38 +344,32 @@ actors:
         ).exit_code
         == 0
     )
-    # Add the doc claiming actor=pepa, but signed with paco's nsec.
-    assert (
-        runner.invoke(
-            main,
-            [
-                "add",
-                str(doc),
-                "--slug",
-                "report",
-                "--category",
-                "category-2",
-                "--owners",
-                "ceo",
-                "--org-yaml",
-                str(org),
-                "--actor",
-                "pepa",
-                "--nsec-file",
-                str(nsec_file),
-                "--root",
-                str(tmp_path),
-            ],
-        ).exit_code
-        == 0
+    # Add the doc claiming actor=pepa, but signed with paco's nsec: refused.
+    r = runner.invoke(
+        main,
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "report",
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "pepa",
+            "--nsec-file",
+            str(nsec_file),
+            "--root",
+            str(tmp_path),
+        ],
     )
-
-    # verify with org-yaml must reject the impersonation.
-    r = runner.invoke(main, ["verify", "--org-yaml", str(org), "--root", str(tmp_path)])
     assert r.exit_code != 0
     assert "declared npub" in r.output
 
-    # Sanity: the honest signing (paco signs as paco) does verify.
+    # Sanity: the honest signing (paco signs as paco) succeeds and verifies.
     root2 = tmp_path / "honest"
     assert (
         runner.invoke(
