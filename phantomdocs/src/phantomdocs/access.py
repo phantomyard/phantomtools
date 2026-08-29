@@ -15,6 +15,8 @@ denied (fail-closed).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import time
 import warnings
@@ -59,6 +61,22 @@ def load_org(org_yaml_path: str) -> dict[str, Any]:
         org = yaml.safe_load(f) or {}
     validate_org_schema(org)
     return org
+
+
+def policy_hash(org: dict[str, Any]) -> str:
+    """Canonical digest of the org model that authorizes a mutation (audit #7).
+
+    Deterministic JSON (sorted keys, compact separators, ASCII-escaped) of the
+    parsed org model, SHA-256 hashed. Two org models that differ in any
+    authorization-relevant way (roles, actors, keys, categories, exceptions)
+    produce different digests, so a node records *which* policy version
+    authorized it — a mutation carries ``policyHash = Y`` and an auditor can
+    later prove provenance without trusting the current org model.
+    """
+    canonical = json.dumps(
+        org, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def actor_key_records(org: dict[str, Any], actor_id: str) -> list[dict[str, Any]]:

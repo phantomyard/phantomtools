@@ -768,3 +768,96 @@ def test_require_signatures_toggle_and_verify(tmp_path, nsec_file):
     assert r.exit_code == 0, r.output
     r = runner.invoke(main, ["verify", "--root", str(tmp_path)])
     assert r.exit_code == 0, r.output
+
+
+def test_policy_hash_binds_org_model(tmp_path, nsec_file):
+    """A mutation binds the org-model digest into its signed envelope (#7).
+
+    The node records ``policyHash`` and the signature covers it, so a tampered
+    ``policyHash`` (e.g. reclassifying a category after the fact) no longer
+    verifies. Two org models with different policy produce different digests.
+    """
+    from phantomdocs.access import policy_hash
+
+    nsec_path, pubkey, _secret = nsec_file
+
+    def org_yaml(extra_category):
+        base = ORG.replace(
+            "NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey))
+        )
+        if extra_category:
+            return base + "    security_exceptions: [category-3]\n"
+        return base
+
+    # Different policy => different digest.
+    org_a = tmp_path / "org_a.yaml"
+    org_b = tmp_path / "org_b.yaml"
+    org_a.write_text(org_yaml(False))
+    org_b.write_text(org_yaml(True))
+    import yaml as _yaml
+
+    ha = policy_hash(_yaml.safe_load(org_a.read_text()))
+    hb = policy_hash(_yaml.safe_load(org_b.read_text()))
+    assert ha != hb
+
+    doc = tmp_path / "report.txt"
+    doc.write_text("quarterly report")
+    runner = CliRunner()
+    r = runner.invoke(
+        main,
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(
+        main,
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "report",
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org_a),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    # The node records its policyHash.
+    data = _yaml.safe_load((tmp_path / "manifest.yaml").read_text())
+    node = data["nodes"][0]
+    assert node.get("policyHash") == ha
+
+    # verify (signed under org_a) passes with org_a.
+    r = runner.invoke(
+        main, ["verify", "--org-yaml", str(org_a), "--root", str(tmp_path)]
+    )
+    assert r.exit_code == 0, r.output
+
+    # Tampering with the recorded policyHash (without re-signing) breaks the
+    # signature, because the envelope binds it.
+    tampered = tmp_path / "manifest.yaml"
+    data = _yaml.safe_load(tampered.read_text())
+    data["nodes"][0]["policyHash"] = hb
+    tampered.write_text(_yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    r = runner.invoke(
+        main, ["verify", "--org-yaml", str(org_a), "--root", str(tmp_path)]
+    )
+    assert r.exit_code != 0
+    assert "signature invalid" in r.output

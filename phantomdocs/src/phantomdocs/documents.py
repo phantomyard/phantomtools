@@ -23,7 +23,7 @@ import stat
 import time
 from typing import Any
 
-from .access import can_write, key_valid_now, load_org, normalize_category
+from .access import can_write, key_valid_now, load_org, normalize_category, policy_hash
 from .audit import append as audit_append
 from .audit import head as audit_head
 from .audit import max_seq as audit_max_seq
@@ -133,6 +133,7 @@ def _sign_fields(
     seq: int | None = None,
     prev_head: str | None = None,
     ts: str | None = None,
+    policy_hash: str | None = None,
 ) -> dict[str, str]:
     """The ``sig`` / ``sigPubkey`` fields for a mutation, or ``{}`` unsigned.
 
@@ -159,6 +160,7 @@ def _sign_fields(
         seq=seq,
         prev_head=prev_head,
         ts=ts,
+        policy_hash=policy_hash,
     )
     return {
         "sig": sign_mutation(nsec, envelope),
@@ -185,6 +187,7 @@ class DocumentService:
         self.org = self._load_org(org_yaml_path)
         self.actor_id = self._require_declared_actor(actor_id)
         self.nsec = _signing_key(nsec_file)
+        self.policy_hash = policy_hash(self.org)
         self._bind_key_to_actor()
 
     # -- security context (issue #69) --
@@ -404,6 +407,7 @@ class DocumentService:
             seq=seq,
             prev_head=prev_head,
             ts=ts,
+            policy_hash=self.policy_hash,
         )
 
     # -- workflows --
@@ -455,6 +459,7 @@ class DocumentService:
                 "seq": seq,
                 "prevHead": prev_head,
                 "cryptoVersion": CRYPTO_VERSION,
+                "policyHash": self.policy_hash,
                 "ts": ts,
             }
             node.update(
@@ -604,6 +609,7 @@ class DocumentService:
                 "seq": seq,
                 "prevHead": prev_head,
                 "cryptoVersion": CRYPTO_VERSION,
+                "policyHash": self.policy_hash,
                 "ts": ts,
             }
             node.update(
@@ -674,6 +680,7 @@ class DocumentService:
                 "seq": seq,
                 "prevHead": prev_head,
                 "cryptoVersion": CRYPTO_VERSION,
+                "policyHash": self.policy_hash,
                 "ts": ts,
             }
             if sig_fields:
@@ -771,6 +778,7 @@ class DocumentService:
                 "seq": seq,
                 "prevHead": prev_head,
                 "cryptoVersion": CRYPTO_VERSION,
+                "policyHash": self.policy_hash,
                 "ts": ts,
             }
             node.update(

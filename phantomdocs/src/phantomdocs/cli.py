@@ -664,6 +664,7 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                     seq=node.get("seq"),
                     prev_head=node.get("prevHead"),
                     ts=node.get("ts"),
+                    policy_hash=node.get("policyHash"),
                     crypto_version=node_crypto,
                 )
                 if not verify_mutation(sig_pubkey, sig, envelope):
@@ -743,6 +744,7 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                     seq=value.get("seq"),
                     prev_head=value.get("prevHead"),
                     ts=value.get("ts"),
+                    policy_hash=value.get("policyHash"),
                     crypto_version=ref_crypto,
                 )
                 if not verify_mutation(sig_pubkey, sig, envelope):

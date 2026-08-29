@@ -175,6 +175,7 @@ def mutation_envelope(
     seq: int | None = None,
     prev_head: str | None = None,
     ts: str | None = None,
+    policy_hash: str | None = None,
     crypto_version: int | None = CRYPTO_VERSION,
 ) -> bytes:
     """The canonical bytes signed for a mutation (issue #30 v2, #73).
@@ -226,6 +227,8 @@ def mutation_envelope(
         payload["prev_head"] = prev_head
     if ts is not None:
         payload["ts"] = ts
+    if policy_hash is not None:
+        payload["policy_hash"] = policy_hash
     return json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode("utf-8")

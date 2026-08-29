@@ -368,6 +368,9 @@ def _legacy_manifest(root, org, nsec_path, secret, slug="one.txt"):
     data = yaml.safe_load(mp.read_text(encoding="utf-8"))
     node = data["nodes"][0]
     node.pop("ts", None)
+    # A node predating #76 also predates #7 (policyHash): drop both so the
+    # re-signed envelope matches what verify rebuilds from the node.
+    node.pop("policyHash", None)
     envelope = signing.mutation_envelope(
         mac=node["mac"],
         actor=node["actor"],
