@@ -116,6 +116,19 @@ def check_references(spec: OrgSpec) -> list[str]:
                 f"is not in policies.access_levels"
             )
 
+    # security categories: parent must exist (or be null) and not self
+    # (issue #100). The hierarchy is explicit; a category cannot be its own
+    # parent.
+    for cid, cat in spec.policies.security_categories.items():
+        if cat.parent is not None and cat.parent not in security_category_ids:
+            problems.append(
+                f"policies.security_categories.{cid}: parent '{cat.parent}' does not exist"
+            )
+        elif cat.parent == cid:
+            problems.append(
+                f"policies.security_categories.{cid}: a category cannot be its own parent"
+            )
+
     # roles: department, reports_to, access_level, security_exceptions
     for r in spec.roles:
         if r.department not in dept_ids:

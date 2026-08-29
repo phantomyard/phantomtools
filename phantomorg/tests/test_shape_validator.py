@@ -608,6 +608,24 @@ class TestDocumentsBlockAndProjectScope(unittest.TestCase):
                 validate_shape(doc)
             self.assertIn("documents", str(ctx.exception))
 
+    def test_security_category_parent_wrong_type(self):
+        # A non-string, non-null `parent` must be rejected (issue #100).
+        import copy
+
+        doc = copy.deepcopy(self.doc)
+        doc["policies"]["security_categories"]["category-0"]["parent"] = 7
+        with self.assertRaises(ShapeError):
+            validate_shape(doc)
+
+    def test_security_category_parent_string_passes_shape(self):
+        # A string `parent` passes shape validation; the cross-reference is
+        # checked later by the reference validator, not here.
+        import copy
+
+        doc = copy.deepcopy(self.doc)
+        doc["policies"]["security_categories"]["category-1"]["parent"] = "category-0"
+        validate_shape(doc)  # must not raise
+
 
 if __name__ == "__main__":
     unittest.main()

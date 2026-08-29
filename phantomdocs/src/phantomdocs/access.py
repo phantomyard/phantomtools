@@ -5,12 +5,15 @@ PhantomDocs does NOT define its own ACL: it consumes PhantomOrg's
 exception fields, and checks whether an actor's resolved access covers a
 node's category. Fail-closed: no rule -> denied.
 
-Categories are hierarchical (issue #45): the hierarchy is declared in
+Categories are hierarchical: the hierarchy is declared in
 ``policies.security_categories``, where each category carries an optional
-``scope`` and ``owner``. A category grants its declared descendants (the
-longest declared ``-``-prefix parent links declared categories); the prefix
-is no longer a blind grant on arbitrary strings. An undeclared category is
-denied (fail-closed).
+``scope``, ``owner`` and ``parent``. When a category declares ``parent``,
+that field is the authority for the hierarchy (issue #100) and the
+``-``-prefix in an id is only canonical *naming*; when no category declares
+``parent``, the hierarchy falls back to the longest declared ``-``-prefix
+(issue #45). In both modes the link only ever connects *declared*
+categories, never a blind string match; an undeclared category is denied
+(fail-closed).
 """
 
 from __future__ import annotations
@@ -265,13 +268,29 @@ def _security_categories(org: dict[str, Any]) -> dict[str, Any]:
 def _category_parents(org: dict[str, Any]) -> dict[str, str | None]:
     """Map each declared category id to its declared parent id.
 
-    The parent is the longest declared proper ``-``-prefix, so the prefix only
-    links *declared* categories (issue #45): the hierarchy is an explicit
-    relation over ``security_categories`` (which carries ``scope``/``owner``),
-    not a blind string match. An undeclared category has no parent.
+    Semantic mode (issue #100): when any category declares an explicit
+    ``parent`` field, that field is the authority for the hierarchy — the
+    ``-``-prefix in an id is then only canonical *naming*, not the
+    authorization algorithm. A ``parent`` that does not reference a declared
+    category is treated as a broken link (no parent) so ``can_read`` denies
+    fail-closed rather than silently mis-resolving.
+
+    Legacy mode (issue #45): when no category declares ``parent``, the parent
+    is the longest declared proper ``-``-prefix, which links only *declared*
+    categories — never a blind string match. An undeclared category has no
+    parent.
     """
-    declared = set(_security_categories(org))
-    tree: dict[str, str | None] = {}
+    cats = _security_categories(org)
+    declared = set(cats)
+    if any("parent" in spec for spec in cats.values()):
+        tree: dict[str, str | None] = {}
+        for cid, spec in cats.items():
+            parent = spec.get("parent")
+            tree[cid] = (
+                parent if isinstance(parent, str) and parent in declared else None
+            )
+        return tree
+    tree = {}
     for cid in declared:
         candidates = [d for d in declared if d != cid and cid.startswith(d + "-")]
         tree[cid] = max(candidates, key=len) if candidates else None

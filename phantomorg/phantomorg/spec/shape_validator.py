@@ -270,7 +270,7 @@ _HUMAN_KEYS = {
 }
 _POLICIES_KEYS = {"access_levels", "security_categories"}
 _ACCESS_LEVEL_KEYS = {"label", "categories"}
-_SECURITY_CATEGORY_KEYS = {"label", "scope", "owner"}
+_SECURITY_CATEGORY_KEYS = {"label", "scope", "owner", "parent"}
 _ESCALATION_KEYS = {"from", "to", "condition", "cross_department"}
 _COMMUNICATION_KEYS = {
     "request_id_format",
@@ -515,6 +515,9 @@ def validate_shape(raw: dict) -> None:
             )
         _require_optional_type(
             cat.get("owner"), str, f"policies.security_categories.{cat_id}.owner"
+        )
+        _require_optional_type(
+            cat.get("parent"), str, f"policies.security_categories.{cat_id}.parent"
         )
 
     escalation = _require_list(raw["escalation_matrix"], "escalation_matrix")

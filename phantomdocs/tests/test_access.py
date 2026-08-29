@@ -118,6 +118,47 @@ def test_can_read_leaf_grants_own_subcategory(tmp_path):
     assert can_read(org, "alma", "category-4-proyecto2") is False
 
 
+def test_can_read_semantic_parent_overrides_prefix(tmp_path):
+    """Issue #100: an explicit `parent` field is the authority for the
+    hierarchy; the ``-``-prefix in an id is only canonical naming. Here
+    ``category-4-almaponia`` declares ``parent: category-3``, so a category-3
+    holder can read it while a category-4 (prefix) holder cannot."""
+    yaml = textwrap.dedent("""\
+        version: 1
+        policies:
+          access_levels:
+            level-2: { label: Operative, categories: [1, 2] }
+          security_categories:
+            category-1: { label: Public }
+            category-2: { label: Confidential }
+            category-3: { label: "Sensitive financial" }
+            category-4: { label: "Sensitive project", scope: project }
+            category-4-almaponia: { label: ALMAPONIA, scope: project, owner: almaponia, parent: category-3 }
+        roles:
+          - id: cfo
+            access_level: level-2
+            security_exceptions: [category-3]
+          - id: overseer
+            access_level: level-2
+            security_exceptions: [category-4]
+        actors:
+          - id: roberto
+            role: cfo
+            actor_exceptions: []
+          - id: pepa
+            role: overseer
+            actor_exceptions: []
+    """)
+    p = tmp_path / "org.yaml"
+    p.write_text(yaml, encoding="utf-8")
+    org = load_org(str(p))
+    # roberto holds category-3, the explicit parent of the leaf.
+    assert can_read(org, "roberto", "category-4-almaponia") is True
+    # pepa holds category-4, which is only a prefix-naming ancestor, not the
+    # declared parent — so the prefix must NOT grant.
+    assert can_read(org, "pepa", "category-4-almaponia") is False
+
+
 def test_can_write_requires_owners(tmp_path):
     org = _org(tmp_path)
     assert can_write(org, "roberto", 1) is False
