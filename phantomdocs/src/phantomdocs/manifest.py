@@ -24,6 +24,7 @@ from typing import Any
 
 import yaml
 
+from .fsutil import fsync_dir
 from .identity import is_valid_hex64
 from .signing import CRYPTO_VERSION
 
@@ -111,6 +112,7 @@ def save(path: str, data: dict[str, Any]) -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
+        fsync_dir(directory)
     except BaseException:
         try:
             os.unlink(tmp)

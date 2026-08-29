@@ -19,6 +19,8 @@ import tempfile
 import time
 from typing import Any
 
+from .fsutil import fsync_dir
+
 AUDIT_FILENAME = "audit.log"
 
 
@@ -232,6 +234,7 @@ def truncate(root: str, keep: int) -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
+        fsync_dir(directory)
     except BaseException:
         try:
             os.unlink(tmp)
