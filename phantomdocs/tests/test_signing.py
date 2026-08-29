@@ -163,7 +163,6 @@ actors:
 
 
 def test_add_signs_node_and_verify_accepts(tmp_path, nsec_file):
-
     nsec_path, pubkey, _secret = nsec_file
     org = tmp_path / "org.yaml"
     org.write_text(
@@ -636,3 +635,136 @@ def test_signed_tag_binds_ref_name_and_target(tmp_path, nsec_file):
     r = runner.invoke(main, ["verify", "--org-yaml", str(org), "--root", str(renamed)])
     assert r.exit_code != 0
     assert "ref signature invalid" in r.output
+
+
+def test_require_signatures_rejects_unsigned(tmp_path, nsec_file):
+    """Production profile (requireSignatures): unsigned mutation is rejected."""
+    nsec_path, pubkey, _secret = nsec_file
+    org = tmp_path / "org.yaml"
+    org.write_text(
+        ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey)))
+    )
+    doc = tmp_path / "report.txt"
+    doc.write_text("quarterly report")
+    runner = CliRunner()
+    r = runner.invoke(
+        main,
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--require-signatures",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    # Unsigned add must fail (fail-closed).
+    r = runner.invoke(
+        main,
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "report",
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code != 0
+    assert "requires signed mutations" in r.output
+    # Signed add succeeds.
+    r = runner.invoke(
+        main,
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "report",
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+
+def test_require_signatures_toggle_and_verify(tmp_path, nsec_file):
+    """`require-signatures on` flags an existing unsigned node at verify."""
+    _nsec_path, pubkey, _secret = nsec_file
+    org = tmp_path / "org.yaml"
+    org.write_text(
+        ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey)))
+    )
+    doc = tmp_path / "report.txt"
+    doc.write_text("quarterly report")
+    runner = CliRunner()
+    r = runner.invoke(
+        main,
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    # Add unsigned while the profile is off (legacy/development mode).
+    r = runner.invoke(
+        main,
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "report",
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    # Turn the production profile on.
+    r = runner.invoke(main, ["require-signatures", "on", "--root", str(tmp_path)])
+    assert r.exit_code == 0, r.output
+    assert "requireSignatures: on" in r.output
+    # verify now flags the unsigned node.
+    r = runner.invoke(main, ["verify", "--root", str(tmp_path)])
+    assert r.exit_code != 0
+    assert "unsigned mutation in a signatures-required namespace" in r.output
+    # And the toggle is durable: a fresh `verify` still fails.
+    r = runner.invoke(main, ["verify", "--root", str(tmp_path)])
+    assert r.exit_code != 0
+    # Turning it off restores legacy behavior.
+    r = runner.invoke(main, ["require-signatures", "off", "--root", str(tmp_path)])
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(main, ["verify", "--root", str(tmp_path)])
+    assert r.exit_code == 0, r.output

@@ -44,7 +44,9 @@ class ManifestError(ValueError):
     """Raised when a manifest fails validation."""
 
 
-def empty_manifest(org: str, namespace: str, root_mac: str) -> dict[str, Any]:
+def empty_manifest(
+    org: str, namespace: str, root_mac: str, require_signatures: bool = False
+) -> dict[str, Any]:
     """A fresh, valid single-tenant manifest.
 
     The header carries a monotonic mutation head (``headSeq``, the number of
@@ -72,6 +74,7 @@ def empty_manifest(org: str, namespace: str, root_mac: str) -> dict[str, Any]:
             "signedRootMac": None,
             "sealPubkey": None,
             "sealedHeadSeq": None,
+            "requireSignatures": require_signatures,
             "headSeq": 0,
             "headMac": root_mac,
             "auditSeq": 0,
@@ -190,6 +193,10 @@ def validate(data: dict[str, Any]) -> list[str]:
         m.get("sealedHeadSeq"), int
     ):
         errors.append("manifest.sealedHeadSeq must be an integer")
+    if m.get("requireSignatures") is not None and not isinstance(
+        m.get("requireSignatures"), bool
+    ):
+        errors.append("manifest.requireSignatures must be a boolean")
     for field in ("headMac", "sealPubkey"):
         value = m.get(field)
         if value is not None and (

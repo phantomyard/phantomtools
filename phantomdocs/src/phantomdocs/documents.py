@@ -328,6 +328,24 @@ class DocumentService:
                 f"clean crash; refusing to commit: {exc}"
             ) from exc
 
+    def _enforce_signing_required(self, repo: ManifestRepository) -> None:
+        """Reject unsigned mutations when the namespace requires signatures.
+
+        A production security profile (``manifest.requireSignatures=true``)
+        demands an actor signature on every mutation. Without a configured
+        signing key the mutation would be committed unsigned, so it is refused
+        fail-closed here. Unsigned/legacy operation remains available only
+        while the flag is unset — the explicit compatibility/development mode.
+        """
+        header = repo.data["manifest"]
+        if header.get("requireSignatures") and not self.nsec:
+            raise DocumentError(
+                "denied: this namespace requires signed mutations "
+                "(manifest.requireSignatures=true) but no signing key is "
+                "configured; pass --nsec-file or set PHANTOMDOCS_NSEC, or run "
+                "`pd require-signatures off` to leave production mode"
+            )
+
     def _next_head(self, repo: ManifestRepository) -> tuple[int, str]:
         """The ``(seq, prev_head)`` a new mutation binds to (issue #73).
 
@@ -340,6 +358,7 @@ class DocumentService:
         signed envelope makes a replay or an out-of-order re-insertion fail
         to verify.
         """
+        self._enforce_signing_required(repo)
         self._reconcile_audit(repo)
         m = repo.data["manifest"]
         prev_head = m.get("headMac") or m["rootMac"]

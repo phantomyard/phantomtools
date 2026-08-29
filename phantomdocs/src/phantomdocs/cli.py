@@ -221,8 +221,21 @@ def _org_pubkey_hex(pubkey: str) -> str:
 @click.option("--org", required=True, help="Organization id (from org.yaml).")
 @click.option("--namespace", default="docs", show_default=True, help="Namespace name.")
 @click.option("--org-pubkey", default="", help="Org Nostr pubkey for the root MAC.")
+@click.option(
+    "--require-signatures",
+    is_flag=True,
+    default=False,
+    help="Production security profile: reject unsigned mutations (see "
+    "`pd require-signatures`).",
+)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def init(org: str, namespace: str, org_pubkey: str, root: str) -> None:
+def init(
+    org: str,
+    namespace: str,
+    org_pubkey: str,
+    require_signatures: bool,
+    root: str,
+) -> None:
     """Create a new namespace: manifest + local blob store."""
     _validate_slug(namespace, "namespace")
     path = _manifest_path(root)
@@ -243,7 +256,7 @@ def init(org: str, namespace: str, org_pubkey: str, root: str) -> None:
         None,
         seq=0,
     )
-    data = empty_manifest(org, namespace, mac)
+    data = empty_manifest(org, namespace, mac, require_signatures=require_signatures)
     data["manifest"]["auditSeq"] = 1
     data["manifest"]["auditHead"] = line_hash
     save(path, data)
@@ -542,6 +555,7 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
     # key *at the mutation timestamp* — honoring rotation windows and
     # revocations (issue #76), not merely "some current declared key".
     org_model = load_org(org_yaml) if org_yaml else None
+    require_sig = bool(manifest.get("manifest", {}).get("requireSignatures"))
 
     failures = 0
     for node in manifest.get("nodes", []):
@@ -630,7 +644,12 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                 f"(supported: v{CRYPTO_VERSION})"
             )
 
-        if sig is not None or sig_pubkey is not None:
+        if require_sig and sig is None and sig_pubkey is None:
+            issues.append(
+                "unsigned mutation in a signatures-required namespace "
+                "(manifest.requireSignatures=true)"
+            )
+        elif sig is not None or sig_pubkey is not None:
             if not sig or not sig_pubkey:
                 issues.append("incomplete mutation signature")
             elif not unsupported_node_crypto:
@@ -704,7 +723,12 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                     f"unsupported crypto version {ref_crypto!r} "
                     f"(supported: v{CRYPTO_VERSION})"
                 )
-            if (sig is None) != (sig_pubkey is None):
+            if require_sig and sig is None and sig_pubkey is None:
+                issues.append(
+                    "unsigned tag in a signatures-required namespace "
+                    "(manifest.requireSignatures=true)"
+                )
+            elif (sig is None) != (sig_pubkey is None):
                 issues.append("incomplete ref signature")
             elif sig is not None and not unsupported_ref_crypto:
                 envelope = mutation_envelope(
@@ -1039,6 +1063,28 @@ def seal(nsec_file, root):
     save(path, data)
     click.echo(f"sealed {m['org']}/{m['namespace']} at headSeq {m['sealedHeadSeq']}")
     click.echo(f"  seal pubkey {pubkey}")
+
+
+@main.command("require-signatures")
+@click.argument("mode", type=click.Choice(["on", "off"], case_sensitive=False))
+@click.option("--root", default=".", show_default=True, help="Local backend root.")
+def require_signatures(mode, root):
+    """Set the namespace signing profile (production security mode).
+
+    ``on`` — production profile: every mutation must carry a valid actor
+    signature; an unsigned mutation is rejected fail-closed and ``pd verify``
+    flags any unsigned node or ref. ``off`` — legacy/development profile:
+    signing is optional and unsigned mutations are accepted (v1 behavior).
+
+    The setting is recorded in the manifest header (``requireSignatures``),
+    so it persists for the namespace and is enforced by every mutating
+    command and by ``verify``.
+    """
+    path = _manifest_path(root)
+    data = _load_or_die(root)
+    data["manifest"]["requireSignatures"] = mode == "on"
+    save(path, data)
+    click.echo(f"requireSignatures: {mode}")
 
 
 @main.command("recover")
