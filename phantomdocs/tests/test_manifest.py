@@ -161,3 +161,31 @@ def test_ref_bare_mac_accepted():
     data = _valid_manifest()
     data["refs"]["latest"] = data["nodes"][1]["mac"]
     assert manifest.validate(data) == []
+
+
+def test_structural_issues_flags_parent_mac_disagreement():
+    """Versions of one URN must share a single tree position (parentMac)."""
+    data = _valid_manifest()
+    root = data["manifest"]["rootMac"]
+    v1 = data["nodes"][1]
+    v2 = dict(v1)
+    v2["mac"] = "b" * 64
+    v2["parentMac"] = root  # different tree position than v1's folder
+    v2["contentHash"] = identity.content_hash(b"other")
+    v2["previous"] = v1["mac"]
+    data["nodes"].append(v2)
+    issues = manifest.structural_issues(data)
+    assert any("disagree on parentMac" in i for i in issues)
+
+
+def test_structural_issues_parent_mac_agreement_ok():
+    """Two versions sharing a parentMac produce no tree-position issue."""
+    data = _valid_manifest()
+    v1 = data["nodes"][1]
+    v2 = dict(v1)
+    v2["mac"] = "c" * 64
+    v2["contentHash"] = identity.content_hash(b"other")
+    v2["previous"] = v1["mac"]
+    data["nodes"].append(v2)
+    issues = manifest.structural_issues(data)
+    assert not any("disagree on parentMac" in i for i in issues)

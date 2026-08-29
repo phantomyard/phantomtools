@@ -47,11 +47,19 @@ class ManifestError(ValueError):
 def empty_manifest(org: str, namespace: str, root_mac: str) -> dict[str, Any]:
     """A fresh, valid single-tenant manifest.
 
-    The header carries a monotonic mutation head (``headSeq``/``headMac``)
-    and an audit-log head (``auditSeq``/``auditHead``) so that `pd verify`
-    can detect a mutation whose manifest commit and audit entry diverged
-    (crash between the two) and an audit log that has been truncated or
-    rolled back relative to the manifest (issues #71/#74).
+    The header carries a monotonic mutation head (``headSeq``, the number of
+    committed mutations) and a structural node head (``headMac``, the MAC of
+    the last committed node), plus an audit-log head (``auditSeq`` /
+    ``auditHead``) so that `pd verify` can detect a mutation whose manifest
+    commit and audit entry diverged (crash between the two) and an audit log
+    that has been truncated or rolled back relative to the manifest (issues
+    #71/#74).
+
+    ``headSeq`` and ``auditHead`` advance on *every* mutation (including
+    ``tag``); ``headMac`` advances only on node-producing mutations
+    (``mkdir``/``add``/``version``/``rollback``), because a tag creates no
+    node. The canonical identity of the last mutation is ``auditHead`` (the
+    hash of its audit entry).
     """
     return {
         "manifest": {
@@ -377,7 +385,10 @@ def structural_issues(data: dict[str, Any]) -> list[str]:
     - version lineage: for each URN, versions form a strictly linear chain —
       the first version has no ``previous`` and every later version's
       ``previous`` is the immediately preceding version's MAC (no cross-URN
-      links, no skips, no cycles).
+      links, no skips, no cycles);
+    - tree-position stability: every version of a URN must share the same
+      ``parentMac`` — a location change is a separate, explicit move, never a
+      silent side effect of versioning.
 
     Returns one human-readable string per problem.
     """
@@ -411,6 +422,15 @@ def structural_issues(data: dict[str, Any]) -> list[str]:
         if node.get("kind") == "doc":
             by_urn.setdefault(node["urn"], []).append(node)
     for urn, versions in by_urn.items():
+        # Tree-position stability: all versions of a URN must share one
+        # parentMac. A change of location is a separate, explicit move
+        # operation, never a silent side effect of versioning.
+        parent_macs = {v.get("parentMac") for v in versions}
+        if len(parent_macs) > 1:
+            issues.append(
+                f"{urn}: versions disagree on parentMac — all versions must "
+                "share one tree position"
+            )
         for index, version in enumerate(versions):
             previous = version.get("previous")
             if index == 0:
@@ -440,13 +460,15 @@ def ref_target_mac(value: Any) -> str | None:
 def mutation_sequence_issues(data: dict[str, Any]) -> list[str]:
     """Mutation-sequence integrity problems (issue #73), or empty.
 
-    Each mutation binds a monotonic ``seq`` and a ``prevHead`` (the committed
-    head MAC it builds on) into its signed envelope. verify checks:
+    Each mutation binds a monotonic ``seq`` and a ``prevHead`` (the last
+    committed node's MAC it builds on) into its signed envelope. verify
+    checks:
 
     - node ``seq`` is strictly increasing (no replay, duplicate or reorder);
     - node ``prevHead`` equals the previous node's MAC (or ``rootMac`` for the
       first), so a node re-inserted after a rollback fails;
-    - ``manifest.headMac`` equals the last node's MAC;
+    - ``manifest.headMac`` equals the last node's MAC (the structural node
+      head), so deleting the latest node is detected;
     - ``manifest.headSeq`` is not lower than the last node's ``seq``.
 
     Returns one human-readable string per problem.
@@ -484,7 +506,8 @@ def mutation_sequence_issues(data: dict[str, Any]) -> list[str]:
             )
         prev_mac = node.get("mac", prev_mac)
 
-    # 3. The manifest head must agree with the last node.
+    # 3. The structural node head must agree with the last node (so deleting
+    # the latest node is detected even when the seal/audit anchors are intact).
     header = data["manifest"]
     head_mac = header.get("headMac")
     if head_mac and nodes:

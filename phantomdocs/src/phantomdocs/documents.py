@@ -25,6 +25,9 @@ from typing import Any
 
 from .access import can_write, key_valid_now, load_org, normalize_category
 from .audit import append as audit_append
+from .audit import head as audit_head
+from .audit import max_seq as audit_max_seq
+from .audit import reconcile as audit_reconcile
 from .identity import component_for_folder, content_hash, doc_version_mac, node_mac
 from .manifest import (
     MANIFEST_FILENAME,
@@ -259,16 +262,30 @@ class DocumentService:
 
         Ordering (issue #74): the audit entry is written *first*, then the
         manifest is committed with the audit head anchor (``auditSeq`` +
-        ``auditHead``) and the monotonic mutation head (``headSeq`` +
-        ``headMac``). A crash between the two leaves the audit one entry
-        ahead of the manifest — a *detectable* state `verify` flags — instead
-        of a committed mutation with no matching audit entry (lost evidence).
+        ``auditHead``) and the mutation head (``headSeq`` + ``headMac``). A
+        crash between the two leaves the audit one entry ahead of the manifest
+        — a *detectable* state `verify` flags and `recover`/the next mutation
+        re-aligns — instead of a committed mutation with no matching audit
+        entry (lost evidence).
 
         ``seq`` is the monotonic mutation sequence this commit advances the
-        head to (issue #73); the caller computes it from the current head
-        before signing, so the signed envelope and the committed head agree.
+        head to (issue #73); the caller computes it from the durable audit
+        head before signing, so the signed envelope and the committed head
+        agree. The audit counter (``auditSeq``) is derived from the durable
+        log's entry count — never from the manifest — so a crash can never
+        produce a duplicate or re-used sequence number.
+
+        ``head_mac`` is the MAC of the node a mutation produces (or None for
+        ``tag``, which creates no node); it advances ``manifest.headMac`` (the
+        structural node head), distinct from ``headSeq`` (mutation counter)
+        and ``auditHead`` (canonical mutation identity).
         """
-        audit_seq = int(repo.data["manifest"].get("auditSeq") or 0) + 1
+        # Derive the next audit sequence from the durable log (authoritative),
+        # not from the manifest: a crash between a prior append and its
+        # manifest commit leaves the log ahead, and re-deriving from the
+        # manifest would reuse a number (issue #74).
+        audit_count, _ = audit_head(self.root)
+        audit_seq = audit_count + 1
         line_hash = audit_append(
             self.root,
             self.actor_id,
@@ -288,17 +305,47 @@ class DocumentService:
         m["auditHead"] = line_hash
         save(_manifest_path(self.root), repo.data)
 
+    def _reconcile_audit(self, repo: ManifestRepository) -> None:
+        """Re-align the audit log with the manifest after a crash (issue #74).
+
+        Before computing the next head, discard any orphaned audit tail —
+        entries appended by a mutation whose manifest commit never landed — so
+        the next mutation starts from a clean, strictly-monotonic sequence.
+        Any divergence that is not a clean crash (broken chain, log behind the
+        manifest, an orphan that does not chain off the recorded head) raises
+        :class:`DocumentError` fail-closed.
+        """
+        m = repo.data["manifest"]
+        try:
+            audit_reconcile(
+                self.root,
+                int(m.get("auditSeq") or 0),
+                m.get("auditHead"),
+            )
+        except ValueError as exc:
+            raise DocumentError(
+                "audit log diverges from the manifest in a way that is not a "
+                f"clean crash; refusing to commit: {exc}"
+            ) from exc
+
     def _next_head(self, repo: ManifestRepository) -> tuple[int, str]:
         """The ``(seq, prev_head)`` a new mutation binds to (issue #73).
 
-        ``seq`` is the current head sequence + 1; ``prev_head`` is the
-        committed head MAC (``headMac``, falling back to ``rootMac`` before
-        the first mutation). Binding these into the signed envelope makes a
-        replay or an out-of-order re-insertion fail to verify.
+        ``prev_head`` is the structural node head (``headMac``, the last
+        committed node's MAC, falling back to ``rootMac`` before the first
+        mutation) — the *node* chain a mutation builds on. ``seq`` is derived
+        from the durable audit log's authoritative counter (falling back to
+        the manifest), so the mutation sequence is strictly monotonic even
+        after a crash that orphaned an audit entry. Binding these into the
+        signed envelope makes a replay or an out-of-order re-insertion fail
+        to verify.
         """
+        self._reconcile_audit(repo)
         m = repo.data["manifest"]
         prev_head = m.get("headMac") or m["rootMac"]
-        seq = int(m.get("headSeq") or 0) + 1
+        audit_max = audit_max_seq(self.root) or 0
+        manifest_seq = int(m.get("headSeq") or 0)
+        seq = max(audit_max, manifest_seq) + 1
         return seq, prev_head
 
     def _load_repo(self) -> ManifestRepository:
@@ -453,6 +500,19 @@ class DocumentService:
             if existing is not None and existing.get("contentHash") == ch:
                 return {"unchanged": True, "urn": urn}
             previous = existing["mac"] if existing is not None else None
+            # Tree-position stability: every version of a URN must share one
+            # parentMac. When versioning, the tree position is owned by the
+            # existing document, not by the CLI --folder argument, so the
+            # parent is derived from the existing node and a --folder naming a
+            # different parent is rejected (a move is a separate operation).
+            if existing is not None:
+                if parent_mac != existing["parentMac"]:
+                    raise DocumentError(
+                        f"denied: cannot move {urn} via add; --folder names a "
+                        "different parent than the existing version (move is a "
+                        "separate operation)"
+                    )
+                parent_mac = existing["parentMac"]
             # Version identity binds the predecessor (issue #44): the first
             # version chains off the tree parent; later versions chain off the
             # previous version, so the history is cryptographically chained and

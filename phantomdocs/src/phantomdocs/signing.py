@@ -267,10 +267,12 @@ def seal_envelope(
 ) -> bytes:
     """The canonical bytes the org signs to seal the namespace head.
 
-    Covers the root MAC **and** the monotonic head state (issues #70/#71), so
-    a forged root, a deleted version, a rolled-back head, or a truncated audit
-    log all change the envelope and invalidate the seal — which only the org
-    (holder of the org key) can re-make.
+    Covers the root MAC **and** the head state (issues #70/#71): ``head_seq``
+    (mutation counter), ``head_mac`` (structural node head), ``audit_seq`` /
+    ``audit_head`` (audit-log anchor). A forged root, a deleted version, a
+    rolled-back head, or a truncated audit log all change the envelope and
+    invalidate the seal — which only the org (holder of the org key) can
+    re-make.
     """
     payload = {
         "audit_head": audit_head or "",

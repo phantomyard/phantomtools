@@ -164,6 +164,76 @@ def test_audit_ahead_of_manifest_detected(tmp_path):
     assert "entries found" in r.output
 
 
+def test_retry_after_crash_does_not_duplicate_seq(tmp_path):
+    """A crash between the audit append and the manifest commit must not make
+    a subsequent retry reuse the mutation sequence number (issue #74).
+
+    The next mutation reconciles the orphaned audit tail (discarding it) and
+    derives its sequence from the durable audit head, so the audit log stays
+    strictly monotonic — never ``0, 1, 2, 2`` — and the namespace verifies
+    cleanly after the retry.
+    """
+    root, org = _init(tmp_path)
+    for name in ("a.txt", "b.txt"):
+        doc = tmp_path / name
+        doc.write_text(f"content {name}", encoding="utf-8")
+        assert (
+            _run(
+                [
+                    "add",
+                    str(doc),
+                    "--slug",
+                    name,
+                    "--owners",
+                    "cfo",
+                    "--org-yaml",
+                    org,
+                    "--root",
+                    root,
+                ]
+            ).exit_code
+            == 0
+        )
+
+    # After init + 2 adds: headSeq == 2, auditSeq == 3.
+    data = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    assert data["manifest"]["headSeq"] == 2
+    assert data["manifest"]["auditSeq"] == 3
+
+    # Simulate the crash: a mutation appended its audit entry (seq=3) but the
+    # manifest commit never landed, leaving the log one entry ahead.
+    audit_mod.append(
+        root, "roberto", "add", "urn:demo:doc:ghost", "ab" * 32, None, seq=3
+    )
+    assert audit_mod.max_seq(root) == 3
+
+    # The retry must reconcile the orphan and produce a strictly monotonic log.
+    doc = tmp_path / "c.txt"
+    doc.write_text("content c.txt", encoding="utf-8")
+    assert (
+        _run(
+            [
+                "add",
+                str(doc),
+                "--slug",
+                "c.txt",
+                "--owners",
+                "cfo",
+                "--org-yaml",
+                org,
+                "--root",
+                root,
+            ]
+        ).exit_code
+        == 0
+    )
+
+    # No duplicate sequence: contiguous 0..3, and verify passes.
+    assert audit_mod.sequence_issues(root) == []
+    assert audit_mod.max_seq(root) == 3
+    assert _run(["verify", "--root", root]).exit_code == 0
+
+
 def test_concurrent_adds_keep_audit_chain_intact(tmp_path):
     """Concurrent `pd add` must not break the audit `prev` chain (issue #74:
     audit append was previously outside the manifest lock)."""

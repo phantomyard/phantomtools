@@ -6,7 +6,6 @@ audit · derive-manifest · status · update.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
@@ -25,10 +24,9 @@ from .access import (
 from .audit import append as audit_append
 from .audit import head as audit_head
 from .audit import max_seq as audit_max_seq
-from .audit import raw_lines as audit_raw_lines
 from .audit import read as audit_read
+from .audit import reconcile as audit_reconcile
 from .audit import sequence_issues as audit_sequence_issues
-from .audit import truncate as audit_truncate
 from .audit import verify_chain as audit_verify_chain
 from .derive import derive_manifest as derive_from_org
 from .documents import DocumentError, DocumentService
@@ -1004,8 +1002,8 @@ def audit(limit, root):
 def seal(nsec_file, root):
     """Seal the namespace head with the org key (issues #70/#71).
 
-    Signs the root MAC together with the monotonic head (``headSeq``,
-    ``headMac``, ``auditSeq``, ``auditHead``) and records the signature
+    Signs the root MAC together with the head (``headSeq``, ``headMac``,
+    ``auditSeq``, ``auditHead``) and records the signature
     (``signedRootMac``), the org pubkey (``sealPubkey``) and the sealed head
     sequence (``sealedHeadSeq``) in the manifest header. ``verify
     --org-pubkey`` then checks the seal, so a forged root, a deleted version,
@@ -1064,54 +1062,22 @@ def recover(root):
             "manifest has no auditSeq anchor; nothing to recover"
         )
 
-    problems = audit_verify_chain(root)
-    if problems:
+    try:
+        discarded = audit_reconcile(root, int(expected), header.get("auditHead"))
+    except ValueError as exc:
         raise click.ClickException(
-            "audit hash chain is broken (tampering, not a crash); "
-            "refusing to recover:\n  " + "\n  ".join(problems)
+            "refusing to recover (tampering, not a crash): " + str(exc)
         )
 
-    actual_count, _actual_head = audit_head(root)
-    expected_head = header.get("auditHead")
-
-    if actual_count == expected:
-        lines = audit_raw_lines(root)
-        if expected_head is not None and (
-            not lines or hashlib.sha256(lines[-1]).hexdigest() != expected_head
-        ):
-            raise click.ClickException(
-                "audit count matches but the head hash does not (tampering); "
-                "refusing to recover"
-            )
+    if discarded == 0:
         click.echo("nothing to recover: audit log is consistent with the manifest")
-        return
-
-    if actual_count < expected:
-        raise click.ClickException(
-            f"audit log is missing {expected - actual_count} entries relative to "
-            "the manifest — evidence of tampering or manual edits, not a crash; "
-            "refusing to recover"
+    else:
+        click.echo(
+            f"discarded {discarded} orphaned audit "
+            f"entr{'y' if discarded == 1 else 'ies'} "
+            f"(mutation{'s' if discarded != 1 else ''} committed to the audit log "
+            f"but not the manifest)"
         )
-
-    # Audit ahead of manifest: verify the kept prefix matches the recorded head.
-    lines = audit_raw_lines(root)
-    if (
-        expected > 0
-        and expected_head is not None
-        and hashlib.sha256(lines[expected - 1]).hexdigest() != expected_head
-    ):
-        raise click.ClickException(
-            "orphaned audit tail does not chain cleanly off the manifest's "
-            "recorded head; refusing to recover (tampering?)"
-        )
-    discarded = actual_count - expected
-    audit_truncate(root, expected)
-    click.echo(
-        f"discarded {discarded} orphaned audit "
-        f"entr{'y' if discarded == 1 else 'ies'} "
-        f"(mutation{'s' if discarded != 1 else ''} committed to the audit log "
-        f"but not the manifest)"
-    )
 
 
 @main.command("derive-manifest")
