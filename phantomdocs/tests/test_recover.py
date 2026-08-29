@@ -8,8 +8,10 @@ is refused fail-closed.
 """
 
 import json
+import os
 
 import coincurve
+import pytest
 import yaml
 from click.testing import CliRunner
 
@@ -161,3 +163,39 @@ def test_recover_refuses_head_mismatch(tmp_path):
     r = runner.invoke(main, ["recover", "--root", root])
     assert r.exit_code != 0
     assert "refusing to recover" in r.output
+
+
+def test_truncate_is_atomic_replace(tmp_path, monkeypatch):
+    """truncate rewrites via temp-file → fsync → atomic replace (audit #2).
+
+    A crash mid-rewrite must not corrupt or shorten the audit log beyond the
+    intended ``keep`` prefix: the original file stays intact until the whole
+    replacement is written and fsynced, and no stray temp file is left behind.
+    """
+    root, _org, _runner = _setup(tmp_path, n_docs=2)
+    audit_path = tmp_path / "audit.log"
+    before = audit_path.read_bytes()
+    keep = len(audit.raw_lines(root)) - 1  # drop the last line
+
+    # Simulate a crash *inside* the atomic replace: make os.replace raise, so
+    # the temp file is written but never swaps in. The original must survive
+    # byte-for-byte and no .audit-*.tmp leftover may remain.
+    real_replace = os.replace
+
+    def _boom(src, dst):
+        raise OSError("simulated power loss during replace")
+
+    monkeypatch.setattr(os, "replace", _boom)
+    with pytest.raises(OSError):
+        audit.truncate(root, keep)
+    monkeypatch.setattr(os, "replace", real_replace)
+
+    assert audit_path.read_bytes() == before
+    leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith(".audit-")]
+    assert leftovers == []
+
+    # A successful truncate keeps exactly `keep` lines and leaves no temp file.
+    audit.truncate(root, keep)
+    assert len(audit.raw_lines(root)) == keep
+    leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith(".audit-")]
+    assert leftovers == []

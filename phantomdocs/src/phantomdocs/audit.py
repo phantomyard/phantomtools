@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 import time
 from typing import Any
 
@@ -223,5 +224,17 @@ def truncate(root: str, keep: int) -> None:
     """
     path = os.path.join(root, AUDIT_FILENAME)
     lines = raw_lines(root)
-    with open(path, "wb") as f:
-        f.writelines(lines[:keep])
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".audit-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.writelines(lines[:keep])
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
