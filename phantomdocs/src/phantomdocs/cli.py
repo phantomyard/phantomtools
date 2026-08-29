@@ -20,6 +20,7 @@ from .access import (
     resolved_categories,
 )
 from .audit import append as audit_append
+from .audit import head as audit_head
 from .audit import read as audit_read
 from .audit import verify_chain as audit_verify_chain
 from .derive import derive_manifest as derive_from_org
@@ -208,15 +209,22 @@ def init(org: str, namespace: str, org_pubkey: str, root: str) -> None:
     mac = root_mac(org, org_pubkey, namespace)
     os.makedirs(root, exist_ok=True)
     os.makedirs(os.path.join(root, "blobs"), exist_ok=True)
-    save(path, empty_manifest(org, namespace, mac))
-    _audit(
+    # Audit-first ordering (issue #74): write the init audit entry, then
+    # commit the manifest with the audit head recorded, so the manifest never
+    # claims an audit history the log does not actually contain.
+    line_hash = audit_append(
         root,
         _resolve_actor(None) or "phantom",
         "init",
         f"urn:{org}:namespace:{namespace}",
         mac,
         None,
+        seq=0,
     )
+    data = empty_manifest(org, namespace, mac)
+    data["manifest"]["auditSeq"] = 1
+    data["manifest"]["auditHead"] = line_hash
+    save(path, data)
     click.echo(f"initialized {org}/{namespace}")
     click.echo(f"  root MAC  {full_id(mac)}")
     click.echo(f"  manifest  {path}")
@@ -654,6 +662,26 @@ def verify(backend, org_yaml, root):
     for problem in audit_problems:
         failures += 1
         click.echo(f"FAIL audit: {problem}")
+
+    # Audit head anchor (issue #74): the manifest records the expected audit
+    # entry count and last-line hash. A crash between the audit append and the
+    # manifest commit, or a truncated/rolled-back audit log, makes the actual
+    # log diverge from the record — which must be reported, not silently
+    # accepted.
+    manifest_header = manifest.get("manifest", {})
+    expected_seq = manifest_header.get("auditSeq")
+    expected_head = manifest_header.get("auditHead")
+    if expected_seq is not None:
+        actual_count, actual_head = audit_head(root)
+        if actual_count != expected_seq:
+            failures += 1
+            click.echo(
+                f"FAIL audit: {actual_count} entries found, "
+                f"manifest expects {expected_seq}"
+            )
+        if expected_head is not None and actual_head != expected_head:
+            failures += 1
+            click.echo("FAIL audit: head hash does not match manifest.auditHead")
 
     if failures:
         raise click.ClickException(f"{failures} node(s) failed verification")

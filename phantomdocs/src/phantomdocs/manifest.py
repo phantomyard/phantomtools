@@ -44,7 +44,14 @@ class ManifestError(ValueError):
 
 
 def empty_manifest(org: str, namespace: str, root_mac: str) -> dict[str, Any]:
-    """A fresh, valid single-tenant manifest."""
+    """A fresh, valid single-tenant manifest.
+
+    The header carries a monotonic mutation head (``headSeq``/``headMac``)
+    and an audit-log head (``auditSeq``/``auditHead``) so that `pd verify`
+    can detect a mutation whose manifest commit and audit entry diverged
+    (crash between the two) and an audit log that has been truncated or
+    rolled back relative to the manifest (issues #71/#74).
+    """
     return {
         "manifest": {
             "version": MANIFEST_VERSION,
@@ -53,6 +60,10 @@ def empty_manifest(org: str, namespace: str, root_mac: str) -> dict[str, Any]:
             "tenant": "single",
             "rootMac": root_mac,
             "signedRootMac": None,
+            "headSeq": 0,
+            "headMac": root_mac,
+            "auditSeq": 0,
+            "auditHead": None,
         },
         "refs": {},
         "nodes": [],
@@ -148,6 +159,18 @@ def validate(data: dict[str, Any]) -> list[str]:
         errors.append("multi-tenancy is not supported in this version")
     if not m.get("org"):
         errors.append("manifest.org is required")
+    # Head/anchor fields are optional (older manifests lack them) but, when
+    # present, must have the right shape so verify can trust them.
+    if m.get("headSeq") is not None and not isinstance(m.get("headSeq"), int):
+        errors.append("manifest.headSeq must be an integer")
+    if m.get("auditSeq") is not None and not isinstance(m.get("auditSeq"), int):
+        errors.append("manifest.auditSeq must be an integer")
+    for field in ("headMac",):
+        value = m.get(field)
+        if value is not None and (
+            not isinstance(value, str) or not is_valid_hex64(value)
+        ):
+            errors.append(f"manifest.{field} must be a 64-hex string")
     root_mac = m.get("rootMac")
     if not root_mac:
         errors.append("manifest.rootMac is required")

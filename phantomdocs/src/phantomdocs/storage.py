@@ -71,9 +71,25 @@ class LocalBackend:
     def put(self, content_hash: str, data: bytes) -> str:
         path = self.blob_path(content_hash)
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        if not os.path.exists(path):
-            with open(path, "wb") as f:
+        if os.path.exists(path):
+            return path
+        # Atomic write (issue #74): a unique temp file, fsync'd and renamed
+        # into place, so a crash never leaves a partial blob visible under
+        # its content address.
+        directory = os.path.dirname(path)
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".blob-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
                 f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
         return path
 
     def get(self, content_hash: str) -> bytes:
