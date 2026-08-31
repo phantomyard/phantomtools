@@ -6,6 +6,8 @@ the actor at mutation time. These tests try to bypass the boundary and assert
 it holds.
 """
 
+import os
+
 import coincurve
 import pytest
 
@@ -145,6 +147,7 @@ def test_random_nsec_cannot_sign_as_declared_actor(tmp_path):
     org_path = _write_org(tmp_path, GOOD_ORG.replace("NPUB_PLACEHOLDER", _npub(pubkey)))
     nsec_path = tmp_path / "nsec.txt"
     nsec_path.write_text(secret, encoding="utf-8")
+    os.chmod(nsec_path, 0o600)
 
     # The honest actor's own key binds and signs fine.
     svc = DocumentService(root, org_path, "paco", str(nsec_path))
@@ -162,6 +165,7 @@ def test_random_nsec_cannot_sign_as_declared_actor(tmp_path):
     other_secret = coincurve.PrivateKey().secret.hex()
     other_nsec = tmp_path / "other.nsec"
     other_nsec.write_text(other_secret, encoding="utf-8")
+    os.chmod(other_nsec, 0o600)
     with pytest.raises(DocumentError, match="declared npub"):
         DocumentService(root, org_path, "paco", str(other_nsec))
 
@@ -193,5 +197,6 @@ actors:
     secret = coincurve.PrivateKey().secret.hex()
     nsec_path = tmp_path / "nsec.txt"
     nsec_path.write_text(secret, encoding="utf-8")
+    os.chmod(nsec_path, 0o600)
     with pytest.raises(DocumentError, match="no declared npub"):
         DocumentService(root, org_path, "paco", str(nsec_path))

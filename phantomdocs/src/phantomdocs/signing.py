@@ -166,6 +166,7 @@ def mutation_envelope(
     ref: str | None = None,
     seq: int | None = None,
     prev_head: str | None = None,
+    ts: str | None = None,
 ) -> bytes:
     """The canonical bytes signed for a mutation (issue #30 v2, #73).
 
@@ -186,6 +187,10 @@ def mutation_envelope(
     mutation whose signature was produced for an older state (a replay, or a
     re-insertion after rollback) no longer verifies against the current
     state, because its ``seq``/``prev_head`` do not match the chain.
+
+    ``ts`` (ISO-8601 UTC) is the mutation timestamp, bound so that key
+    rotation/revocation (issue #76) can be evaluated against the point in
+    time the mutation was authorized, not the point verify happens to run.
     """
     payload = {
         "actor": actor,
@@ -202,6 +207,8 @@ def mutation_envelope(
         payload["seq"] = seq
     if prev_head is not None:
         payload["prev_head"] = prev_head
+    if ts is not None:
+        payload["ts"] = ts
     return json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode("utf-8")

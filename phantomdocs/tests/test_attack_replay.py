@@ -8,6 +8,8 @@ mutation authorized for an *older* committed state no longer verifies against
 the current one.
 """
 
+import os
+
 import coincurve
 import yaml
 from click.testing import CliRunner
@@ -61,6 +63,7 @@ def _setup(tmp_path):
     )
     nsec = tmp_path / "nsec.txt"
     nsec.write_text(secret)
+    os.chmod(nsec, 0o600)  # issue #76: signing keys must be private
     runner = CliRunner()
     r = runner.invoke(
         main,

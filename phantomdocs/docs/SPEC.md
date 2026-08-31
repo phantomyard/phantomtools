@@ -215,6 +215,23 @@ add multi-tenancy without breaking the schema. If a manifest declares
 operate (fail-closed). The architecture leaves the slot for v2; the capability
 is simply not advertised as available.
 
+### 6.2 Root + head seal (external trust anchor, issues #70/#71)
+
+`verify()` alone proves *internal* consistency (MAC chains, hash lineage,
+audit hash chain), not that the root is authentic — an attacker with manifest
+write access can forge the root and recompute descendants. PhantomDocs adds an
+external anchor sealed by the **org key**:
+
+- `pd seal --nsec-file <org.nsec>` signs a **head commitment** — `rootMac`,
+  `headSeq`, `headMac`, `auditSeq`, `auditHead` — with the org's nsec. The
+  result is stored in the manifest header (`sealPubkey`, `sealedHeadSeq`, …).
+- `pd verify --org-pubkey <npub|hex>` recomputes `rootMac = H(org_pubkey ||
+  namespace)` and verifies the seal, so a forged root (recomputed descendants
+  included) no longer verifies.
+- `pd verify --expected-head-seq <n>` supplies an external *known-current*
+  sequence: a complete rollback of the namespace to an earlier head is
+  detected even if the attacker re-seals.
+
 ## 7. Naming convention
 
 Deterministic, human-readable and bot-parseable:
@@ -350,6 +367,39 @@ guarantees, and only one of them is cryptographically enforced.
   actor). `pd verify --org-yaml` validates each signed ref over the current
   ref name + target MAC, so a ref renamed or repointed after tagging fails
   verification.
+
+  **Mutation timestamp + key lifecycle (issue #76).** The canonical envelope
+  also binds a `ts` (ISO-8601 UTC) — the moment the mutation was authorized —
+  recorded on the node/ref. Combined with the actor's **key registry** in
+  `org.yaml`, this gives rotation and revocation:
+
+  ```yaml
+  actors:
+    - id: alice
+      role: ceo
+      npub: npub_current        # active signing key
+      keys:                     # optional: full key lifecycle
+        - npub: npub_old
+          valid_from: "2026-01-01T00:00:00Z"   # optional
+          valid_until: "2026-06-01T00:00:00Z"  # optional
+          revoked_at: null                     # set to a timestamp to revoke
+      actor_exceptions: []
+  ```
+
+  - **Rotation** — an actor declares a dated window (`valid_from`/
+    `valid_until`) per key; `verify --org-yaml` evaluates the signature key
+    against the window *at the node's `ts`*, so rotating to a new `npub` does
+    not retroactively invalidate history signed with the old key.
+  - **Revocation** — `revoked_at` marks a key invalid from that timestamp on;
+    signatures made before it still verify, after it fail. A revoked key also
+    cannot sign new mutations (the service rejects it at mutation time).
+  - **Legacy nodes (pre-#76)** — a signed node with no `ts` is still verified:
+    the rotation window cannot be evaluated, so the key is checked against the
+    *current* registry (declared and not revoked). This preserves verifiability
+    of pre-#76 manifests while keeping revocation fail-closed.
+  - **Key-file hygiene** — `--nsec-file` must be a regular file owned by the
+    caller with mode 0600 (or tighter): symlinks, group/other-readable files,
+    and wrong-owner files are refused.
 - **Read** — allowed iff the actor's resolved access (`merge_access`) covers
   the node's `category` (i.e. the category number is in the actor's resolved
   category set, or the actor holds a category exception). `category-0` is
