@@ -735,7 +735,12 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
     audit_max = audit_max_seq(root)
     if audit_max is not None:
         head_seq = manifest.get("manifest", {}).get("headSeq")
-        if head_seq is not None and int(head_seq) != audit_max:
+        if head_seq is not None and (
+            not isinstance(head_seq, int) or isinstance(head_seq, bool)
+        ):
+            failures += 1
+            click.echo(f"FAIL audit: manifest.headSeq {head_seq!r} is not an integer")
+        elif head_seq is not None and head_seq != audit_max:
             failures += 1
             click.echo(
                 f"FAIL audit: manifest.headSeq {head_seq} does not match "
@@ -771,13 +776,22 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
     # the manifest.
     manifest_header = manifest.get("manifest", {})
     if expected_head_seq is not None:
-        current_head_seq = int(manifest_header.get("headSeq") or 0)
-        if current_head_seq < expected_head_seq:
+        raw_head_seq = manifest_header.get("headSeq")
+        if raw_head_seq is not None and (
+            not isinstance(raw_head_seq, int) or isinstance(raw_head_seq, bool)
+        ):
             failures += 1
             click.echo(
-                f"FAIL head: rolled back to headSeq {current_head_seq} "
-                f"(expected at least {expected_head_seq})"
+                f"FAIL head: manifest.headSeq {raw_head_seq!r} is not an integer"
             )
+        else:
+            current_head_seq = raw_head_seq if raw_head_seq is not None else 0
+            if current_head_seq < expected_head_seq:
+                failures += 1
+                click.echo(
+                    f"FAIL head: rolled back to headSeq {current_head_seq} "
+                    f"(expected at least {expected_head_seq})"
+                )
 
     if org_pubkey:
         pubkey_hex = _org_pubkey_hex(org_pubkey)

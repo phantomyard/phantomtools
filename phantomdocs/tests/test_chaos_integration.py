@@ -413,6 +413,37 @@ def test_audit_seq_gap_detected(tmp_path):
     assert any("contiguous" in p for p in problems)
 
 
+def test_non_numeric_headseq_fails_cleanly(tmp_path):
+    """A tampered/legacy manifest with a non-numeric ``headSeq`` must produce a
+    clean failure (load-time validation or audit guard), not an unhandled
+    ``ValueError`` traceback (review #106)."""
+    ctx = _setup(tmp_path, n_docs=2, seal=False)
+    data = _manifest(tmp_path)
+    data["manifest"]["headSeq"] = "not-a-number"
+    _write_manifest(tmp_path, data)
+    r = _verify(ctx)
+    assert r.exit_code != 0
+    assert "headSeq" in r.output
+    assert "integer" in r.output
+    assert "Traceback" not in r.output
+
+
+def test_bool_headseq_fails_cleanly(tmp_path):
+    """A boolean ``headSeq`` (JSON ``true``) is not a valid integer either and
+    must fail cleanly instead of being coerced by ``int(True) == 1``. Load-time
+    validation lets ``bool`` through (``isinstance(True, int)`` is true), so the
+    ``verify`` audit guard is the only thing that catches it."""
+    ctx = _setup(tmp_path, n_docs=2, seal=False)
+    data = _manifest(tmp_path)
+    data["manifest"]["headSeq"] = True
+    _write_manifest(tmp_path, data)
+    r = _verify(ctx)
+    assert r.exit_code != 0
+    assert "headSeq" in r.output
+    assert "integer" in r.output
+    assert "Traceback" not in r.output
+
+
 @pytest.mark.xfail(
     reason=(
         "KNOWN GAP: an attacker who can rewrite the whole repository can roll "
