@@ -114,6 +114,11 @@ def manifest_lock(path: str) -> Iterator[None]:
     back to an ``msvcrt`` range lock. The lock is advisory but serializes the
     mutating commands, so a concurrent ``add``/``tag``/``mkdir`` cannot lose
     the other's update.
+
+    The lock is **host-local**: it serializes concurrent processes on the same
+    host, not across hosts. PhantomDocs v1 supports a single authoritative
+    writer host per namespace (Model A); two hosts writing the same namespace
+    would fork the head (see SPEC §6.3).
     """
     lock_path = os.path.join(
         os.path.dirname(os.path.abspath(path)) or ".", LOCK_FILENAME
