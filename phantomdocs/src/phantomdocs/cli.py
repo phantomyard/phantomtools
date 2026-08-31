@@ -58,7 +58,11 @@ from .setup import (
 from .signing import (
     mutation_envelope,
     npub_to_pubkey_hex,
+    pubkey_from_nsec,
+    seal_envelope,
+    sign_seal,
     verify_mutation,
+    verify_seal,
 )
 from .storage import (
     LocalBackend,
@@ -194,6 +198,17 @@ def _audit(
 
 def _resolve_store(root: str, backend: str | None):
     return resolve_backend(backend) if backend else LocalBackend(root)
+
+
+def _org_pubkey_hex(pubkey: str) -> str:
+    """The x-only pubkey hex for ``--org-pubkey`` (npub1... or 64-hex)."""
+    if pubkey.startswith("npub1"):
+        return npub_to_pubkey_hex(pubkey)
+    if len(pubkey) == 64 and all(c in "0123456789abcdef" for c in pubkey):
+        return pubkey
+    raise click.ClickException(
+        f"--org-pubkey must be an npub1... or a 64-hex pubkey, got {pubkey!r}"
+    )
 
 
 @main.command()
@@ -486,8 +501,21 @@ def search(query, org_yaml, actor, root):
     help="Optional PhantomOrg org.yaml to also check mutation signatures "
     "against declared actor npubs (issue #30 v2).",
 )
+@click.option(
+    "--org-pubkey",
+    default=None,
+    help="Org pubkey (npub1... or 64-hex) to recompute the root MAC and "
+    "verify the head seal against (issues #70/#71).",
+)
+@click.option(
+    "--expected-head-seq",
+    type=int,
+    default=None,
+    help="The known-current head sequence (external trust root): fails if the "
+    "manifest head has been rolled back below it (issue #70).",
+)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def verify(backend, org_yaml, root):
+def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
     """Recompute MAC chain + content hashes against the manifest."""
     manifest = _load_or_die(root)
     store = _resolve_store(root, backend)
@@ -693,6 +721,65 @@ def verify(backend, org_yaml, root):
             failures += 1
             click.echo("FAIL audit: head hash does not match manifest.auditHead")
 
+    # Root anchor + head seal (issues #70/#71): when the operator supplies the
+    # org pubkey, recompute the root MAC from the org identity + namespace and
+    # verify the org's seal over the monotonic head. A forged root, a deleted
+    # version, or a rolled-back/truncated audit head all change the sealed
+    # envelope and fail here — and only the org (holder of the org key) can
+    # re-seal, so this is a trust root the attacker cannot rewrite alongside
+    # the manifest.
+    manifest_header = manifest.get("manifest", {})
+    if expected_head_seq is not None:
+        current_head_seq = int(manifest_header.get("headSeq") or 0)
+        if current_head_seq < expected_head_seq:
+            failures += 1
+            click.echo(
+                f"FAIL head: rolled back to headSeq {current_head_seq} "
+                f"(expected at least {expected_head_seq})"
+            )
+
+    if org_pubkey:
+        pubkey_hex = _org_pubkey_hex(org_pubkey)
+        m = manifest_header
+        recomputed_root = root_mac(m["org"], org_pubkey, m["namespace"])
+        if recomputed_root != m["rootMac"]:
+            failures += 1
+            click.echo("FAIL root: rootMac does not match the org identity")
+
+        signed = m.get("signedRootMac")
+        seal_pubkey = m.get("sealPubkey")
+        if signed is None and seal_pubkey is None:
+            failures += 1
+            click.echo(
+                "FAIL seal: manifest has no head seal (run `pd seal` with the org key)"
+            )
+        elif signed is None or seal_pubkey is None:
+            failures += 1
+            click.echo("FAIL seal: incomplete seal (missing signature or pubkey)")
+        else:
+            envelope = seal_envelope(
+                root_mac=m["rootMac"],
+                head_seq=int(m.get("headSeq") or 0),
+                head_mac=m.get("headMac") or m["rootMac"],
+                audit_seq=int(m.get("auditSeq") or 0),
+                audit_head=m.get("auditHead"),
+            )
+            if seal_pubkey != pubkey_hex:
+                failures += 1
+                click.echo("FAIL seal: seal was not made by the declared org key")
+            elif not verify_seal(pubkey_hex, signed, envelope):
+                failures += 1
+                click.echo(
+                    "FAIL seal: head seal signature invalid (forged root, "
+                    "deleted version, or rolled-back audit head)"
+                )
+            elif m.get("sealedHeadSeq") != m.get("headSeq"):
+                failures += 1
+                click.echo(
+                    "FAIL seal: head advanced past the last seal "
+                    "(mutations since `pd seal`)"
+                )
+
     if failures:
         raise click.ClickException(f"{failures} node(s) failed verification")
     click.echo(f"verified {len(manifest.get('nodes', []))} node(s)")
@@ -791,6 +878,51 @@ def audit(limit, root):
     """Show the append-only audit log."""
     for entry in audit_read(root, limit):
         click.echo(json.dumps(entry))
+
+
+@main.command()
+@click.option(
+    "--nsec-file",
+    required=True,
+    help="File containing the org's nsec (the trust-root key, issue #70/#71).",
+)
+@click.option("--root", default=".", show_default=True, help="Local backend root.")
+def seal(nsec_file, root):
+    """Seal the namespace head with the org key (issues #70/#71).
+
+    Signs the root MAC together with the monotonic head (``headSeq``,
+    ``headMac``, ``auditSeq``, ``auditHead``) and records the signature
+    (``signedRootMac``), the org pubkey (``sealPubkey``) and the sealed head
+    sequence (``sealedHeadSeq``) in the manifest header. ``verify
+    --org-pubkey`` then checks the seal, so a forged root, a deleted version,
+    or a rolled-back/truncated audit head no longer verifies — only the org
+    (holder of the org key) can re-seal.
+    """
+    path = _manifest_path(root)
+    data = _load_or_die(root)
+    try:
+        with open(nsec_file, "r", encoding="utf-8") as f:
+            nsec = f.read().strip()
+    except OSError as exc:
+        raise click.ClickException(f"cannot read --nsec-file: {exc}")
+    if not nsec:
+        raise click.ClickException("empty --nsec-file")
+
+    m = data["manifest"]
+    envelope = seal_envelope(
+        root_mac=m["rootMac"],
+        head_seq=int(m.get("headSeq") or 0),
+        head_mac=m.get("headMac") or m["rootMac"],
+        audit_seq=int(m.get("auditSeq") or 0),
+        audit_head=m.get("auditHead"),
+    )
+    pubkey = pubkey_from_nsec(nsec)
+    m["signedRootMac"] = sign_seal(nsec, envelope)
+    m["sealPubkey"] = pubkey
+    m["sealedHeadSeq"] = int(m.get("headSeq") or 0)
+    save(path, data)
+    click.echo(f"sealed {m['org']}/{m['namespace']} at headSeq {m['sealedHeadSeq']}")
+    click.echo(f"  seal pubkey {pubkey}")
 
 
 @main.command("derive-manifest")
