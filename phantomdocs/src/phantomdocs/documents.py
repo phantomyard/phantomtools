@@ -91,13 +91,17 @@ def _sign_fields(
     locations: list[dict] | None,
     urn: str,
     ref: str | None = None,
+    seq: int | None = None,
+    prev_head: str | None = None,
 ) -> dict[str, str]:
     """The ``sig`` / ``sigPubkey`` fields for a mutation, or ``{}`` unsigned.
 
     The signature binds the node MAC **and** the authorization-relevant fields
     (actor, action, category, owners, locations, urn) by signing the canonical
     mutation envelope (issue #30 v2). ``ref`` is bound only for ``tag``
-    mutations, tying the mutable ref name to its target MAC.
+    mutations, tying the mutable ref name to its target MAC. ``seq`` and
+    ``prev_head`` bind the mutation to a specific committed state (issue #73),
+    so a replayed or out-of-order mutation no longer verifies.
     """
     if not nsec:
         return {}
@@ -110,6 +114,8 @@ def _sign_fields(
         locations=locations,
         urn=urn,
         ref=ref,
+        seq=seq,
+        prev_head=prev_head,
     )
     return {
         "sig": sign_mutation(nsec, envelope),
@@ -204,6 +210,7 @@ class DocumentService:
         self,
         repo: ManifestRepository,
         *,
+        seq: int,
         action: str,
         urn: str,
         mac: str,
@@ -220,8 +227,11 @@ class DocumentService:
         ``headMac``). A crash between the two leaves the audit one entry
         ahead of the manifest — a *detectable* state `verify` flags — instead
         of a committed mutation with no matching audit entry (lost evidence).
+
+        ``seq`` is the monotonic mutation sequence this commit advances the
+        head to (issue #73); the caller computes it from the current head
+        before signing, so the signed envelope and the committed head agree.
         """
-        head_seq = int(repo.data["manifest"].get("headSeq") or 0) + 1
         audit_seq = int(repo.data["manifest"].get("auditSeq") or 0) + 1
         line_hash = audit_append(
             self.root,
@@ -232,15 +242,28 @@ class DocumentService:
             ch,
             sig,
             sig_pubkey,
-            seq=head_seq,
+            seq=seq,
         )
         m = repo.data["manifest"]
-        m["headSeq"] = head_seq
+        m["headSeq"] = seq
         if head_mac is not None:
             m["headMac"] = head_mac
         m["auditSeq"] = audit_seq
         m["auditHead"] = line_hash
         save(_manifest_path(self.root), repo.data)
+
+    def _next_head(self, repo: ManifestRepository) -> tuple[int, str]:
+        """The ``(seq, prev_head)`` a new mutation binds to (issue #73).
+
+        ``seq`` is the current head sequence + 1; ``prev_head`` is the
+        committed head MAC (``headMac``, falling back to ``rootMac`` before
+        the first mutation). Binding these into the signed envelope makes a
+        replay or an out-of-order re-insertion fail to verify.
+        """
+        m = repo.data["manifest"]
+        prev_head = m.get("headMac") or m["rootMac"]
+        seq = int(m.get("headSeq") or 0) + 1
+        return seq, prev_head
 
     def _load_repo(self) -> ManifestRepository:
         """Load and wrap the manifest, or raise a user-facing error."""
@@ -262,6 +285,8 @@ class DocumentService:
         locations: list[dict] | None,
         urn: str,
         ref: str | None = None,
+        seq: int | None = None,
+        prev_head: str | None = None,
     ) -> dict[str, str]:
         return _sign_fields(
             self.nsec,
@@ -273,6 +298,8 @@ class DocumentService:
             locations=locations,
             urn=urn,
             ref=ref,
+            seq=seq,
+            prev_head=prev_head,
         )
 
     # -- workflows --
@@ -292,6 +319,7 @@ class DocumentService:
 
         with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
+            seq, prev_head = self._next_head(repo)
             parent_mac = repo.root_mac
             parent_path = ""
             if parent:
@@ -319,6 +347,8 @@ class DocumentService:
                 "relations": {},
                 "actor": self.actor_id,
                 "action": "mkdir",
+                "seq": seq,
+                "prevHead": prev_head,
             }
             node.update(
                 self._sign_fields(
@@ -328,11 +358,14 @@ class DocumentService:
                     owners=list(owners),
                     locations=None,
                     urn=urn,
+                    seq=seq,
+                    prev_head=prev_head,
                 )
             )
             repo.add_node(node)
             self._commit_transaction(
                 repo,
+                seq=seq,
                 action="mkdir",
                 urn=urn,
                 mac=mac,
@@ -359,6 +392,7 @@ class DocumentService:
         the node (or version an existing node)."""
         with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
+            seq, prev_head = self._next_head(repo)
             parent_mac = repo.root_mac
             parent_path = ""
             if folder:
@@ -445,6 +479,8 @@ class DocumentService:
                 "previous": previous,
                 "actor": self.actor_id,
                 "action": "add" if previous is None else "version",
+                "seq": seq,
+                "prevHead": prev_head,
             }
             node.update(
                 self._sign_fields(
@@ -454,11 +490,14 @@ class DocumentService:
                     owners=effective_owners,
                     locations=locations,
                     urn=urn,
+                    seq=seq,
+                    prev_head=prev_head,
                 )
             )
             repo.add_node(node)
             self._commit_transaction(
                 repo,
+                seq=seq,
                 action="add" if previous is None else "version",
                 urn=urn,
                 mac=mac,
@@ -479,6 +518,7 @@ class DocumentService:
         """Point a mutable ref (e.g. `latest`) at a version MAC."""
         with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
+            seq, prev_head = self._next_head(repo)
             node = repo.resolve_node(ref)
             if node is None:
                 raise DocumentError(f"not found: {ref}")
@@ -497,17 +537,22 @@ class DocumentService:
                 locations=node.get("locations"),
                 urn=node["urn"],
                 ref=name,
+                seq=seq,
+                prev_head=prev_head,
             )
             record = {
                 "mac": node["mac"],
                 "actor": self.actor_id,
                 "action": "tag",
+                "seq": seq,
+                "prevHead": prev_head,
             }
             if sig_fields:
                 record.update(sig_fields)
             repo.set_ref(name, record)
             self._commit_transaction(
                 repo,
+                seq=seq,
                 action="tag",
                 urn=node["urn"],
                 mac=node["mac"],
@@ -529,6 +574,7 @@ class DocumentService:
         """
         with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
+            seq, prev_head = self._next_head(repo)
             target = repo.node_by_mac(to_mac)
             if target is None:
                 raise DocumentError(f"no version with MAC: {to_mac}")
@@ -592,6 +638,8 @@ class DocumentService:
                 "previous": current["mac"],
                 "actor": self.actor_id,
                 "action": "rollback",
+                "seq": seq,
+                "prevHead": prev_head,
             }
             node.update(
                 self._sign_fields(
@@ -601,11 +649,14 @@ class DocumentService:
                     owners=effective_owners,
                     locations=new_locations,
                     urn=current["urn"],
+                    seq=seq,
+                    prev_head=prev_head,
                 )
             )
             repo.add_node(node)
             self._commit_transaction(
                 repo,
+                seq=seq,
                 action="rollback",
                 urn=current["urn"],
                 mac=mac,
