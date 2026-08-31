@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 
 # subprocess is required to shell out to ssh / the persona's workspace.py.
 # Commands are built as argument lists (no shell=True) and inputs validated.
@@ -59,25 +60,65 @@ def _shell_quote(value: str) -> str:
 
 
 class LocalBackend:
-    """Content-addressed store: <root>/blobs/<aa>/<full-sha256-hex>."""
+    """Content-addressed store: <root>/blobs/<aa>/<full-sha256-hex>.
+
+    Confined (issue #75): the shard directory and blob are validated against
+    the *real* storage root, symlinked shards are refused, and reads open the
+    blob with O_NOFOLLOW so a symlink cannot redirect them outside the root.
+    """
 
     def __init__(self, root: str):
         self.root = os.path.abspath(root or ".")
+        self._root_real = os.path.realpath(self.root)
+
+    def _shard_dir(self, content_hash: str, *, create: bool) -> str:
+        """The confined shard directory, or StorageError on an escape.
+
+        Rejects a symlinked shard (``blobs/<aa> -> elsewhere``), a shard that
+        resolves outside the real storage root, and — best effort — a shard on
+        a different device than the root (mount/bind swap).
+        """
+        _require_hash(content_hash)
+        shard = os.path.join(self._root_real, "blobs", content_hash[:2])
+        if os.path.lexists(shard):
+            if os.path.islink(shard):
+                raise StorageError(f"refusing symlinked shard directory: {shard}")
+            real = os.path.realpath(shard)
+            if real != shard:
+                raise StorageError(
+                    f"shard directory escapes storage root: {real!r} != {shard!r}"
+                )
+            st = os.stat(shard)
+            if not stat.S_ISDIR(st.st_mode):
+                raise StorageError(f"shard path is not a directory: {shard}")
+            root_st = os.stat(self._root_real)
+            if st.st_dev != root_st.st_dev:
+                raise StorageError(f"shard directory is on a different device: {shard}")
+        elif create:
+            os.makedirs(shard, exist_ok=True)
+            # Re-verify after creation (the path could have been swapped
+            # between the check above and the makedirs call).
+            if os.path.islink(shard) or os.path.realpath(shard) != shard:
+                raise StorageError(f"refusing symlinked shard directory: {shard}")
+        return shard
 
     def blob_path(self, content_hash: str) -> str:
         _require_hash(content_hash)
         return os.path.join(self.root, "blobs", content_hash[:2], content_hash)
 
     def put(self, content_hash: str, data: bytes) -> str:
-        path = self.blob_path(content_hash)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        if os.path.exists(path):
+        shard = self._shard_dir(content_hash, create=True)
+        path = os.path.join(shard, content_hash)
+        if os.path.lexists(path):
+            # Reject a symlink at the blob address itself (TOCTOU guard).
+            if os.path.islink(path):
+                raise StorageError(f"refusing symlinked blob path: {path}")
             return path
         # Atomic write (issue #74): a unique temp file, fsync'd and renamed
         # into place, so a crash never leaves a partial blob visible under
-        # its content address.
-        directory = os.path.dirname(path)
-        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".blob-", suffix=".tmp")
+        # its content address. os.replace replaces a symlink at the
+        # destination rather than writing through it.
+        fd, tmp = tempfile.mkstemp(dir=shard, prefix=".blob-", suffix=".tmp")
         try:
             with os.fdopen(fd, "wb") as f:
                 f.write(data)
@@ -93,10 +134,19 @@ class LocalBackend:
         return path
 
     def get(self, content_hash: str) -> bytes:
-        path = self.blob_path(content_hash)
-        if not os.path.isfile(path):
+        shard = self._shard_dir(content_hash, create=False)
+        path = os.path.join(shard, content_hash)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(path, flags)
+        except OSError:
             raise StorageError(f"blob not found: {content_hash}")
-        with open(path, "rb") as f:
+        with os.fdopen(fd, "rb") as f:
+            st = os.fstat(f.fileno())
+            if not stat.S_ISREG(st.st_mode):
+                raise StorageError(f"blob is not a regular file: {content_hash}")
+            if st.st_nlink > 1:
+                raise StorageError(f"refusing hardlinked blob: {content_hash}")
             data = f.read()
         # Content-addressed store: verify the bytes against the requested
         # hash on read, so a mutated blob is refused (integrity on the read
@@ -106,7 +156,16 @@ class LocalBackend:
         return data
 
     def has(self, content_hash: str) -> bool:
-        return os.path.isfile(self.blob_path(content_hash))
+        try:
+            shard = self._shard_dir(content_hash, create=False)
+        except StorageError:
+            return False
+        path = os.path.join(shard, content_hash)
+        try:
+            st = os.lstat(path)
+        except OSError:
+            return False
+        return stat.S_ISREG(st.st_mode) and not stat.S_ISLNK(st.st_mode)
 
 
 class SshBackend:
