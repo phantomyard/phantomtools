@@ -46,6 +46,14 @@ _SIGN_DOMAIN = b"phantomdocs-mutation-v1"
 # the namespace root + head commitment, never confused with a mutation sig.
 _SEAL_DOMAIN = b"phantomdocs-seal-v1"
 
+# The authenticated crypto-suite version (crypto agility, audit #5).
+# v1 = BIP-340 Schnorr signatures (secp256k1) + SHA-256. This build can only
+# produce/verify v1; a mutation or manifest declaring another version is
+# refused fail-closed, so a future v2 (new primitives) can verify v1 while v1
+# refuses v2. The version is bound into every signed envelope and the sealed
+# manifest header — it is authenticated state, not implementation convention.
+CRYPTO_VERSION = 1
+
 _BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 
 
@@ -167,6 +175,7 @@ def mutation_envelope(
     seq: int | None = None,
     prev_head: str | None = None,
     ts: str | None = None,
+    crypto_version: int | None = CRYPTO_VERSION,
 ) -> bytes:
     """The canonical bytes signed for a mutation (issue #30 v2, #73).
 
@@ -201,6 +210,14 @@ def mutation_envelope(
         "owners": list(owners) if owners else [],
         "urn": urn,
     }
+    # ``crypto_version`` is authenticated state (audit decision 3). ``None``
+    # encodes the *legacy* pre-crypto-agility v1 envelope, which predates the
+    # ``crypto_version`` field; ``verify`` passes ``None`` when a stored node
+    # carries no ``cryptoVersion`` so namespaces signed before the upgrade
+    # remain verifiable. A non-``None`` version binds the suite version into
+    # the signed bytes.
+    if crypto_version is not None:
+        payload["crypto_version"] = crypto_version
     if ref is not None:
         payload["ref"] = ref
     if seq is not None:
@@ -246,6 +263,7 @@ def seal_envelope(
     head_mac: str,
     audit_seq: int,
     audit_head: str | None,
+    crypto_version: int | None = CRYPTO_VERSION,
 ) -> bytes:
     """The canonical bytes the org signs to seal the namespace head.
 
@@ -261,6 +279,10 @@ def seal_envelope(
         "head_seq": head_seq,
         "root_mac": root_mac,
     }
+    # ``crypto_version is None`` is the legacy pre-crypto-agility v1 seal
+    # envelope (no ``crypto_version`` field), mirroring ``mutation_envelope``.
+    if crypto_version is not None:
+        payload["crypto_version"] = crypto_version
     return json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode("utf-8")

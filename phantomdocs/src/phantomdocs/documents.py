@@ -36,6 +36,7 @@ from .manifest import (
     urn_path,
 )
 from .signing import (
+    CRYPTO_VERSION,
     mutation_envelope,
     pubkey_from_nsec,
     sign_mutation,
@@ -387,6 +388,7 @@ class DocumentService:
                 "action": "mkdir",
                 "seq": seq,
                 "prevHead": prev_head,
+                "cryptoVersion": CRYPTO_VERSION,
                 "ts": ts,
             }
             node.update(
@@ -522,6 +524,7 @@ class DocumentService:
                 "action": "add" if previous is None else "version",
                 "seq": seq,
                 "prevHead": prev_head,
+                "cryptoVersion": CRYPTO_VERSION,
                 "ts": ts,
             }
             node.update(
@@ -591,6 +594,7 @@ class DocumentService:
                 "action": "tag",
                 "seq": seq,
                 "prevHead": prev_head,
+                "cryptoVersion": CRYPTO_VERSION,
                 "ts": ts,
             }
             if sig_fields:
@@ -687,6 +691,7 @@ class DocumentService:
                 "action": "rollback",
                 "seq": seq,
                 "prevHead": prev_head,
+                "cryptoVersion": CRYPTO_VERSION,
                 "ts": ts,
             }
             node.update(

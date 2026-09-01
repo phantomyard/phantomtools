@@ -26,7 +26,6 @@ import tempfile
 from pathlib import Path
 
 import coincurve
-import pytest
 import yaml
 from click.testing import CliRunner
 
@@ -444,17 +443,12 @@ def test_bool_headseq_fails_cleanly(tmp_path):
     assert "Traceback" not in r.output
 
 
-@pytest.mark.xfail(
-    reason=(
-        "KNOWN GAP: an attacker who can rewrite the whole repository can roll "
-        "back to an older *internally consistent* sealed state (old manifest + "
-        "old audit + old seal) and verify passes — the seal is self-referential "
-        "(sealedHeadSeq lives in the same manifest the attacker rewrites). Only "
-        "--expected-head-seq (an external anchor) catches it, and it is optional."
-    ),
-    strict=False,
-)
 def test_whole_state_rollback_undetected_without_external_anchor(tmp_path):
+    """Documents the accepted decision-2 boundary: WITHOUT --expected-head-seq,
+    a whole-state rollback (old manifest + old audit + old seal) verifies
+    cleanly, because the seal is self-referential. This is a *documented*
+    Model-A limitation, mitigated by the audit profile, which always supplies
+    --expected-head-seq (see test_whole_state_rollback_detected_with_external_anchor)."""
     ctx = _setup(tmp_path, n_docs=2, seal=True)
     snap = _snapshot(tmp_path)  # state at headSeq=2, sealed
 
@@ -468,9 +462,10 @@ def test_whole_state_rollback_undetected_without_external_anchor(tmp_path):
     # Attack: roll the whole state back to the older snapshot.
     _restore(tmp_path, snap)
 
-    # Desired: verify must fail. Currently it passes (internally consistent).
+    # Accepted boundary: without an external head anchor the rollback is not
+    # detected (verify passes). The audit profile closes this.
     r = _verify(ctx)
-    assert r.exit_code != 0
+    assert r.exit_code == 0
 
 
 def test_whole_state_rollback_detected_with_external_anchor(tmp_path):
@@ -490,6 +485,15 @@ def test_whole_state_rollback_detected_with_external_anchor(tmp_path):
     r = _verify(ctx, extra=["--expected-head-seq", "3"])
     assert r.exit_code != 0
     assert "rolled back" in r.output
+
+
+def test_sealed_namespace_without_org_pubkey_refused(tmp_path):
+    """Decision 2: a sealed namespace verified WITHOUT --org-pubkey is refused
+    (fail-closed) rather than silently skipping the root + seal anchor."""
+    ctx = _setup(tmp_path, n_docs=1, seal=True)
+    r = ctx["runner"].invoke(main, ["verify", "--root", ctx["root"]])
+    assert r.exit_code != 0
+    assert "org-pubkey" in r.output
 
 
 # ---------------------------------------------------------------------------
