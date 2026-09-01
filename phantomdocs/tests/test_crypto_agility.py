@@ -184,3 +184,185 @@ def test_unsupported_manifest_crypto_version_rejected(tmp_path):
     r = ctx["runner"].invoke(main, ["verify", "--root", ctx["root"]])
     assert r.exit_code != 0
     assert "unsupported crypto version" in r.output
+
+
+def _legacy_v1_envelope(node):
+    """Rebuild the mutation envelope the way pre-crypto-agility v1 did:
+    identical to ``mutation_envelope`` but with no ``crypto_version`` field
+    (and no ``cryptoVersion`` stored on the node)."""
+    return signing.mutation_envelope(
+        mac=node["mac"],
+        actor=node.get("actor", ""),
+        action=node.get("action", ""),
+        category=node.get("category", ""),
+        owners=node.get("owners"),
+        locations=node.get("locations"),
+        urn=node.get("urn", ""),
+        seq=node.get("seq"),
+        prev_head=node.get("prevHead"),
+        ts=node.get("ts"),
+        crypto_version=None,
+    )
+
+
+def test_legacy_v1_signature_and_seal_still_verify(tmp_path):
+    """Cross-version regression: artifacts signed + sealed by the pre-PR v1
+    implementation (no ``crypto_version`` in the envelope, no ``cryptoVersion``
+    stored anywhere) must remain verifiable after the crypto-agility upgrade.
+
+    We rebuild a fresh namespace with the current code, then re-sign every
+    mutation and re-seal the head using the *legacy* envelope shape and drop
+    the ``cryptoVersion`` keys, exactly as the old implementation wrote them.
+    """
+    ctx = _setup(tmp_path, seal=True)
+    mp = tmp_path / "manifest.yaml"
+    data = yaml.safe_load(mp.read_text(encoding="utf-8"))
+
+    actor_nsec = (tmp_path / "actor.nsec").read_text(encoding="utf-8").strip()
+    org_nsec = (tmp_path / "org.nsec").read_text(encoding="utf-8").strip()
+
+    # Re-sign each mutation over the legacy envelope and drop cryptoVersion.
+    for node in data.get("nodes", []):
+        if node.get("sig") and node.get("sigPubkey"):
+            node["sig"] = signing.sign_mutation(actor_nsec, _legacy_v1_envelope(node))
+        node.pop("cryptoVersion", None)
+
+    # Re-seal the head over the legacy seal envelope and drop the header version.
+    m = data["manifest"]
+    legacy_seal = signing.seal_envelope(
+        root_mac=m["rootMac"],
+        head_seq=int(m.get("headSeq") or 0),
+        head_mac=m.get("headMac") or m["rootMac"],
+        audit_seq=int(m.get("auditSeq") or 0),
+        audit_head=m.get("auditHead"),
+        crypto_version=None,
+    )
+    m["signedRootMac"] = signing.sign_seal(org_nsec, legacy_seal)
+    m.pop("cryptoVersion", None)
+
+    mp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    r = ctx["runner"].invoke(
+        main,
+        [
+            "verify",
+            "--org-yaml",
+            ctx["org"],
+            "--org-pubkey",
+            ctx["org_pubkey"],
+            "--root",
+            ctx["root"],
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+
+def test_legacy_v1_ref_still_verifies(tmp_path):
+    """A legacy signed ref (no ``cryptoVersion``, signature over the
+    pre-crypto-agility envelope) must still verify after the upgrade."""
+    ctx = _setup(tmp_path, seal=False)
+    mp = tmp_path / "manifest.yaml"
+
+    # Create a signed tag with the current implementation.
+    r = ctx["runner"].invoke(
+        main,
+        [
+            "tag",
+            "latest",
+            "a.txt",
+            "--org-yaml",
+            ctx["org"],
+            "--actor",
+            "paco",
+            "--nsec-file",
+            str(tmp_path / "actor.nsec"),
+            "--root",
+            ctx["root"],
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    actor_nsec = (tmp_path / "actor.nsec").read_text(encoding="utf-8").strip()
+    data = yaml.safe_load(mp.read_text(encoding="utf-8"))
+    ref = data["refs"]["latest"]
+    # ``verify`` rebuilds the ref envelope from the *target node's*
+    # category/owners/locations/urn, so the legacy signature must be made over
+    # exactly those fields (see the ref path in ``cli.verify``).
+    target = next(n for n in data["nodes"] if n["mac"] == ref["mac"])
+    legacy_env = signing.mutation_envelope(
+        mac=ref["mac"],
+        actor=ref.get("actor", ""),
+        action=ref.get("action", "tag"),
+        category=target.get("category", ""),
+        owners=target.get("owners"),
+        locations=target.get("locations"),
+        urn=target.get("urn", ""),
+        ref="latest",
+        seq=ref.get("seq"),
+        prev_head=ref.get("prevHead"),
+        ts=ref.get("ts"),
+        crypto_version=None,
+    )
+    ref["sig"] = signing.sign_mutation(actor_nsec, legacy_env)
+    ref.pop("cryptoVersion", None)
+    mp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    r = ctx["runner"].invoke(
+        main, ["verify", "--org-yaml", ctx["org"], "--root", ctx["root"]]
+    )
+    assert r.exit_code == 0, r.output
+
+
+def test_unsigned_node_unsupported_version_rejected(tmp_path):
+    """An *unsigned* node declaring an unsupported crypto version must fail
+    closed. Previously the version check lived inside the signature branch, so
+    stripping ``sig``/``sigPubkey`` and setting ``cryptoVersion: 2`` printed OK.
+    """
+    ctx = _setup(tmp_path, seal=False)
+    mp = tmp_path / "manifest.yaml"
+    data = yaml.safe_load(mp.read_text(encoding="utf-8"))
+    node = next(n for n in data["nodes"] if n.get("kind") == "doc")
+    node.pop("sig", None)
+    node.pop("sigPubkey", None)
+    node["cryptoVersion"] = 2
+    mp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    r = ctx["runner"].invoke(main, ["verify", "--root", ctx["root"]])
+    assert r.exit_code != 0
+    assert "unsupported crypto version" in r.output
+
+
+def test_unsigned_ref_unsupported_version_rejected(tmp_path):
+    """An *unsigned* ref declaring an unsupported crypto version must fail
+    closed (the ref path had the same conditional gap as the node path)."""
+    ctx = _setup(tmp_path, seal=False)
+    mp = tmp_path / "manifest.yaml"
+
+    r = ctx["runner"].invoke(
+        main,
+        [
+            "tag",
+            "latest",
+            "a.txt",
+            "--org-yaml",
+            ctx["org"],
+            "--actor",
+            "paco",
+            "--nsec-file",
+            str(tmp_path / "actor.nsec"),
+            "--root",
+            ctx["root"],
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    data = yaml.safe_load(mp.read_text(encoding="utf-8"))
+    ref = data["refs"]["latest"]
+    ref.pop("sig", None)
+    ref.pop("sigPubkey", None)
+    ref["cryptoVersion"] = 2
+    mp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    r = ctx["runner"].invoke(main, ["verify", "--root", ctx["root"]])
+    assert r.exit_code != 0
+    assert "unsupported crypto version" in r.output

@@ -612,16 +612,27 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
         # some declared actor.
         sig = node.get("sig")
         sig_pubkey = node.get("sigPubkey")
-        node_crypto = node.get("cryptoVersion", CRYPTO_VERSION)
+        # Crypto agility (audit decision 3): the declared node version is
+        # authenticated state and must be validated for *every* node — signed
+        # or unsigned — so an unsigned node declaring an unsupported version
+        # fails closed rather than printing OK. A missing ``cryptoVersion`` is
+        # the legacy pre-crypto-agility v1 node: it verifies as v1 but over the
+        # legacy envelope (no ``crypto_version`` field), so existing namespaces
+        # stay verifiable across the upgrade.
+        node_crypto = node.get("cryptoVersion")
+        unsupported_node_crypto = (
+            node_crypto is not None and node_crypto != CRYPTO_VERSION
+        )
+        if unsupported_node_crypto:
+            issues.append(
+                f"unsupported crypto version {node_crypto!r} "
+                f"(supported: v{CRYPTO_VERSION})"
+            )
+
         if sig is not None or sig_pubkey is not None:
             if not sig or not sig_pubkey:
                 issues.append("incomplete mutation signature")
-            elif node_crypto != CRYPTO_VERSION:
-                issues.append(
-                    f"unsupported crypto version {node_crypto!r} "
-                    f"(supported: v{CRYPTO_VERSION})"
-                )
-            else:
+            elif not unsupported_node_crypto:
                 envelope = mutation_envelope(
                     mac=node["mac"],
                     actor=node.get("actor", ""),
@@ -679,15 +690,22 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
         elif isinstance(value, dict):
             sig = value.get("sig")
             sig_pubkey = value.get("sigPubkey")
-            ref_crypto = value.get("cryptoVersion", CRYPTO_VERSION)
-            if (sig is None) != (sig_pubkey is None):
-                issues.append("incomplete ref signature")
-            elif sig is not None and ref_crypto != CRYPTO_VERSION:
+            # Same fail-closed version check as the node path: the declared ref
+            # version is authenticated state and must be validated even when the
+            # ref is unsigned. A missing ``cryptoVersion`` is the legacy v1 ref
+            # (verifies over the legacy envelope without ``crypto_version``).
+            ref_crypto = value.get("cryptoVersion")
+            unsupported_ref_crypto = (
+                ref_crypto is not None and ref_crypto != CRYPTO_VERSION
+            )
+            if unsupported_ref_crypto:
                 issues.append(
                     f"unsupported crypto version {ref_crypto!r} "
                     f"(supported: v{CRYPTO_VERSION})"
                 )
-            elif sig is not None:
+            if (sig is None) != (sig_pubkey is None):
+                issues.append("incomplete ref signature")
+            elif sig is not None and not unsupported_ref_crypto:
                 envelope = mutation_envelope(
                     mac=mac,
                     actor=value.get("actor", ""),
@@ -841,7 +859,10 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                 head_mac=m.get("headMac") or m["rootMac"],
                 audit_seq=int(m.get("auditSeq") or 0),
                 audit_head=m.get("auditHead"),
-                crypto_version=int(m.get("cryptoVersion", CRYPTO_VERSION)),
+                # ``None`` => legacy pre-crypto-agility seal envelope (no
+                # ``crypto_version`` field), preserving verification of seals
+                # made before the crypto-agility upgrade.
+                crypto_version=m.get("cryptoVersion"),
             )
             if seal_pubkey != pubkey_hex:
                 failures += 1
@@ -1005,7 +1026,10 @@ def seal(nsec_file, root):
         head_mac=m.get("headMac") or m["rootMac"],
         audit_seq=int(m.get("auditSeq") or 0),
         audit_head=m.get("auditHead"),
-        crypto_version=int(m.get("cryptoVersion", CRYPTO_VERSION)),
+        # Match ``verify``: a legacy manifest (no ``cryptoVersion``) is sealed
+        # over the legacy envelope, so re-sealing a pre-upgrade namespace does
+        # not silently produce a seal it can no longer verify.
+        crypto_version=m.get("cryptoVersion"),
     )
     pubkey = pubkey_from_nsec(nsec)
     m["signedRootMac"] = sign_seal(nsec, envelope)
