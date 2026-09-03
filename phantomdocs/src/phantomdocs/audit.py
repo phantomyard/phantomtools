@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 import time
 from typing import Any
 
@@ -200,3 +201,40 @@ def max_seq(root: str) -> int | None:
         ):
             best = seq
     return best
+
+
+def raw_lines(root: str) -> list[bytes]:
+    """The non-blank raw audit-log lines (bytes, newlines included), oldest first."""
+    path = os.path.join(root, AUDIT_FILENAME)
+    if not os.path.exists(path):
+        return []
+    with open(path, "rb") as f:
+        return [line for line in f.read().splitlines(keepends=True) if line.strip()]
+
+
+def truncate(root: str, keep: int) -> None:
+    """Rewrite the audit log keeping only the first ``keep`` lines (recovery).
+
+    This is the *recovery* operation for the audit-first transaction (issue #74):
+    it discards orphaned audit entries that were appended after the manifest's
+    last commit. The caller MUST have already verified that the kept prefix is
+    intact and matches the manifest's recorded head; ``truncate`` itself does
+    not re-verify. Raw line bytes are preserved so the kept prefix's hash chain
+    stays valid.
+    """
+    path = os.path.join(root, AUDIT_FILENAME)
+    lines = raw_lines(root)
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".audit-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.writelines(lines[:keep])
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise

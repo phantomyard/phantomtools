@@ -479,6 +479,10 @@ Enables queries like "which minutes cite this policy?".
   reordered entry. The `actor` field is the **authenticated OS identity** — the
   same verified actor used for authorization, never a self-asserted label.
   Without this there is no "total guarantee" worth the name.
+- **Recovery** — `pd recover` re-aligns the audit log with the manifest after
+  an interrupted audit-first transaction (issue #74): it discards orphaned audit
+  entries (mutations whose manifest commit never landed) and refuses fail-closed
+  on any other divergence (tampering, not a crash).
 
 ## 13. Update package (what PhantomDocs applies)
 

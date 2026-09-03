@@ -327,6 +327,17 @@ class GdriveBackend:
             raise StorageError(
                 "drive upload returned no file id; cannot round-trip the document"
             )
+        # Independent read-back verification (audit #8): the returned external
+        # reference must be re-read and hash-checked before it becomes
+        # authenticated document state. A buggy or malicious workspace.py
+        # (wrong id, wrong bytes, a stale id, or a lie about success) fails here
+        # instead of being committed as a document location.
+        downloaded = _gdrive_download(self.workspace_py, file_id)
+        if _content_hash(downloaded) != content_hash:
+            raise StorageError(
+                f"drive read-back mismatch for {content_hash}: the returned "
+                "reference does not resolve to the uploaded content"
+            )
         return file_id
 
     def get(self, content_hash: str) -> bytes:
