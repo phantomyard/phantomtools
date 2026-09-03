@@ -64,10 +64,12 @@ from .signing import (
     CRYPTO_VERSION,
     mutation_envelope,
     npub_to_pubkey_hex,
+    profile_envelope,
     pubkey_from_nsec,
     seal_envelope,
     sign_seal,
     verify_mutation,
+    verify_profile,
     verify_seal,
 )
 from .storage import (
@@ -886,6 +888,7 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                 head_mac=m.get("headMac") or m["rootMac"],
                 audit_seq=int(m.get("auditSeq") or 0),
                 audit_head=m.get("auditHead"),
+                require_signatures=m.get("requireSignatures"),
                 # ``None`` => legacy pre-crypto-agility seal envelope (no
                 # ``crypto_version`` field), preserving verification of seals
                 # made before the crypto-agility upgrade.
@@ -917,6 +920,52 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                 "FAIL seal: namespace is sealed but --org-pubkey was not "
                 "supplied; refusing to skip the trust anchor"
             )
+
+    # Signing-profile transition (audit #1): the production/development
+    # profile is authenticated state. A recorded transition must carry a valid
+    # signature over its canonical envelope and must agree with the live
+    # ``requireSignatures`` setting — so a profile change made outside the
+    # authenticated path (a direct edit, or an unsigned run) is detected, and
+    # an unauthenticated ``on -> off`` downgrade fails closed.
+    transition = manifest_header.get("profileTransition")
+    if transition is not None:
+        issues: list[str] = []
+        sig = transition.get("sig")
+        sig_pubkey = transition.get("sigPubkey")
+        if transition.get("mode") != bool(manifest_header.get("requireSignatures")):
+            issues.append(
+                "profile changed outside the authenticated transition "
+                "(profileTransition.mode does not match requireSignatures)"
+            )
+        if not sig or not sig_pubkey:
+            issues.append("incomplete profile transition signature")
+        else:
+            envelope = profile_envelope(
+                mode=bool(transition.get("mode")),
+                actor=transition.get("actor", ""),
+                seq=transition.get("seq"),
+                prev_head=transition.get("prevHead", ""),
+                ts=transition.get("ts"),
+                policy_hash=transition.get("policyHash"),
+                crypto_version=transition.get("cryptoVersion"),
+            )
+            if not verify_profile(sig_pubkey, sig, envelope):
+                issues.append("profile transition signature invalid")
+            elif org_model is not None:
+                actor = transition.get("actor")
+                ts = transition.get("ts")
+                if not actor:
+                    issues.append("profile transition has no actor")
+                elif ts is not None and not key_valid_at(
+                    org_model, actor, sig_pubkey, ts
+                ):
+                    issues.append(
+                        "profile transition key is not valid for the actor "
+                        "at transition time (undeclared, rotated out, or revoked)"
+                    )
+        if issues:
+            failures += 1
+            click.echo(f"FAIL profile: {', '.join(issues)}")
 
     if failures:
         raise click.ClickException(f"{failures} node(s) failed verification")
@@ -1053,6 +1102,7 @@ def seal(nsec_file, root):
         head_mac=m.get("headMac") or m["rootMac"],
         audit_seq=int(m.get("auditSeq") or 0),
         audit_head=m.get("auditHead"),
+        require_signatures=m.get("requireSignatures"),
         # Match ``verify``: a legacy manifest (no ``cryptoVersion``) is sealed
         # over the legacy envelope, so re-sealing a pre-upgrade namespace does
         # not silently produce a seal it can no longer verify.
@@ -1069,8 +1119,17 @@ def seal(nsec_file, root):
 
 @main.command("require-signatures")
 @click.argument("mode", type=click.Choice(["on", "off"], case_sensitive=False))
+@click.option(
+    "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
+)
+@click.option("--actor", default=None, help=_ACTOR_HELP)
+@click.option(
+    "--nsec-file",
+    default=None,
+    help="File containing the actor's nsec (signing the profile transition).",
+)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def require_signatures(mode, root):
+def require_signatures(mode, org_yaml, actor, nsec_file, root):
     """Set the namespace signing profile (production security mode).
 
     ``on`` — production profile: every mutation must carry a valid actor
@@ -1078,15 +1137,24 @@ def require_signatures(mode, root):
     flags any unsigned node or ref. ``off`` — legacy/development profile:
     signing is optional and unsigned mutations are accepted (v1 behavior).
 
-    The setting is recorded in the manifest header (``requireSignatures``),
-    so it persists for the namespace and is enforced by every mutating
-    command and by ``verify``.
+    A profile change is authenticated state: it requires the actor's signing
+    key (an unauthenticated ``on -> off`` downgrade is refused fail-closed),
+    is signed over a dedicated profile envelope, is recorded in the audit log,
+    and advances the mutation head. ``verify`` checks the transition signature
+    and the head seal binds the setting, so a change made outside this
+    authenticated path is detected.
     """
-    path = _manifest_path(root)
-    data = _load_or_die(root)
-    data["manifest"]["requireSignatures"] = mode == "on"
-    save(path, data)
-    click.echo(f"requireSignatures: {mode}")
+    actor_id, _org = _require_acl(org_yaml, actor)
+    try:
+        service = DocumentService(root, org_yaml, actor_id, nsec_file)
+        result = service.set_require_signatures(mode == "on")
+    except DocumentError as exc:
+        raise click.ClickException(str(exc))
+    if result.get("unchanged"):
+        click.echo(f"requireSignatures: already {mode}")
+    else:
+        click.echo(f"requireSignatures: {mode}")
+        click.echo(f"  headSeq {result['seq']}  (signed by {actor_id})")
 
 
 @main.command("recover")

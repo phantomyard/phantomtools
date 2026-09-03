@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from phantomdocs import signing
@@ -710,7 +711,7 @@ def test_require_signatures_rejects_unsigned(tmp_path, nsec_file):
 
 def test_require_signatures_toggle_and_verify(tmp_path, nsec_file):
     """`require-signatures on` flags an existing unsigned node at verify."""
-    _nsec_path, pubkey, _secret = nsec_file
+    nsec_path, pubkey, _secret = nsec_file
     org = tmp_path / "org.yaml"
     org.write_text(
         ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey)))
@@ -752,8 +753,22 @@ def test_require_signatures_toggle_and_verify(tmp_path, nsec_file):
         ],
     )
     assert r.exit_code == 0, r.output
-    # Turn the production profile on.
-    r = runner.invoke(main, ["require-signatures", "on", "--root", str(tmp_path)])
+    # Turn the production profile on (authenticated, signed transition).
+    r = runner.invoke(
+        main,
+        [
+            "require-signatures",
+            "on",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
+    )
     assert r.exit_code == 0, r.output
     assert "requireSignatures: on" in r.output
     # verify now flags the unsigned node.
@@ -763,11 +778,156 @@ def test_require_signatures_toggle_and_verify(tmp_path, nsec_file):
     # And the toggle is durable: a fresh `verify` still fails.
     r = runner.invoke(main, ["verify", "--root", str(tmp_path)])
     assert r.exit_code != 0
-    # Turning it off restores legacy behavior.
-    r = runner.invoke(main, ["require-signatures", "off", "--root", str(tmp_path)])
+    # Turning it off restores legacy behavior (authenticated transition).
+    r = runner.invoke(
+        main,
+        [
+            "require-signatures",
+            "off",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
+    )
     assert r.exit_code == 0, r.output
     r = runner.invoke(main, ["verify", "--root", str(tmp_path)])
     assert r.exit_code == 0, r.output
+
+
+def test_require_signatures_downgrade_requires_signing(tmp_path, nsec_file):
+    """An unauthenticated `on -> off` downgrade is refused fail-closed (audit #1).
+
+    With the production profile enabled, turning it off without the actor's
+    signing key must fail and leave the profile unchanged. With the key, the
+    signed transition succeeds, is audited, and advances the mutation head.
+    """
+    nsec_path, pubkey, _secret = nsec_file
+    org = tmp_path / "org.yaml"
+    org.write_text(
+        ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey)))
+    )
+    runner = CliRunner()
+    r = runner.invoke(
+        main,
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--require-signatures",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    # Downgrade WITHOUT a signing key must be refused fail-closed.
+    r = runner.invoke(
+        main,
+        [
+            "require-signatures",
+            "off",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code != 0
+    assert "signing key" in r.output or "refused" in r.output
+
+    # The profile must be unchanged after the refused downgrade.
+    manifest = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    assert manifest["manifest"]["requireSignatures"] is True
+
+    # With the key, the signed downgrade succeeds and is audited + head-advancing.
+    before = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    before_head = before["manifest"]["headSeq"]
+    r = runner.invoke(
+        main,
+        [
+            "require-signatures",
+            "off",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    manifest = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    assert manifest["manifest"]["requireSignatures"] is False
+    assert manifest["manifest"]["headSeq"] > before_head
+    assert manifest["manifest"]["profileTransition"]["actor"] == "paco"
+    assert manifest["manifest"]["profileTransition"]["sig"]
+    # verify accepts the signed transition.
+    r = runner.invoke(main, ["verify", "--org-yaml", str(org), "--root", str(tmp_path)])
+    assert r.exit_code == 0, r.output
+
+
+def test_require_signatures_tampered_transition_fails(tmp_path, nsec_file):
+    """Editing requireSignatures outside the authenticated transition is caught.
+
+    A direct manifest edit that flips the flag (or changes it away from the
+    signed transition's recorded mode) fails `verify` fail-closed.
+    """
+    nsec_path, pubkey, _secret = nsec_file
+    org = tmp_path / "org.yaml"
+    org.write_text(
+        ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey)))
+    )
+    runner = CliRunner()
+    r = runner.invoke(
+        main,
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(
+        main,
+        [
+            "require-signatures",
+            "on",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    # Tamper: flip the flag directly, bypassing the authenticated transition.
+    mp = tmp_path / "manifest.yaml"
+    data = yaml.safe_load(mp.read_text(encoding="utf-8"))
+    data["manifest"]["requireSignatures"] = False
+    mp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    r = runner.invoke(main, ["verify", "--root", str(tmp_path)])
+    assert r.exit_code != 0
+    assert "FAIL profile" in r.output or "profile" in r.output
 
 
 def test_policy_hash_binds_org_model(tmp_path, nsec_file):

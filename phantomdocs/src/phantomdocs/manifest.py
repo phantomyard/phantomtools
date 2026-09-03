@@ -76,6 +76,7 @@ def empty_manifest(
             "sealPubkey": None,
             "sealedHeadSeq": None,
             "requireSignatures": require_signatures,
+            "profileTransition": None,
             "headSeq": 0,
             "headMac": root_mac,
             "auditSeq": 0,
@@ -199,6 +200,36 @@ def validate(data: dict[str, Any]) -> list[str]:
         m.get("requireSignatures"), bool
     ):
         errors.append("manifest.requireSignatures must be a boolean")
+    profile_transition = m.get("profileTransition")
+    if profile_transition is not None:
+        if not isinstance(profile_transition, dict):
+            errors.append("manifest.profileTransition must be a mapping")
+        else:
+            if profile_transition.get("seq") is not None and not isinstance(
+                profile_transition.get("seq"), int
+            ):
+                errors.append("manifest.profileTransition.seq must be an integer")
+            for field in ("actor", "ts", "policyHash"):
+                value = profile_transition.get(field)
+                if value is not None and not isinstance(value, str):
+                    errors.append(
+                        f"manifest.profileTransition.{field} must be a string"
+                    )
+            sig = profile_transition.get("sig")
+            if sig is not None and (
+                not isinstance(sig, str)
+                or len(sig) != 128
+                or any(c not in "0123456789abcdef" for c in sig)
+            ):
+                errors.append("manifest.profileTransition.sig must be 128-hex")
+            for field in ("sigPubkey", "prevHead"):
+                value = profile_transition.get(field)
+                if value is not None and (
+                    not isinstance(value, str) or not is_valid_hex64(value)
+                ):
+                    errors.append(
+                        f"manifest.profileTransition.{field} must be a 64-hex string"
+                    )
     for field in ("headMac", "sealPubkey"):
         value = m.get(field)
         if value is not None and (

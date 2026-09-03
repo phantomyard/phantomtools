@@ -240,7 +240,11 @@ def test_legacy_v1_signature_and_seal_still_verify(tmp_path):
         crypto_version=None,
     )
     m["signedRootMac"] = signing.sign_seal(org_nsec, legacy_seal)
+    # A pre-#109 manifest also predates the signing-profile header fields: drop
+    # them so the legacy seal envelope (no require_signatures) still matches.
     m.pop("cryptoVersion", None)
+    m.pop("requireSignatures", None)
+    m.pop("profileTransition", None)
 
     mp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 

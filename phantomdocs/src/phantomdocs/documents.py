@@ -41,8 +41,10 @@ from .manifest import (
 from .signing import (
     CRYPTO_VERSION,
     mutation_envelope,
+    profile_envelope,
     pubkey_from_nsec,
     sign_mutation,
+    sign_profile,
 )
 from .storage import (
     LocalBackend,
@@ -808,3 +810,63 @@ class DocumentService:
             )
 
         return {"urn": current["urn"], "mac": mac}
+
+    def set_require_signatures(self, mode: bool) -> dict[str, Any]:
+        """Set the namespace signing profile as an authenticated transition.
+
+        A profile change is security-sensitive state, never a bare header
+        edit. It requires the actor's signing key in *both* directions (an
+        unauthenticated ``on -> off`` downgrade is refused fail-closed), is
+        signed over a dedicated profile envelope, appended to the audit log,
+        and advances the mutation head (``headSeq`` / ``auditSeq`` /
+        ``auditHead``) so the change is auditable and head-advancing. The
+        signed transition is recorded in the manifest header
+        (``profileTransition``) so ``verify`` can prove the setting was
+        authentically changed.
+        """
+        with manifest_lock(_manifest_path(self.root)):
+            repo = self._load_repo()
+            header = repo.data["manifest"]
+            if bool(header.get("requireSignatures")) == mode:
+                return {"mode": mode, "unchanged": True}
+            if not self.nsec:
+                raise DocumentError(
+                    "denied: changing the signing profile requires an actor "
+                    "signing key (--nsec-file or PHANTOMDOCS_NSEC); an "
+                    "unauthenticated profile change is refused fail-closed"
+                )
+            seq, prev_head = self._next_head(repo)
+            ts = _now_iso()
+            envelope = profile_envelope(
+                mode=mode,
+                actor=self.actor_id,
+                seq=seq,
+                prev_head=prev_head,
+                ts=ts,
+                policy_hash=self.policy_hash,
+            )
+            sig = sign_profile(self.nsec, envelope)
+            sig_pubkey = pubkey_from_nsec(self.nsec)
+            header["requireSignatures"] = mode
+            header["profileTransition"] = {
+                "actor": self.actor_id,
+                "mode": mode,
+                "seq": seq,
+                "prevHead": prev_head,
+                "ts": ts,
+                "policyHash": self.policy_hash,
+                "cryptoVersion": CRYPTO_VERSION,
+                "sig": sig,
+                "sigPubkey": sig_pubkey,
+            }
+            self._commit_transaction(
+                repo,
+                seq=seq,
+                action="profile",
+                urn=f"urn:{repo.org}:namespace:{repo.namespace}",
+                mac=repo.root_mac,
+                ch=None,
+                sig=sig,
+                sig_pubkey=sig_pubkey,
+            )
+        return {"mode": mode, "seq": seq}
