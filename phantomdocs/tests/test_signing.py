@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from phantomdocs import signing
@@ -154,6 +155,7 @@ roles:
   - id: ceo
     access_level: level-2
     security_exceptions: []
+    reports_to: null
 actors:
   - id: paco
     role: ceo
@@ -163,7 +165,6 @@ actors:
 
 
 def test_add_signs_node_and_verify_accepts(tmp_path, nsec_file):
-
     nsec_path, pubkey, _secret = nsec_file
     org = tmp_path / "org.yaml"
     org.write_text(
@@ -636,3 +637,498 @@ def test_signed_tag_binds_ref_name_and_target(tmp_path, nsec_file):
     r = runner.invoke(main, ["verify", "--org-yaml", str(org), "--root", str(renamed)])
     assert r.exit_code != 0
     assert "ref signature invalid" in r.output
+
+
+def test_require_signatures_rejects_unsigned(tmp_path, nsec_file):
+    """Production profile (requireSignatures): unsigned mutation is rejected."""
+    nsec_path, pubkey, _secret = nsec_file
+    org = tmp_path / "org.yaml"
+    org.write_text(
+        ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey)))
+    )
+    doc = tmp_path / "report.txt"
+    doc.write_text("quarterly report")
+    runner = CliRunner()
+    r = runner.invoke(
+        main,
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--require-signatures",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    # Unsigned add must fail (fail-closed).
+    r = runner.invoke(
+        main,
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "report",
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code != 0
+    assert "requires signed mutations" in r.output
+    # Signed add succeeds.
+    r = runner.invoke(
+        main,
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "report",
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+
+def test_require_signatures_toggle_and_verify(tmp_path, nsec_file):
+    """`require-signatures on` flags an existing unsigned node at verify."""
+    nsec_path, pubkey, _secret = nsec_file
+    org = tmp_path / "org.yaml"
+    org.write_text(
+        ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey)))
+    )
+    doc = tmp_path / "report.txt"
+    doc.write_text("quarterly report")
+    runner = CliRunner()
+    r = runner.invoke(
+        main,
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    # Add unsigned while the profile is off (legacy/development mode).
+    r = runner.invoke(
+        main,
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "report",
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    # Turn the production profile on (authenticated, signed transition).
+    r = runner.invoke(
+        main,
+        [
+            "require-signatures",
+            "on",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    assert "requireSignatures: on" in r.output
+    # verify now flags the unsigned node.
+    r = runner.invoke(main, ["verify", "--root", str(tmp_path)])
+    assert r.exit_code != 0
+    assert "unsigned mutation in a signatures-required namespace" in r.output
+    # And the toggle is durable: a fresh `verify` still fails.
+    r = runner.invoke(main, ["verify", "--root", str(tmp_path)])
+    assert r.exit_code != 0
+    # Turning it off restores legacy behavior (authenticated transition).
+    r = runner.invoke(
+        main,
+        [
+            "require-signatures",
+            "off",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(main, ["verify", "--root", str(tmp_path)])
+    assert r.exit_code == 0, r.output
+
+
+def test_require_signatures_downgrade_requires_signing(tmp_path, nsec_file):
+    """An unauthenticated `on -> off` downgrade is refused fail-closed (audit #1).
+
+    With the production profile enabled, turning it off without the actor's
+    signing key must fail and leave the profile unchanged. With the key, the
+    signed transition succeeds, is audited, and advances the mutation head.
+    """
+    nsec_path, pubkey, _secret = nsec_file
+    org = tmp_path / "org.yaml"
+    org.write_text(
+        ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey)))
+    )
+    runner = CliRunner()
+    r = runner.invoke(
+        main,
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--require-signatures",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    # Downgrade WITHOUT a signing key must be refused fail-closed.
+    r = runner.invoke(
+        main,
+        [
+            "require-signatures",
+            "off",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code != 0
+    assert "signing key" in r.output or "refused" in r.output
+
+    # The profile must be unchanged after the refused downgrade.
+    manifest = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    assert manifest["manifest"]["requireSignatures"] is True
+
+    # With the key, the signed downgrade succeeds and is audited + head-advancing.
+    before = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    before_head = before["manifest"]["headSeq"]
+    r = runner.invoke(
+        main,
+        [
+            "require-signatures",
+            "off",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    manifest = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    assert manifest["manifest"]["requireSignatures"] is False
+    assert manifest["manifest"]["headSeq"] > before_head
+    assert manifest["manifest"]["profileTransition"]["actor"] == "paco"
+    assert manifest["manifest"]["profileTransition"]["sig"]
+    # verify accepts the signed transition.
+    r = runner.invoke(main, ["verify", "--org-yaml", str(org), "--root", str(tmp_path)])
+    assert r.exit_code == 0, r.output
+
+
+def test_require_signatures_downgrade_requires_authorization(tmp_path, nsec_file):
+    """A valid but unauthorized actor's signed downgrade is rejected (audit #1).
+
+    Authorization is distinct from authentication: a declared actor holding a
+    valid key but a non-root role (not at the top of the reporting hierarchy)
+    can produce a cryptographically valid downgrade signature, yet must still
+    be refused — the signing profile is namespace administration, restricted
+    to the org's root role. Fail-closed even with a fully valid signature.
+    """
+    import coincurve
+
+    nsec_path, pubkey, _secret = nsec_file
+    # A second, subordinate actor with its own valid key.
+    sub_secret = coincurve.PrivateKey().secret.hex()
+    sub_pubkey = signing.pubkey_from_nsec(sub_secret)
+    sub_nsec = tmp_path / "sub-nsec.txt"
+    sub_nsec.write_text(sub_secret)
+    os.chmod(sub_nsec, 0o600)
+
+    org = tmp_path / "org.yaml"
+    org.write_text(
+        f"""\
+version: 1
+organization:
+  id: example-org
+policies:
+  access_levels:
+    level-2:
+      categories: [1, 2]
+roles:
+  - id: ceo
+    access_level: level-2
+    security_exceptions: []
+    reports_to: null
+  - id: cfo
+    access_level: level-2
+    security_exceptions: []
+    reports_to: ceo
+actors:
+  - id: paco
+    role: ceo
+    npub: {_bech32_encode("npub", bytes.fromhex(pubkey))}
+    actor_exceptions: []
+  - id: roberto
+    role: cfo
+    npub: {_bech32_encode("npub", bytes.fromhex(sub_pubkey))}
+    actor_exceptions: []
+"""
+    )
+    runner = CliRunner()
+    r = runner.invoke(
+        main,
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--require-signatures",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    # The subordinate actor (valid key, non-root role) signs a downgrade; it
+    # must still be refused fail-closed.
+    r = runner.invoke(
+        main,
+        [
+            "require-signatures",
+            "off",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "roberto",
+            "--nsec-file",
+            str(sub_nsec),
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code != 0
+    assert "namespace administrator" in r.output
+
+    # The profile must be unchanged after the refused downgrade.
+    manifest = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    assert manifest["manifest"]["requireSignatures"] is True
+
+    # The root-role actor can still change the profile with its valid key.
+    r = runner.invoke(
+        main,
+        [
+            "require-signatures",
+            "off",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    manifest = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    assert manifest["manifest"]["requireSignatures"] is False
+
+
+def test_require_signatures_tampered_transition_fails(tmp_path, nsec_file):
+    """Editing requireSignatures outside the authenticated transition is caught.
+
+    A direct manifest edit that flips the flag (or changes it away from the
+    signed transition's recorded mode) fails `verify` fail-closed.
+    """
+    nsec_path, pubkey, _secret = nsec_file
+    org = tmp_path / "org.yaml"
+    org.write_text(
+        ORG.replace("NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey)))
+    )
+    runner = CliRunner()
+    r = runner.invoke(
+        main,
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(
+        main,
+        [
+            "require-signatures",
+            "on",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    # Tamper: flip the flag directly, bypassing the authenticated transition.
+    mp = tmp_path / "manifest.yaml"
+    data = yaml.safe_load(mp.read_text(encoding="utf-8"))
+    data["manifest"]["requireSignatures"] = False
+    mp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    r = runner.invoke(main, ["verify", "--root", str(tmp_path)])
+    assert r.exit_code != 0
+    assert "FAIL profile" in r.output or "profile" in r.output
+
+
+def test_policy_hash_binds_org_model(tmp_path, nsec_file):
+    """A mutation binds the org-model digest into its signed envelope (#7).
+
+    The node records ``policyHash`` and the signature covers it, so a tampered
+    ``policyHash`` (e.g. reclassifying a category after the fact) no longer
+    verifies. Two org models with different policy produce different digests.
+    """
+    from phantomdocs.access import policy_hash
+
+    nsec_path, pubkey, _secret = nsec_file
+
+    def org_yaml(extra_category):
+        base = ORG.replace(
+            "NPUB_PLACEHOLDER", _bech32_encode("npub", bytes.fromhex(pubkey))
+        )
+        if extra_category:
+            return base + "    security_exceptions: [category-3]\n"
+        return base
+
+    # Different policy => different digest.
+    org_a = tmp_path / "org_a.yaml"
+    org_b = tmp_path / "org_b.yaml"
+    org_a.write_text(org_yaml(False))
+    org_b.write_text(org_yaml(True))
+    import yaml as _yaml
+
+    ha = policy_hash(_yaml.safe_load(org_a.read_text()))
+    hb = policy_hash(_yaml.safe_load(org_b.read_text()))
+    assert ha != hb
+
+    doc = tmp_path / "report.txt"
+    doc.write_text("quarterly report")
+    runner = CliRunner()
+    r = runner.invoke(
+        main,
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(
+        main,
+        [
+            "add",
+            str(doc),
+            "--slug",
+            "report",
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            str(org_a),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    # The node records its policyHash.
+    data = _yaml.safe_load((tmp_path / "manifest.yaml").read_text())
+    node = data["nodes"][0]
+    assert node.get("policyHash") == ha
+
+    # verify (signed under org_a) passes with org_a.
+    r = runner.invoke(
+        main, ["verify", "--org-yaml", str(org_a), "--root", str(tmp_path)]
+    )
+    assert r.exit_code == 0, r.output
+
+    # Tampering with the recorded policyHash (without re-signing) breaks the
+    # signature, because the envelope binds it.
+    tampered = tmp_path / "manifest.yaml"
+    data = _yaml.safe_load(tampered.read_text())
+    data["nodes"][0]["policyHash"] = hb
+    tampered.write_text(_yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    r = runner.invoke(
+        main, ["verify", "--org-yaml", str(org_a), "--root", str(tmp_path)]
+    )
+    assert r.exit_code != 0
+    assert "signature invalid" in r.output

@@ -19,6 +19,8 @@ import tempfile
 import time
 from typing import Any
 
+from .fsutil import fsync_dir
+
 AUDIT_FILENAME = "audit.log"
 
 
@@ -232,9 +234,68 @@ def truncate(root: str, keep: int) -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
+        fsync_dir(directory)
     except BaseException:
         try:
             os.unlink(tmp)
         except OSError:
             pass
         raise
+
+
+def reconcile(root: str, expected_count: int, expected_head: str | None) -> int:
+    """Reconcile the audit log with the manifest after a crash (issue #74).
+
+    The only *recoverable* divergence is an orphaned audit tail — entries
+    appended after the manifest's last commit (a crash between the audit
+    append and the manifest write). Those are discarded so the next mutation
+    starts from a clean, strictly-monotonic head.
+
+    Every other divergence (a broken hash chain, the log *behind* the
+    manifest, or an orphaned tail that does not chain cleanly off the recorded
+    head) is evidence of tampering or manual edits, not a crash; it raises
+    ``ValueError`` and the log is left untouched (fail-closed).
+
+    Returns the number of orphaned entries discarded (0 when already
+    consistent).
+    """
+    problems = verify_chain(root)
+    if problems:
+        raise ValueError(
+            "audit hash chain is broken (tampering, not a crash): "
+            + "; ".join(problems)
+        )
+
+    actual_count, _actual_head = head(root)
+    if actual_count == expected_count:
+        lines = raw_lines(root)
+        if expected_head is not None and (
+            not lines or _sha256(lines[-1]) != expected_head
+        ):
+            raise ValueError(
+                "audit count matches but the head hash does not (tampering)"
+            )
+        return 0
+
+    if actual_count < expected_count:
+        raise ValueError(
+            f"audit log is missing {expected_count - actual_count} entries "
+            "relative to the manifest — evidence of tampering or manual edits, "
+            "not a crash"
+        )
+
+    # Audit ahead of manifest: verify the kept prefix chains off the recorded
+    # head, then discard the orphaned tail.
+    lines = raw_lines(root)
+    if (
+        expected_count > 0
+        and expected_head is not None
+        and _sha256(lines[expected_count - 1]) != expected_head
+    ):
+        raise ValueError(
+            "orphaned audit tail does not chain cleanly off the manifest's "
+            "recorded head; refusing to recover (tampering?)"
+        )
+    discarded = actual_count - expected_count
+    truncate(root, expected_count)
+    return discarded

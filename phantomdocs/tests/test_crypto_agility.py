@@ -221,11 +221,13 @@ def test_legacy_v1_signature_and_seal_still_verify(tmp_path):
     actor_nsec = (tmp_path / "actor.nsec").read_text(encoding="utf-8").strip()
     org_nsec = (tmp_path / "org.nsec").read_text(encoding="utf-8").strip()
 
-    # Re-sign each mutation over the legacy envelope and drop cryptoVersion.
+    # Re-sign each mutation over the legacy envelope and drop cryptoVersion
+    # (a pre-upgrade node also predates policyHash, so drop it too).
     for node in data.get("nodes", []):
         if node.get("sig") and node.get("sigPubkey"):
             node["sig"] = signing.sign_mutation(actor_nsec, _legacy_v1_envelope(node))
         node.pop("cryptoVersion", None)
+        node.pop("policyHash", None)
 
     # Re-seal the head over the legacy seal envelope and drop the header version.
     m = data["manifest"]
@@ -238,7 +240,11 @@ def test_legacy_v1_signature_and_seal_still_verify(tmp_path):
         crypto_version=None,
     )
     m["signedRootMac"] = signing.sign_seal(org_nsec, legacy_seal)
+    # A pre-#109 manifest also predates the signing-profile header fields: drop
+    # them so the legacy seal envelope (no require_signatures) still matches.
     m.pop("cryptoVersion", None)
+    m.pop("requireSignatures", None)
+    m.pop("profileTransition", None)
 
     mp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
@@ -305,6 +311,7 @@ def test_legacy_v1_ref_still_verifies(tmp_path):
     )
     ref["sig"] = signing.sign_mutation(actor_nsec, legacy_env)
     ref.pop("cryptoVersion", None)
+    ref.pop("policyHash", None)
     mp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
     r = ctx["runner"].invoke(

@@ -15,6 +15,8 @@ denied (fail-closed).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import time
 import warnings
@@ -59,6 +61,22 @@ def load_org(org_yaml_path: str) -> dict[str, Any]:
         org = yaml.safe_load(f) or {}
     validate_org_schema(org)
     return org
+
+
+def policy_hash(org: dict[str, Any]) -> str:
+    """Canonical digest of the org model that authorizes a mutation (audit #7).
+
+    Deterministic JSON (sorted keys, compact separators, ASCII-escaped) of the
+    parsed org model, SHA-256 hashed. Two org models that differ in any
+    authorization-relevant way (roles, actors, keys, categories, exceptions)
+    produce different digests, so a node records *which* policy version
+    authorized it — a mutation carries ``policyHash = Y`` and an auditor can
+    later prove provenance without trusting the current org model.
+    """
+    canonical = json.dumps(
+        org, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def actor_key_records(org: dict[str, Any], actor_id: str) -> list[dict[str, Any]]:
@@ -203,6 +221,40 @@ def _actor_role_id(org: dict[str, Any], actor_id: str) -> str | None:
         if a.get("id") == actor_id:
             return a.get("role")
     return None
+
+
+def root_role_ids(org: dict[str, Any]) -> list[str]:
+    """Role ids at the top of the reporting hierarchy (the org's root).
+
+    A role is a root role only when ``reports_to`` is *explicitly present and
+    null* — the top of the hierarchy (e.g. ``ceo``). A missing ``reports_to``
+    field or a malformed value (e.g. an empty string ``""``) is NOT a root
+    role and is treated fail-closed: a namespace whose hierarchy is not
+    explicitly declared authorizes nobody.
+    """
+    roots: list[str] = []
+    for r in org.get("roles", []):
+        if not isinstance(r, dict) or not r.get("id"):
+            continue
+        if "reports_to" in r and r["reports_to"] is None:
+            roots.append(r["id"])
+    return roots
+
+
+def can_administer_namespace(org: dict[str, Any], actor_id: str) -> bool:
+    """True iff ``actor_id`` is authorized to administer the namespace profile.
+
+    Administration (changing the namespace-wide signing profile) is restricted
+    to the root role(s) — the top of the reporting hierarchy. Authorization is
+    distinct from authentication: a declared actor holding a valid key is
+    *authenticated*, but only a root-role actor is *authorized* to change the
+    signing profile (audit #1). Fail-closed: an unknown actor, an actor with
+    no role, or a non-root role is denied.
+    """
+    role_id = _actor_role_id(org, actor_id)
+    if not role_id:
+        return False
+    return role_id in root_role_ids(org)
 
 
 def _security_categories(org: dict[str, Any]) -> dict[str, Any]:

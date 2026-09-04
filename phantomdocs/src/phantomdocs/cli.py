@@ -6,7 +6,6 @@ audit · derive-manifest · status · update.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
@@ -25,10 +24,9 @@ from .access import (
 from .audit import append as audit_append
 from .audit import head as audit_head
 from .audit import max_seq as audit_max_seq
-from .audit import raw_lines as audit_raw_lines
 from .audit import read as audit_read
+from .audit import reconcile as audit_reconcile
 from .audit import sequence_issues as audit_sequence_issues
-from .audit import truncate as audit_truncate
 from .audit import verify_chain as audit_verify_chain
 from .derive import derive_manifest as derive_from_org
 from .documents import DocumentError, DocumentService
@@ -66,10 +64,12 @@ from .signing import (
     CRYPTO_VERSION,
     mutation_envelope,
     npub_to_pubkey_hex,
+    profile_envelope,
     pubkey_from_nsec,
     seal_envelope,
     sign_seal,
     verify_mutation,
+    verify_profile,
     verify_seal,
 )
 from .storage import (
@@ -223,8 +223,21 @@ def _org_pubkey_hex(pubkey: str) -> str:
 @click.option("--org", required=True, help="Organization id (from org.yaml).")
 @click.option("--namespace", default="docs", show_default=True, help="Namespace name.")
 @click.option("--org-pubkey", default="", help="Org Nostr pubkey for the root MAC.")
+@click.option(
+    "--require-signatures",
+    is_flag=True,
+    default=False,
+    help="Production security profile: reject unsigned mutations (see "
+    "`pd require-signatures`).",
+)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def init(org: str, namespace: str, org_pubkey: str, root: str) -> None:
+def init(
+    org: str,
+    namespace: str,
+    org_pubkey: str,
+    require_signatures: bool,
+    root: str,
+) -> None:
     """Create a new namespace: manifest + local blob store."""
     _validate_slug(namespace, "namespace")
     path = _manifest_path(root)
@@ -245,7 +258,7 @@ def init(org: str, namespace: str, org_pubkey: str, root: str) -> None:
         None,
         seq=0,
     )
-    data = empty_manifest(org, namespace, mac)
+    data = empty_manifest(org, namespace, mac, require_signatures=require_signatures)
     data["manifest"]["auditSeq"] = 1
     data["manifest"]["auditHead"] = line_hash
     save(path, data)
@@ -544,6 +557,7 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
     # key *at the mutation timestamp* — honoring rotation windows and
     # revocations (issue #76), not merely "some current declared key".
     org_model = load_org(org_yaml) if org_yaml else None
+    require_sig = bool(manifest.get("manifest", {}).get("requireSignatures"))
 
     failures = 0
     for node in manifest.get("nodes", []):
@@ -632,7 +646,12 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                 f"(supported: v{CRYPTO_VERSION})"
             )
 
-        if sig is not None or sig_pubkey is not None:
+        if require_sig and sig is None and sig_pubkey is None:
+            issues.append(
+                "unsigned mutation in a signatures-required namespace "
+                "(manifest.requireSignatures=true)"
+            )
+        elif sig is not None or sig_pubkey is not None:
             if not sig or not sig_pubkey:
                 issues.append("incomplete mutation signature")
             elif not unsupported_node_crypto:
@@ -647,6 +666,7 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                     seq=node.get("seq"),
                     prev_head=node.get("prevHead"),
                     ts=node.get("ts"),
+                    policy_hash=node.get("policyHash"),
                     crypto_version=node_crypto,
                 )
                 if not verify_mutation(sig_pubkey, sig, envelope):
@@ -706,7 +726,12 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                     f"unsupported crypto version {ref_crypto!r} "
                     f"(supported: v{CRYPTO_VERSION})"
                 )
-            if (sig is None) != (sig_pubkey is None):
+            if require_sig and sig is None and sig_pubkey is None:
+                issues.append(
+                    "unsigned tag in a signatures-required namespace "
+                    "(manifest.requireSignatures=true)"
+                )
+            elif (sig is None) != (sig_pubkey is None):
                 issues.append("incomplete ref signature")
             elif sig is not None and not unsupported_ref_crypto:
                 envelope = mutation_envelope(
@@ -721,6 +746,7 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                     seq=value.get("seq"),
                     prev_head=value.get("prevHead"),
                     ts=value.get("ts"),
+                    policy_hash=value.get("policyHash"),
                     crypto_version=ref_crypto,
                 )
                 if not verify_mutation(sig_pubkey, sig, envelope):
@@ -862,6 +888,7 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                 head_mac=m.get("headMac") or m["rootMac"],
                 audit_seq=int(m.get("auditSeq") or 0),
                 audit_head=m.get("auditHead"),
+                require_signatures=m.get("requireSignatures"),
                 # ``None`` => legacy pre-crypto-agility seal envelope (no
                 # ``crypto_version`` field), preserving verification of seals
                 # made before the crypto-agility upgrade.
@@ -893,6 +920,52 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                 "FAIL seal: namespace is sealed but --org-pubkey was not "
                 "supplied; refusing to skip the trust anchor"
             )
+
+    # Signing-profile transition (audit #1): the production/development
+    # profile is authenticated state. A recorded transition must carry a valid
+    # signature over its canonical envelope and must agree with the live
+    # ``requireSignatures`` setting — so a profile change made outside the
+    # authenticated path (a direct edit, or an unsigned run) is detected, and
+    # an unauthenticated ``on -> off`` downgrade fails closed.
+    transition = manifest_header.get("profileTransition")
+    if transition is not None:
+        issues: list[str] = []
+        sig = transition.get("sig")
+        sig_pubkey = transition.get("sigPubkey")
+        if transition.get("mode") != bool(manifest_header.get("requireSignatures")):
+            issues.append(
+                "profile changed outside the authenticated transition "
+                "(profileTransition.mode does not match requireSignatures)"
+            )
+        if not sig or not sig_pubkey:
+            issues.append("incomplete profile transition signature")
+        else:
+            envelope = profile_envelope(
+                mode=bool(transition.get("mode")),
+                actor=transition.get("actor", ""),
+                seq=transition.get("seq"),
+                prev_head=transition.get("prevHead", ""),
+                ts=transition.get("ts"),
+                policy_hash=transition.get("policyHash"),
+                crypto_version=transition.get("cryptoVersion"),
+            )
+            if not verify_profile(sig_pubkey, sig, envelope):
+                issues.append("profile transition signature invalid")
+            elif org_model is not None:
+                actor = transition.get("actor")
+                ts = transition.get("ts")
+                if not actor:
+                    issues.append("profile transition has no actor")
+                elif ts is not None and not key_valid_at(
+                    org_model, actor, sig_pubkey, ts
+                ):
+                    issues.append(
+                        "profile transition key is not valid for the actor "
+                        "at transition time (undeclared, rotated out, or revoked)"
+                    )
+        if issues:
+            failures += 1
+            click.echo(f"FAIL profile: {', '.join(issues)}")
 
     if failures:
         raise click.ClickException(f"{failures} node(s) failed verification")
@@ -1004,8 +1077,8 @@ def audit(limit, root):
 def seal(nsec_file, root):
     """Seal the namespace head with the org key (issues #70/#71).
 
-    Signs the root MAC together with the monotonic head (``headSeq``,
-    ``headMac``, ``auditSeq``, ``auditHead``) and records the signature
+    Signs the root MAC together with the head (``headSeq``, ``headMac``,
+    ``auditSeq``, ``auditHead``) and records the signature
     (``signedRootMac``), the org pubkey (``sealPubkey``) and the sealed head
     sequence (``sealedHeadSeq``) in the manifest header. ``verify
     --org-pubkey`` then checks the seal, so a forged root, a deleted version,
@@ -1029,6 +1102,7 @@ def seal(nsec_file, root):
         head_mac=m.get("headMac") or m["rootMac"],
         audit_seq=int(m.get("auditSeq") or 0),
         audit_head=m.get("auditHead"),
+        require_signatures=m.get("requireSignatures"),
         # Match ``verify``: a legacy manifest (no ``cryptoVersion``) is sealed
         # over the legacy envelope, so re-sealing a pre-upgrade namespace does
         # not silently produce a seal it can no longer verify.
@@ -1041,6 +1115,46 @@ def seal(nsec_file, root):
     save(path, data)
     click.echo(f"sealed {m['org']}/{m['namespace']} at headSeq {m['sealedHeadSeq']}")
     click.echo(f"  seal pubkey {pubkey}")
+
+
+@main.command("require-signatures")
+@click.argument("mode", type=click.Choice(["on", "off"], case_sensitive=False))
+@click.option(
+    "--org-yaml", default=None, help="PhantomOrg org.yaml (authoritative ACL)."
+)
+@click.option("--actor", default=None, help=_ACTOR_HELP)
+@click.option(
+    "--nsec-file",
+    default=None,
+    help="File containing the actor's nsec (signing the profile transition).",
+)
+@click.option("--root", default=".", show_default=True, help="Local backend root.")
+def require_signatures(mode, org_yaml, actor, nsec_file, root):
+    """Set the namespace signing profile (production security mode).
+
+    ``on`` — production profile: every mutation must carry a valid actor
+    signature; an unsigned mutation is rejected fail-closed and ``pd verify``
+    flags any unsigned node or ref. ``off`` — legacy/development profile:
+    signing is optional and unsigned mutations are accepted (v1 behavior).
+
+    A profile change is authenticated state: it requires the actor's signing
+    key (an unauthenticated ``on -> off`` downgrade is refused fail-closed),
+    is signed over a dedicated profile envelope, is recorded in the audit log,
+    and advances the mutation head. ``verify`` checks the transition signature
+    and the head seal binds the setting, so a change made outside this
+    authenticated path is detected.
+    """
+    actor_id, _org = _require_acl(org_yaml, actor)
+    try:
+        service = DocumentService(root, org_yaml, actor_id, nsec_file)
+        result = service.set_require_signatures(mode == "on")
+    except DocumentError as exc:
+        raise click.ClickException(str(exc))
+    if result.get("unchanged"):
+        click.echo(f"requireSignatures: already {mode}")
+    else:
+        click.echo(f"requireSignatures: {mode}")
+        click.echo(f"  headSeq {result['seq']}  (signed by {actor_id})")
 
 
 @main.command("recover")
@@ -1064,54 +1178,22 @@ def recover(root):
             "manifest has no auditSeq anchor; nothing to recover"
         )
 
-    problems = audit_verify_chain(root)
-    if problems:
+    try:
+        discarded = audit_reconcile(root, int(expected), header.get("auditHead"))
+    except ValueError as exc:
         raise click.ClickException(
-            "audit hash chain is broken (tampering, not a crash); "
-            "refusing to recover:\n  " + "\n  ".join(problems)
+            "refusing to recover (tampering, not a crash): " + str(exc)
         )
 
-    actual_count, _actual_head = audit_head(root)
-    expected_head = header.get("auditHead")
-
-    if actual_count == expected:
-        lines = audit_raw_lines(root)
-        if expected_head is not None and (
-            not lines or hashlib.sha256(lines[-1]).hexdigest() != expected_head
-        ):
-            raise click.ClickException(
-                "audit count matches but the head hash does not (tampering); "
-                "refusing to recover"
-            )
+    if discarded == 0:
         click.echo("nothing to recover: audit log is consistent with the manifest")
-        return
-
-    if actual_count < expected:
-        raise click.ClickException(
-            f"audit log is missing {expected - actual_count} entries relative to "
-            "the manifest — evidence of tampering or manual edits, not a crash; "
-            "refusing to recover"
+    else:
+        click.echo(
+            f"discarded {discarded} orphaned audit "
+            f"entr{'y' if discarded == 1 else 'ies'} "
+            f"(mutation{'s' if discarded != 1 else ''} committed to the audit log "
+            f"but not the manifest)"
         )
-
-    # Audit ahead of manifest: verify the kept prefix matches the recorded head.
-    lines = audit_raw_lines(root)
-    if (
-        expected > 0
-        and expected_head is not None
-        and hashlib.sha256(lines[expected - 1]).hexdigest() != expected_head
-    ):
-        raise click.ClickException(
-            "orphaned audit tail does not chain cleanly off the manifest's "
-            "recorded head; refusing to recover (tampering?)"
-        )
-    discarded = actual_count - expected
-    audit_truncate(root, expected)
-    click.echo(
-        f"discarded {discarded} orphaned audit "
-        f"entr{'y' if discarded == 1 else 'ies'} "
-        f"(mutation{'s' if discarded != 1 else ''} committed to the audit log "
-        f"but not the manifest)"
-    )
 
 
 @main.command("derive-manifest")

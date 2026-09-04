@@ -22,6 +22,7 @@ import subprocess  # nosec B404
 import tempfile
 from urllib.parse import urlparse
 
+from .fsutil import fsync_dir
 from .identity import content_hash as _content_hash
 from .identity import is_valid_hex64
 
@@ -125,6 +126,7 @@ class LocalBackend:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, path)
+            fsync_dir(shard)
         except BaseException:
             try:
                 os.unlink(tmp)

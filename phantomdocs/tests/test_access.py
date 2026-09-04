@@ -1,10 +1,12 @@
 import textwrap
 
 from phantomdocs.access import (
+    can_administer_namespace,
     can_read,
     can_write,
     load_org,
     resolved_categories,
+    root_role_ids,
 )
 
 ORG_YAML = textwrap.dedent("""\
@@ -234,3 +236,56 @@ def test_malformed_categories_string_fails_closed(tmp_path):
     org = load_org(str(p))
     assert resolved_categories(org, "marco") == []
     assert can_read(org, "marco", 1) is False
+
+
+def test_root_role_requires_explicit_null(tmp_path):
+    """`reports_to` must be explicitly present and null to be a root role.
+
+    A missing `reports_to` field — or a malformed value such as an empty
+    string — must NOT classify a role as the root (audit #1 round 3).
+    Otherwise an org with roles `[{id: ceo}, {id: cfo}]` would make any actor
+    an administrator and recreate the unauthorized signed-downgrade path.
+    """
+    org = _org(tmp_path)
+    # All three roles omit `reports_to` -> nobody is a root role.
+    assert root_role_ids(org) == []
+    assert can_administer_namespace(org, "roberto") is False
+    assert can_administer_namespace(org, "pepa") is False
+    assert can_administer_namespace(org, "unknown") is False
+
+
+def test_root_role_explicit_null_is_admin(tmp_path):
+    """A role with `reports_to: null` is the root and administers the profile."""
+    p = tmp_path / "org.yaml"
+    p.write_text(
+        "version: 1\n"
+        "organization: {id: org1}\n"
+        "roles:\n"
+        "  - {id: ceo, access_level: level-1, reports_to: null}\n"
+        "  - {id: cfo, access_level: level-1, reports_to: ceo}\n"
+        "actors:\n"
+        "  - {id: paco, role: ceo}\n"
+        "  - {id: roberto, role: cfo}\n",
+        encoding="utf-8",
+    )
+    org = load_org(str(p))
+    assert root_role_ids(org) == ["ceo"]
+    assert can_administer_namespace(org, "paco") is True
+    assert can_administer_namespace(org, "roberto") is False
+
+
+def test_root_role_rejects_empty_reports_to(tmp_path):
+    """An empty-string `reports_to` is malformed, not a root role (fail-closed)."""
+    p = tmp_path / "org.yaml"
+    p.write_text(
+        "version: 1\n"
+        "organization: {id: org1}\n"
+        "roles:\n"
+        '  - {id: ceo, access_level: level-1, reports_to: ""}\n'
+        "actors:\n"
+        "  - {id: paco, role: ceo}\n",
+        encoding="utf-8",
+    )
+    org = load_org(str(p))
+    assert root_role_ids(org) == []
+    assert can_administer_namespace(org, "paco") is False
