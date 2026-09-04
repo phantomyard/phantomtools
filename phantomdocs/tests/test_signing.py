@@ -877,6 +877,115 @@ def test_require_signatures_downgrade_requires_signing(tmp_path, nsec_file):
     assert r.exit_code == 0, r.output
 
 
+def test_require_signatures_downgrade_requires_authorization(tmp_path, nsec_file):
+    """A valid but unauthorized actor's signed downgrade is rejected (audit #1).
+
+    Authorization is distinct from authentication: a declared actor holding a
+    valid key but a non-root role (not at the top of the reporting hierarchy)
+    can produce a cryptographically valid downgrade signature, yet must still
+    be refused — the signing profile is namespace administration, restricted
+    to the org's root role. Fail-closed even with a fully valid signature.
+    """
+    import coincurve
+
+    nsec_path, pubkey, _secret = nsec_file
+    # A second, subordinate actor with its own valid key.
+    sub_secret = coincurve.PrivateKey().secret.hex()
+    sub_pubkey = signing.pubkey_from_nsec(sub_secret)
+    sub_nsec = tmp_path / "sub-nsec.txt"
+    sub_nsec.write_text(sub_secret)
+    os.chmod(sub_nsec, 0o600)
+
+    org = tmp_path / "org.yaml"
+    org.write_text(
+        f"""\
+version: 1
+organization:
+  id: example-org
+policies:
+  access_levels:
+    level-2:
+      categories: [1, 2]
+roles:
+  - id: ceo
+    access_level: level-2
+    security_exceptions: []
+  - id: cfo
+    access_level: level-2
+    security_exceptions: []
+    reports_to: ceo
+actors:
+  - id: paco
+    role: ceo
+    npub: {_bech32_encode("npub", bytes.fromhex(pubkey))}
+    actor_exceptions: []
+  - id: roberto
+    role: cfo
+    npub: {_bech32_encode("npub", bytes.fromhex(sub_pubkey))}
+    actor_exceptions: []
+"""
+    )
+    runner = CliRunner()
+    r = runner.invoke(
+        main,
+        [
+            "init",
+            "--org",
+            "example-org",
+            "--namespace",
+            "docs",
+            "--require-signatures",
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+    # The subordinate actor (valid key, non-root role) signs a downgrade; it
+    # must still be refused fail-closed.
+    r = runner.invoke(
+        main,
+        [
+            "require-signatures",
+            "off",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "roberto",
+            "--nsec-file",
+            str(sub_nsec),
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code != 0
+    assert "namespace administrator" in r.output
+
+    # The profile must be unchanged after the refused downgrade.
+    manifest = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    assert manifest["manifest"]["requireSignatures"] is True
+
+    # The root-role actor can still change the profile with its valid key.
+    r = runner.invoke(
+        main,
+        [
+            "require-signatures",
+            "off",
+            "--org-yaml",
+            str(org),
+            "--actor",
+            "paco",
+            "--nsec-file",
+            nsec_path,
+            "--root",
+            str(tmp_path),
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    manifest = yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+    assert manifest["manifest"]["requireSignatures"] is False
+
+
 def test_require_signatures_tampered_transition_fails(tmp_path, nsec_file):
     """Editing requireSignatures outside the authenticated transition is caught.
 

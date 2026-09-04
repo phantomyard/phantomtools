@@ -23,7 +23,14 @@ import stat
 import time
 from typing import Any
 
-from .access import can_write, key_valid_now, load_org, normalize_category, policy_hash
+from .access import (
+    can_administer_namespace,
+    can_write,
+    key_valid_now,
+    load_org,
+    normalize_category,
+    policy_hash,
+)
 from .audit import append as audit_append
 from .audit import head as audit_head
 from .audit import max_seq as audit_max_seq
@@ -246,6 +253,24 @@ class DocumentService:
                 f"denied: signing key does not match a currently-valid declared "
                 f"npub for actor {self.actor_id!r} (revoked, rotated out, or "
                 "undeclared)"
+            )
+
+    def _require_namespace_admin(self) -> None:
+        """Only the namespace administrator may change the signing profile.
+
+        A profile transition is namespace administration, not a document
+        write: authorization is restricted to the org's root role (top of the
+        reporting hierarchy). This is a distinct, stricter gate than the
+        document ACL — a low-privilege actor who cannot write any document
+        category must also be unable to flip the namespace-wide security
+        profile. Fail-closed: an actor that is not a root role is denied even
+        though it is declared and holds a valid signing key.
+        """
+        if not can_administer_namespace(self.org, self.actor_id):
+            raise DocumentError(
+                f"denied: actor {self.actor_id!r} is not a namespace "
+                "administrator (the org's root role); only a root-role actor "
+                "may change the signing profile (fail-closed)"
             )
 
     # -- repository plumbing --
@@ -823,7 +848,13 @@ class DocumentService:
         signed transition is recorded in the manifest header
         (``profileTransition``) so ``verify`` can prove the setting was
         authentically changed.
+
+        Authentication is not authorization: only the namespace administrator
+        — an actor holding the org's root role (top of the reporting
+        hierarchy) — may change the signing profile. A valid but
+        unauthorized actor's signed downgrade is refused fail-closed.
         """
+        self._require_namespace_admin()
         with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
             header = repo.data["manifest"]

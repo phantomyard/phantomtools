@@ -223,6 +223,37 @@ def _actor_role_id(org: dict[str, Any], actor_id: str) -> str | None:
     return None
 
 
+def root_role_ids(org: dict[str, Any]) -> list[str]:
+    """Role ids at the top of the reporting hierarchy (the org's root).
+
+    A role whose ``reports_to`` is unset/null is the root (top of the
+    hierarchy, e.g. ``ceo``). These are the only roles authorized to
+    administer the namespace security profile. Fail-closed: an org model
+    that declares no root role authorizes nobody.
+    """
+    roots: list[str] = []
+    for r in org.get("roles", []):
+        if isinstance(r, dict) and r.get("id") and not r.get("reports_to"):
+            roots.append(r["id"])
+    return roots
+
+
+def can_administer_namespace(org: dict[str, Any], actor_id: str) -> bool:
+    """True iff ``actor_id`` is authorized to administer the namespace profile.
+
+    Administration (changing the namespace-wide signing profile) is restricted
+    to the root role(s) — the top of the reporting hierarchy. Authorization is
+    distinct from authentication: a declared actor holding a valid key is
+    *authenticated*, but only a root-role actor is *authorized* to change the
+    signing profile (audit #1). Fail-closed: an unknown actor, an actor with
+    no role, or a non-root role is denied.
+    """
+    role_id = _actor_role_id(org, actor_id)
+    if not role_id:
+        return False
+    return role_id in root_role_ids(org)
+
+
 def _security_categories(org: dict[str, Any]) -> dict[str, Any]:
     """The declared ``policies.security_categories`` map (id -> spec)."""
     return org.get("policies", {}).get("security_categories", {}) or {}
