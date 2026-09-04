@@ -226,14 +226,17 @@ def _actor_role_id(org: dict[str, Any], actor_id: str) -> str | None:
 def root_role_ids(org: dict[str, Any]) -> list[str]:
     """Role ids at the top of the reporting hierarchy (the org's root).
 
-    A role whose ``reports_to`` is unset/null is the root (top of the
-    hierarchy, e.g. ``ceo``). These are the only roles authorized to
-    administer the namespace security profile. Fail-closed: an org model
-    that declares no root role authorizes nobody.
+    A role is a root role only when ``reports_to`` is *explicitly present and
+    null* — the top of the hierarchy (e.g. ``ceo``). A missing ``reports_to``
+    field or a malformed value (e.g. an empty string ``""``) is NOT a root
+    role and is treated fail-closed: a namespace whose hierarchy is not
+    explicitly declared authorizes nobody.
     """
     roots: list[str] = []
     for r in org.get("roles", []):
-        if isinstance(r, dict) and r.get("id") and not r.get("reports_to"):
+        if not isinstance(r, dict) or not r.get("id"):
+            continue
+        if "reports_to" in r and r["reports_to"] is None:
             roots.append(r["id"])
     return roots
 

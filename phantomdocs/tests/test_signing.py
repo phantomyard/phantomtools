@@ -155,6 +155,7 @@ roles:
   - id: ceo
     access_level: level-2
     security_exceptions: []
+    reports_to: null
 actors:
   - id: paco
     role: ceo
@@ -910,6 +911,7 @@ roles:
   - id: ceo
     access_level: level-2
     security_exceptions: []
+    reports_to: null
   - id: cfo
     access_level: level-2
     security_exceptions: []
