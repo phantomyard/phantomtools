@@ -56,6 +56,84 @@ class TestSchema(unittest.TestCase):
             "npub16fg8f93njtj7nervk94w6kgtdp4vtze8dzfer2qjc394mx6luzgqavqwgg",
         )
 
+    def test_security_category_parent_undeclared(self):
+        # Issue #100: a parent referencing an undeclared category is a
+        # reference error (mirrors the department parent check).
+        import yaml as _yaml
+
+        from phantomorg.validator import validate_org
+
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = _yaml.safe_load(AU_ORG.read_text(encoding="utf-8"))
+            doc["policies"]["security_categories"]["category-3"]["parent"] = (
+                "category-99"
+            )
+            p = Path(tmp) / "org.yaml"
+            p.write_text(_yaml.safe_dump(doc), encoding="utf-8")
+            _, result = validate_org(str(p))
+            self.assertTrue(
+                any("parent 'category-99' does not exist" in e for e in result.errors)
+            )
+
+    def test_security_category_parent_self(self):
+        # Issue #100: a category cannot be its own parent.
+        import yaml as _yaml
+
+        from phantomorg.validator import validate_org
+
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = _yaml.safe_load(AU_ORG.read_text(encoding="utf-8"))
+            doc["policies"]["security_categories"]["category-3"]["parent"] = (
+                "category-3"
+            )
+            p = Path(tmp) / "org.yaml"
+            p.write_text(_yaml.safe_dump(doc), encoding="utf-8")
+            _, result = validate_org(str(p))
+            self.assertTrue(any("cannot be its own parent" in e for e in result.errors))
+
+    def test_security_category_parent_two_node_cycle(self):
+        # Issue #100 (review): a two-node parent cycle must be rejected.
+        # a.parent=b + b.parent=a would make can_read() authorize both.
+        import yaml as _yaml
+
+        from phantomorg.validator import validate_org
+
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = _yaml.safe_load(AU_ORG.read_text(encoding="utf-8"))
+            doc["policies"]["security_categories"]["category-1"]["parent"] = (
+                "category-2"
+            )
+            doc["policies"]["security_categories"]["category-2"]["parent"] = (
+                "category-1"
+            )
+            p = Path(tmp) / "org.yaml"
+            p.write_text(_yaml.safe_dump(doc), encoding="utf-8")
+            _, result = validate_org(str(p))
+            self.assertTrue(any("parent cycle detected" in e for e in result.errors))
+
+    def test_security_category_parent_three_node_cycle(self):
+        # Issue #100 (review): a longer (3-node) parent cycle must be
+        # rejected too.
+        import yaml as _yaml
+
+        from phantomorg.validator import validate_org
+
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = _yaml.safe_load(AU_ORG.read_text(encoding="utf-8"))
+            doc["policies"]["security_categories"]["category-1"]["parent"] = (
+                "category-2"
+            )
+            doc["policies"]["security_categories"]["category-2"]["parent"] = (
+                "category-3"
+            )
+            doc["policies"]["security_categories"]["category-3"]["parent"] = (
+                "category-1"
+            )
+            p = Path(tmp) / "org.yaml"
+            p.write_text(_yaml.safe_dump(doc), encoding="utf-8")
+            _, result = validate_org(str(p))
+            self.assertTrue(any("parent cycle detected" in e for e in result.errors))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -265,6 +265,12 @@
                   "string",
                   "null"
                 ]
+              },
+              "parent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             }
           },

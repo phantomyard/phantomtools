@@ -148,6 +148,7 @@ class SecurityCategory:
     label: str
     scope: str | None = None
     owner: str | None = None
+    parent: str | None = None
 
 
 @dataclass
@@ -163,7 +164,10 @@ class Policies:
         }
         cats = {
             k: SecurityCategory(
-                label=v["label"], scope=v.get("scope"), owner=v.get("owner")
+                label=v["label"],
+                scope=v.get("scope"),
+                owner=v.get("owner"),
+                parent=v.get("parent"),
             )
             for k, v in d.get("security_categories", {}).items()
         }

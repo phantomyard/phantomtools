@@ -63,6 +63,64 @@ def check_role_hierarchy_cycles(spec: OrgSpec) -> list[str]:
     return problems
 
 
+def check_category_hierarchy_cycles(spec: OrgSpec) -> list[str]:
+    """Detect cycles in the ``security_categories`` parent hierarchy
+    (WHITE/GRAY/BLACK DFS).
+
+    A category that (directly or transitively) declares itself as an
+    ancestor — ``a.parent = b`` and ``b.parent = a``, or any longer
+    loop — would make ``can_read()`` treat both categories as ancestors
+    of each other: a direct grant on ``a`` would unexpectedly authorize
+    ``b`` and vice versa (its ``seen`` guard only prevents an infinite
+    loop, not the mutual-authorization).
+
+    This is the security-category analogue of the ``reports_to`` DAG
+    check above: ``parent`` is a single optional parent per category, so
+    the graph is functional (out-degree ≤ 1) and its cycles are disjoint
+    — each is reported exactly once. Self-parenting is *not* reported
+    here: ``check_references`` already rejects ``cat.parent == cat.id``
+    with a clearer message.
+    """
+    edges: dict[str, str | None] = {
+        cid: cat.parent for cid, cat in spec.policies.security_categories.items()
+    }
+    category_ids = set(edges)
+
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {cid: WHITE for cid in category_ids}
+    stack: list[str] = []
+    problems: list[str] = []
+
+    def visit(node: str) -> None:
+        color[node] = GRAY
+        stack.append(node)
+        parent = edges.get(node)
+        if parent is not None and parent in color:
+            if parent == node:
+                # Self-parent already reported by check_references with a
+                # clearer message; not a multi-node cycle.
+                pass
+            elif color[parent] == GRAY:
+                start = stack.index(parent)
+                cycle = stack[start:] + [parent]
+                problems.append(
+                    "policies.security_categories: parent cycle detected: "
+                    + " -> ".join(cycle)
+                )
+            elif color[parent] == WHITE:
+                visit(parent)
+            # parent not in color => references an undeclared category,
+            # which check_references already reports
+            # ("policies.security_categories.<id>: parent '<x>' does not exist").
+        stack.pop()
+        color[node] = BLACK
+
+    for node in sorted(category_ids):
+        if color[node] == WHITE:
+            visit(node)
+    return problems
+
+
 def check_references(spec: OrgSpec) -> list[str]:
     """Returns a list of problems found (empty if everything is fine)."""
     problems: list[str] = []
@@ -114,6 +172,19 @@ def check_references(spec: OrgSpec) -> list[str]:
             problems.append(
                 f"departments.{d.id}: access_policy '{d.access_policy}' "
                 f"is not in policies.access_levels"
+            )
+
+    # security categories: parent must exist (or be null) and not self
+    # (issue #100). The hierarchy is explicit; a category cannot be its own
+    # parent.
+    for cid, cat in spec.policies.security_categories.items():
+        if cat.parent is not None and cat.parent not in security_category_ids:
+            problems.append(
+                f"policies.security_categories.{cid}: parent '{cat.parent}' does not exist"
+            )
+        elif cat.parent == cid:
+            problems.append(
+                f"policies.security_categories.{cid}: a category cannot be its own parent"
             )
 
     # roles: department, reports_to, access_level, security_exceptions
@@ -190,6 +261,7 @@ def check_references(spec: OrgSpec) -> list[str]:
                 )
 
     problems.extend(check_role_hierarchy_cycles(spec))
+    problems.extend(check_category_hierarchy_cycles(spec))
 
     return problems
 
