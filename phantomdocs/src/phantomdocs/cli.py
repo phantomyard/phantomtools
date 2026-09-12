@@ -912,9 +912,7 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                 # recorded: the single ``sealPubkey`` must be the org key.
                 if seal_pubkey != pubkey_hex:
                     failures += 1
-                    click.echo(
-                        "FAIL seal: seal was not made by the declared org key"
-                    )
+                    click.echo("FAIL seal: seal was not made by the declared org key")
                 elif not verify_seal(pubkey_hex, signed, envelope):
                     failures += 1
                     click.echo(
@@ -1358,8 +1356,7 @@ def seal_keys(root):
     for event in events:
         marker = "*" if event is live else " "
         click.echo(
-            f"{marker} cs {event.get('cs')}  {event.get('ts')}  "
-            f"{event.get('npub')}"
+            f"{marker} cs {event.get('cs')}  {event.get('ts')}  {event.get('npub')}"
         )
 
 
