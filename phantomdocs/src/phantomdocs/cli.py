@@ -31,7 +31,7 @@ from .audit import sequence_issues as audit_sequence_issues
 from .audit import verify_chain as audit_verify_chain
 from .content import FileContent
 from .derive import derive_manifest as derive_from_org
-from .documents import DocumentError, DocumentService
+from .documents import DocumentError, DocumentService, _now_iso
 from .identity import (
     component_for_folder,
     display_id,
@@ -45,14 +45,21 @@ from .manifest import (
     MANIFEST_FILENAME,
     ManifestError,
     empty_manifest,
+    latest_seal_event,
     load,
     mutation_sequence_issues,
     node_by_mac,
     node_by_urn,
+    record_seal_event,
     ref_target_mac,
     resolve_node,
     save,
+    seal_events,
+    seal_identity_npub,
+    seal_key_record,
+    seal_key_valid_at,
     structural_issues,
+    upsert_seal_key_record,
     versions_of,
 )
 from .setup import (
@@ -64,12 +71,16 @@ from .setup import (
 )
 from .signing import (
     CRYPTO_VERSION,
+    delegation_envelope,
     mutation_envelope,
+    npub_encode,
     npub_to_pubkey_hex,
     profile_envelope,
     pubkey_from_nsec,
     seal_envelope,
+    sign_delegation,
     sign_seal,
+    verify_delegation,
     verify_mutation,
     verify_profile,
     verify_seal,
@@ -863,6 +874,17 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
 
         signed = m.get("signedRootMac")
         seal_pubkey = m.get("sealPubkey")
+        identity_npub = seal_identity_npub(m)
+        # Trust-anchor provenance (issue #104): the identity recorded at the
+        # first seal must be the org key the operator trusts, otherwise the
+        # manifest declares a seal identity of its own and the seal proves
+        # nothing.
+        if identity_npub is not None and identity_npub != npub_encode(pubkey_hex):
+            failures += 1
+            click.echo(
+                "FAIL seal: the manifest's seal identity does not match the "
+                "trusted org key (self-declared anchor)"
+            )
         if signed is None and seal_pubkey is None:
             failures += 1
             click.echo(
@@ -884,21 +906,64 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                 # made before the crypto-agility upgrade.
                 crypto_version=m.get("cryptoVersion"),
             )
-            if seal_pubkey != pubkey_hex:
-                failures += 1
-                click.echo("FAIL seal: seal was not made by the declared org key")
-            elif not verify_seal(pubkey_hex, signed, envelope):
-                failures += 1
-                click.echo(
-                    "FAIL seal: head seal signature invalid (forged root, "
-                    "deleted version, or rolled-back audit head)"
-                )
-            elif m.get("sealedHeadSeq") != m.get("headSeq"):
-                failures += 1
-                click.echo(
-                    "FAIL seal: head advanced past the last seal "
-                    "(mutations since `pd seal`)"
-                )
+            event = latest_seal_event(m)
+            if event is None:
+                # Legacy manifest (pre-#104), or a seal history that was not
+                # recorded: the single ``sealPubkey`` must be the org key.
+                if seal_pubkey != pubkey_hex:
+                    failures += 1
+                    click.echo(
+                        "FAIL seal: seal was not made by the declared org key"
+                    )
+                elif not verify_seal(pubkey_hex, signed, envelope):
+                    failures += 1
+                    click.echo(
+                        "FAIL seal: head seal signature invalid (forged root, "
+                        "deleted version, or rolled-back audit head)"
+                    )
+                elif m.get("sealedHeadSeq") != m.get("headSeq"):
+                    failures += 1
+                    click.echo(
+                        "FAIL seal: head advanced past the last seal "
+                        "(mutations since `pd seal`)"
+                    )
+            else:
+                problem = _seal_authorization_problem(m, event, pubkey_hex)
+                if problem is not None:
+                    failures += 1
+                    click.echo(f"FAIL seal: {problem}")
+                else:
+                    seal_key_hex = _pubkey_of_npub(event.get("npub"))
+                    if seal_key_hex != seal_pubkey:
+                        failures += 1
+                        click.echo(
+                            "FAIL seal: the recorded seal key does not match "
+                            "the key that signed the head"
+                        )
+                    elif not verify_seal(seal_key_hex, signed, envelope):
+                        failures += 1
+                        click.echo(
+                            "FAIL seal: head seal signature invalid (forged "
+                            "root, deleted version, or rolled-back audit head)"
+                        )
+                    elif m.get("sealedHeadSeq") != m.get("headSeq"):
+                        failures += 1
+                        click.echo(
+                            "FAIL seal: head advanced past the last seal "
+                            "(mutations since `pd seal`)"
+                        )
+                    elif seal_key_hex != pubkey_hex:
+                        click.echo(
+                            "note seal: head sealed by an org-authorized seal "
+                            "key (not the org identity key)"
+                        )
+        # Seal history (issue #104): every recorded seal stays attributable to
+        # an org-authorized key that was valid when that seal was made, so a
+        # rotation or a revocation cannot quietly invalidate (or launder) the
+        # evidence of earlier heads.
+        for problem in _seal_history_problems(m, pubkey_hex):
+            failures += 1
+            click.echo(f"FAIL seal history: {problem}")
     else:
         # Fail-closed trust anchor (audit decision 2): a *sealed* namespace
         # verified without --org-pubkey would silently skip the root + seal
@@ -1061,50 +1126,352 @@ def audit(limit, root):
 @click.option(
     "--nsec-file",
     required=True,
-    help="File containing the org's nsec (the trust-root key, issue #70/#71).",
+    help="File containing the seal key's nsec (the trust-root key, #70/#71).",
+)
+@click.option(
+    "--org-nsec-file",
+    default=None,
+    help=(
+        "File containing the org identity key's nsec: authorizes a new seal "
+        "key (issue #104)."
+    ),
+)
+@click.option(
+    "--valid-until",
+    default=None,
+    help="ISO-8601 UTC end of the seal key's validity window.",
 )
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def seal(nsec_file, root):
-    """Seal the namespace head with the org key (issues #70/#71).
+def seal(nsec_file, org_nsec_file, valid_until, root):
+    """Seal the namespace head (issues #70/#71, #104).
 
     Signs the root MAC together with the head (``headSeq``, ``headMac``,
     ``auditSeq``, ``auditHead``) and records the signature
-    (``signedRootMac``), the org pubkey (``sealPubkey``) and the sealed head
-    sequence (``sealedHeadSeq``) in the manifest header. ``verify
+    (``signedRootMac``), the sealing pubkey (``sealPubkey``) and the sealed
+    head sequence (``sealedHeadSeq``) in the manifest header. ``verify
     --org-pubkey`` then checks the seal, so a forged root, a deleted version,
-    or a rolled-back/truncated audit head no longer verifies — only the org
-    (holder of the org key) can re-seal.
+    or a rolled-back/truncated audit head no longer verifies.
+
+    The seal is also recorded in the seal history (``manifest.seals``,
+    issue #104) together with the key that made it, so a rotation leaves the
+    earlier seals verifiable under the key that produced them.
+
+    The org **identity** key (baked into ``root_mac``, never rotates) is the
+    anchor: the first seal records it, and sealing with any other key requires
+    ``--org-nsec-file`` so the identity key can authorize that seal key
+    (``manifest.sealKeys``). A key already authorized keeps sealing on its own
+    until it is revoked.
     """
     path = _manifest_path(root)
     data = _load_or_die(root)
-    try:
-        with open(nsec_file, "r", encoding="utf-8") as f:
-            nsec = f.read().strip()
-    except OSError as exc:
-        raise click.ClickException(f"cannot read --nsec-file: {exc}")
-    if not nsec:
-        raise click.ClickException("empty --nsec-file")
+    nsec = _read_secret_file(nsec_file, "--nsec-file")
 
     m = data["manifest"]
+    pubkey = pubkey_from_nsec(nsec)
+    seal_npub = npub_encode(pubkey)
+    ts = _now_iso()
+    identity_npub = seal_identity_npub(m)
+    if identity_npub is None:
+        # First seal: it establishes the org identity key (v1 behaviour: the
+        # seal key *is* the identity key). It is what `verify --org-pubkey`
+        # cross-checks against the operator's out-of-band anchor.
+        identity_npub = seal_npub
+        m["sealIdentityNpub"] = identity_npub
+    org_nsec = None
+    if org_nsec_file is not None:
+        org_nsec = _read_secret_file(org_nsec_file, "--org-nsec-file")
+        org_npub = npub_encode(pubkey_from_nsec(org_nsec))
+        if org_npub != identity_npub:
+            raise click.ClickException(
+                "--org-nsec-file is not the namespace's org identity key "
+                f"(expected {identity_npub})"
+            )
+    rotated = False
+    if seal_npub != identity_npub:
+        rec = seal_key_record(m, seal_npub)
+        if rec is not None and seal_key_valid_at(rec, ts) and org_nsec is None:
+            # Already authorized: a re-seal by an authorized seal key needs no
+            # repeat of the org-key ceremony.
+            pass
+        elif org_nsec is None:
+            raise click.ClickException(
+                "sealing with a key that is not the org identity key requires "
+                "--org-nsec-file to authorize it (issue #104)"
+            )
+        else:
+            valid_from = rec.get("valid_from") if rec else ts
+            delegation = sign_delegation(
+                org_nsec,
+                delegation_envelope(
+                    identity_npub=identity_npub,
+                    root_mac=m["rootMac"],
+                    seal_npub=seal_npub,
+                    valid_from=valid_from,
+                    valid_until=valid_until,
+                    revoked_at=None,
+                    crypto_version=m.get("cryptoVersion"),
+                ),
+            )
+            upsert_seal_key_record(
+                m,
+                npub=seal_npub,
+                valid_from=valid_from,
+                valid_until=valid_until,
+                delegation=delegation,
+            )
+            rotated = m.get("sealPubkey") not in (None, pubkey)
+    head_seq = int(m.get("headSeq") or 0)
+    head_mac = m.get("headMac") or m["rootMac"]
+    audit_seq = int(m.get("auditSeq") or 0)
+    audit_head = m.get("auditHead")
     envelope = seal_envelope(
         root_mac=m["rootMac"],
-        head_seq=int(m.get("headSeq") or 0),
-        head_mac=m.get("headMac") or m["rootMac"],
-        audit_seq=int(m.get("auditSeq") or 0),
-        audit_head=m.get("auditHead"),
+        head_seq=head_seq,
+        head_mac=head_mac,
+        audit_seq=audit_seq,
+        audit_head=audit_head,
         require_signatures=m.get("requireSignatures"),
         # Match ``verify``: a legacy manifest (no ``cryptoVersion``) is sealed
         # over the legacy envelope, so re-sealing a pre-upgrade namespace does
         # not silently produce a seal it can no longer verify.
         crypto_version=m.get("cryptoVersion"),
     )
-    pubkey = pubkey_from_nsec(nsec)
-    m["signedRootMac"] = sign_seal(nsec, envelope)
+    signature = sign_seal(nsec, envelope)
+    m["signedRootMac"] = signature
     m["sealPubkey"] = pubkey
-    m["sealedHeadSeq"] = int(m.get("headSeq") or 0)
+    m["sealedHeadSeq"] = head_seq
+    record_seal_event(
+        m,
+        npub=seal_npub,
+        ts=ts,
+        head_seq=head_seq,
+        head_mac=head_mac,
+        audit_seq=audit_seq,
+        audit_head=audit_head,
+        sig=signature,
+        require_signatures=m.get("requireSignatures"),
+        crypto_version=m.get("cryptoVersion"),
+    )
     save(path, data)
     click.echo(f"sealed {m['org']}/{m['namespace']} at headSeq {m['sealedHeadSeq']}")
     click.echo(f"  seal pubkey {pubkey}")
+    if rotated:
+        click.echo("  seal key rotated (earlier seals stay verifiable)")
+
+
+@main.command("revoke-seal-key")
+@click.argument("npub")
+@click.option(
+    "--org-nsec-file",
+    required=True,
+    help="File containing the org identity key's nsec (the authorizing key).",
+)
+@click.option(
+    "--revoked-at",
+    default=None,
+    help="ISO-8601 UTC revocation instant (default: now).",
+)
+@click.option("--root", default=".", show_default=True, help="Local backend root.")
+def revoke_seal_key(npub, org_nsec_file, revoked_at, root):
+    """Revoke a seal key from a point in time (issue #104).
+
+    The revocation is authorized by the org identity key and recorded in the
+    key's lifecycle entry, so it cannot be forged or erased by editing the
+    manifest alone. Fail-closed: a seal made with the key at or after
+    ``--revoked-at`` no longer verifies. Seals made *before* the revocation
+    stay valid — a compromised key does not retroactively invalidate the
+    evidence of earlier heads.
+    """
+    path = _manifest_path(root)
+    data = _load_or_die(root)
+    m = data["manifest"]
+    identity_npub = seal_identity_npub(m)
+    if identity_npub is None:
+        raise click.ClickException("namespace has no seal identity recorded")
+    if npub == identity_npub:
+        raise click.ClickException(
+            "the org identity key anchors the namespace and cannot be revoked "
+            "(rotating it is a namespace re-issue, issue #104)"
+        )
+    rec = seal_key_record(m, npub)
+    if rec is None:
+        raise click.ClickException(f"no seal-key history entry for {npub}")
+    org_nsec = _read_secret_file(org_nsec_file, "--org-nsec-file")
+    if npub_encode(pubkey_from_nsec(org_nsec)) != identity_npub:
+        raise click.ClickException(
+            "--org-nsec-file is not the namespace's org identity key "
+            f"(expected {identity_npub})"
+        )
+    ts = revoked_at or _now_iso()
+    delegation = sign_delegation(
+        org_nsec,
+        delegation_envelope(
+            identity_npub=identity_npub,
+            root_mac=m["rootMac"],
+            seal_npub=npub,
+            valid_from=rec.get("valid_from") or ts,
+            valid_until=rec.get("valid_until"),
+            revoked_at=ts,
+            crypto_version=m.get("cryptoVersion"),
+        ),
+    )
+    upsert_seal_key_record(
+        m,
+        npub=npub,
+        valid_from=rec.get("valid_from") or ts,
+        valid_until=rec.get("valid_until"),
+        revoked_at=ts,
+        delegation=delegation,
+    )
+    save(path, data)
+    click.echo(f"revoked seal key {npub} at {ts}")
+
+
+@main.command("seal-keys")
+@click.option("--root", default=".", show_default=True, help="Local backend root.")
+def seal_keys(root):
+    """List the seal-key history and the recorded seals (issue #104)."""
+    data = _load_or_die(root)
+    m = data["manifest"]
+    identity_npub = seal_identity_npub(m)
+    click.echo(f"identity  {identity_npub or '(none)'}")
+    live_npub = _npub_of(m.get("sealPubkey"))
+    records = m.get("sealKeys") or []
+    if not records:
+        click.echo("no org-authorized seal keys")
+    for rec in records:
+        marker = "*" if rec.get("npub") == live_npub else " "
+        parts = [f"{marker} {rec.get('npub')}"]
+        if rec.get("valid_from"):
+            parts.append(f"  from {rec['valid_from']}")
+        if rec.get("valid_until"):
+            parts.append(f"  until {rec['valid_until']}")
+        if rec.get("revoked_at"):
+            parts.append(f"  REVOKED {rec['revoked_at']}")
+        click.echo("".join(parts))
+    events = seal_events(m)
+    if not events:
+        click.echo("no recorded seals")
+        return
+    click.echo("seals")
+    live = latest_seal_event(m)
+    for event in events:
+        marker = "*" if event is live else " "
+        click.echo(
+            f"{marker} cs {event.get('cs')}  {event.get('ts')}  "
+            f"{event.get('npub')}"
+        )
+
+
+def _npub_of(pubkey_hex: str | None) -> str | None:
+    """The npub for a pubkey hex, or None when unavailable."""
+    if not pubkey_hex:
+        return None
+    try:
+        return npub_encode(pubkey_hex)
+    except (ValueError, TypeError):
+        return None
+
+
+def _pubkey_of_npub(npub: str | None) -> str | None:
+    """The pubkey hex for an npub, or None when it is missing/malformed."""
+    if not npub:
+        return None
+    try:
+        return npub_to_pubkey_hex(npub)
+    except (ValueError, TypeError):
+        return None
+
+
+def _read_secret_file(path: str, option: str) -> str:
+    """Read a key file, failing with a clear message (never echoing the key)."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            secret = f.read().strip()
+    except OSError as exc:
+        raise click.ClickException(f"cannot read {option}: {exc}")
+    if not secret:
+        raise click.ClickException(f"empty {option}")
+    return secret
+
+
+def _seal_authorization_problem(
+    m: dict[str, object], event: dict[str, object], identity_pubkey_hex: str
+) -> str | None:
+    """Why a seal event is not attributable to an authorized key, or None.
+
+    The org identity key anchors the namespace, so it may seal directly (v1
+    behaviour). Any other key must carry an org-identity delegation that
+    covers exactly this key and the root, and must have been valid when the
+    seal was made — otherwise the history entry is self-attested and the seal
+    proves nothing.
+    """
+    npub = event.get("npub")
+    if not isinstance(npub, str) or not npub:
+        return "the recorded seal has no seal-key identity (unattributable)"
+    key_hex = _pubkey_of_npub(npub)
+    if key_hex is None:
+        return "the recorded seal key is malformed"
+    if key_hex == identity_pubkey_hex:
+        return None
+    rec = seal_key_record(m, npub)
+    if rec is None:
+        return "the seal was made by a key the org never authorized"
+    delegation = rec.get("delegation")
+    if not isinstance(delegation, str) or not verify_delegation(
+        identity_pubkey_hex,
+        delegation,
+        delegation_envelope(
+            identity_npub=npub_encode(identity_pubkey_hex),
+            root_mac=str(m.get("rootMac") or ""),
+            seal_npub=npub,
+            valid_from=str(rec.get("valid_from") or ""),
+            valid_until=rec.get("valid_until"),
+            revoked_at=rec.get("revoked_at"),
+            crypto_version=m.get("cryptoVersion"),
+        ),
+    ):
+        return "the seal key's org authorization signature is invalid"
+    ts = event.get("ts")
+    if not isinstance(ts, str) or not seal_key_valid_at(rec, ts):
+        return (
+            "the seal key was revoked or outside its validity window when the "
+            "head was sealed"
+        )
+    return None
+
+
+def _seal_history_problems(m: dict[str, object], identity_pubkey_hex: str) -> list[str]:
+    """Every recorded seal that no longer re-verifies (issue #104).
+
+    Historical seals must remain verifiable under the key that made them: the
+    event records the sealed anchors, the timestamp and the signing profile,
+    so the envelope can be rebuilt exactly and checked against that key.
+    """
+    problems: list[str] = []
+    for event in seal_events(m):
+        cs = event.get("cs")
+        problem = _seal_authorization_problem(m, event, identity_pubkey_hex)
+        if problem is not None:
+            problems.append(f"seal at cs {cs}: {problem}")
+            continue
+        key_hex = _pubkey_of_npub(event.get("npub"))
+        if key_hex is None:
+            problems.append(f"seal at cs {cs}: the recorded seal key is malformed")
+            continue
+        envelope = seal_envelope(
+            root_mac=str(m.get("rootMac") or ""),
+            head_seq=int(cs),
+            head_mac=str(event.get("headMac") or ""),
+            audit_seq=int(event.get("auditSeq") or 0),
+            audit_head=event.get("auditHead"),
+            require_signatures=event.get("requireSignatures"),
+            crypto_version=event.get("cryptoVersion"),
+        )
+        sig = event.get("sig")
+        if not isinstance(sig, str) or not verify_seal(key_hex, sig, envelope):
+            problems.append(f"seal at cs {cs}: signature invalid")
+    return problems
 
 
 @main.command("require-signatures")

@@ -56,33 +56,77 @@ third, distinct lifecycle (`key_valid_at` over actor `keys` in `org.yaml`).
 
 ## 3. Seal key rotation lifecycle
 
-- **Generation** — a new seal keypair is generated off-namespace; its pubkey
-  is recorded in the namespace's seal history (not inline in a node).
-- **Rotation (re-seal)** — at a given head, sign a new seal with the new key,
-  recording a `valid_from` timestamp. Historical seals remain verifiable under
-  the key that made them.
-- **Revocation** — a seal key carries a `revoked_at`; seals made by that key
-  after the revocation point are rejected.
-- **Verification** — `verify --org-pubkey` checks the head seal against the
-  seal key that was valid *at the seal timestamp* (analogous to
-  `key_valid_at` for actors), not against a single fixed key.
+The namespace header carries the lifecycle (issue #104):
 
-## 4. Current status (v1) and gap
+- **`sealIdentityNpub`** — the org **identity** key, recorded at the first
+  seal. It is baked into `root_mac` and therefore never rotates;
+  `verify --org-pubkey` cross-checks it against the operator's out-of-band
+  anchor, so a manifest that declares its own seal identity is rejected.
+- **`sealKeys`** — one record per org-authorized seal key:
+  `{npub, valid_from, valid_until, revoked_at, delegation}`. `delegation` is
+  the identity key's signature over
+  `{identity_npub, root_mac, seal_npub, valid_from, valid_until, revoked_at}`,
+  so an entry is trustworthy only if the anchor authorized it: the history is
+  never self-attested (anyone who can edit the manifest could otherwise
+  declare a key of their own and re-seal a forged head).
+- **`seals`** — the append-only seal history, one event per `pd seal`:
+  `{npub, ts, cs, headMac, auditSeq, auditHead, sig, requireSignatures,
+  cryptoVersion}`. A re-seal at the same head appends; the latest matching
+  event is the live seal.
 
-- **v1 behavior:** the seal key **is** the org key — `pd seal` derives
-  `sealPubkey` from the org nsec, and `verify` requires
-  `sealPubkey == org_pubkey`. There is a single `sealPubkey`/`signedRootMac`/
-  `sealedHeadSeq` triple in the manifest header; no history, no rotation.
-- **Gap:** there is no seal-key history or rotation. Re-sealing with a
-  different key today fails `verify` (`seal_pubkey != pubkey_hex`), and
-  changing `org_pubkey` itself would change `root_mac` (a new namespace).
-- **To close:** (a) this procedure document (done); (b) code: a seal-key
-  history in the manifest header + `key_valid_at`-style verification for the
-  seal key (tracked as a follow-up issue).
+**Generation** — a new seal keypair is generated off-namespace.
+
+**Rotation (re-seal)** — the identity key authorizes the new seal key, then
+that key seals the head:
+
+```bash
+# A mutation advanced the head; authorize a new seal key and rotate to it.
+pd seal --nsec-file seal-b.nsec --org-nsec-file org-identity.nsec --root ./docs
+
+# Later re-seals with an already-authorized key need no org-key ceremony.
+pd seal --nsec-file seal-b.nsec --root ./docs
+```
+
+`root_mac` is unchanged — only the sealing key rotates. Seals made under
+earlier keys stay verifiable under the key that made them: `pd verify`
+re-checks every recorded event, and `pd seal-keys` shows the chain.
+
+**Revocation** — authorized by the identity key (a revocation the anchor did
+not sign is refused), and fail-closed: a seal made by that key at or after
+`revoked_at` is rejected. Seals made *before* the revocation stay valid — a
+compromised key does not retroactively invalidate the evidence of earlier
+heads — but the revoked key can no longer seal, so the namespace picks up a
+new authorized key with `pd seal --org-nsec-file`.
+
+```bash
+pd revoke-seal-key <npub> --org-nsec-file org-identity.nsec --root ./docs
+```
+
+**Verification** — `verify --org-pubkey` checks the head seal against the seal
+key that was valid *at the seal timestamp* (analogous to `key_valid_at` for
+actors, #76), not against a single fixed key, and re-verifies the whole
+history.
+
+**What cannot rotate** — `org_pubkey` itself is part of `root_mac`, so
+rotating it is a namespace re-issue (`pd init`), never a header edit.
+
+## 4. Status
+
+- **Implemented (issue #104):** seal-key history (`manifest.seals`),
+  identity-key delegations (`manifest.sealKeys`), `pd seal` rotation (and
+  refusal to seal with an unauthorized key), `pd revoke-seal-key`,
+  `pd seal-keys`, and `pd verify` checking the seal key valid at the seal
+  timestamp plus re-verifying every recorded seal.
+- **Legacy (pre-#104) manifests:** carry no history, so `verify` keeps the
+  original rule — the single `sealPubkey` must be the org identity key.
+- **Out of scope:** encryption-at-rest (SPEC §14, decision 4).
 
 ## 5. Reference
 
-- `pd seal` — phantomdocs/src/phantomdocs/cli.py
-- `verify --org-pubkey` — phantomdocs/src/phantomdocs/cli.py
-- `seal_envelope` / `sign_seal` / `verify_seal` — phantomdocs/src/phantomdocs/signing.py
+- `pd seal`, `pd revoke-seal-key`, `pd seal-keys`, `verify --org-pubkey` —
+  phantomdocs/src/phantomdocs/cli.py
+- seal-key history helpers (`record_seal_event`, `seal_key_valid_at`) —
+  phantomdocs/src/phantomdocs/manifest.py
+- `seal_envelope` / `sign_seal` / `verify_seal` / `delegation_envelope` /
+  `sign_delegation` / `verify_delegation` — phantomdocs/src/phantomdocs/signing.py
 - `root_mac` — phantomdocs/src/phantomdocs/identity.py

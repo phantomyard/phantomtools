@@ -6,6 +6,8 @@ the org identity and verifies the seal. A forged root, a deleted version, or a
 rolled-back/truncated audit head all change the sealed envelope and must fail.
 """
 
+from pathlib import Path
+
 import coincurve
 import yaml
 from click.testing import CliRunner
@@ -254,15 +256,39 @@ def test_audit_historical_line_inserted_detected(tmp_path):
     assert "audit" in r.output
 
 
-def test_seal_wrong_key_detected(tmp_path):
-    """A seal made by a different key must not verify (#70)."""
-    root, _org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 1)
-    # Re-seal with a different (attacker) key.
+def test_seal_wrong_key_refused_without_org_authorization(tmp_path):
+    """Sealing with a key the org never authorized is refused (#70/#104)."""
+    root, _org, _pubkey, _npub, _nsec, runner = _setup(tmp_path, 1)
     attacker_secret = coincurve.PrivateKey().secret.hex()
     attacker_nsec = tmp_path / "attacker.nsec"
     attacker_nsec.write_text(attacker_secret, encoding="utf-8")
     r = runner.invoke(main, ["seal", "--nsec-file", str(attacker_nsec), "--root", root])
-    assert r.exit_code == 0, r.output
+    assert r.exit_code != 0
+    assert "--org-nsec-file" in r.output
+
+
+def test_forged_reseal_by_unknown_key_detected(tmp_path):
+    """A head seal rewritten by an unauthorized key must not verify (#70)."""
+    root, _org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 1)
+    manifest_path = tmp_path / "manifest.yaml"
+    data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    m = data["manifest"]
+
+    attacker_secret = coincurve.PrivateKey().secret.hex()
+    attacker_pubkey = signing.pubkey_from_nsec(attacker_secret)
+    envelope = signing.seal_envelope(
+        root_mac=m["rootMac"],
+        head_seq=int(m.get("headSeq") or 0),
+        head_mac=m.get("headMac") or m["rootMac"],
+        audit_seq=int(m.get("auditSeq") or 0),
+        audit_head=m.get("auditHead"),
+        require_signatures=m.get("requireSignatures"),
+        crypto_version=m.get("cryptoVersion"),
+    )
+    m["signedRootMac"] = signing.sign_seal(attacker_secret, envelope)
+    m["sealPubkey"] = attacker_pubkey
+    manifest_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
     r = _verify(runner, root, pubkey)
     assert r.exit_code != 0
     assert "seal" in r.output
@@ -290,3 +316,251 @@ def test_unsealed_manifest_rejected_with_org_pubkey(tmp_path):
     r = runner.invoke(main, ["verify", "--org-pubkey", "ab" * 32, "--root", root])
     assert r.exit_code != 0
     assert "seal" in r.output
+
+
+# --- seal-key lifecycle: history, rotation, revocation (issue #104) ---
+
+
+def _mutate(root, org, runner, name="extra.txt"):
+    """Advance the namespace head by adding one more document."""
+    doc = Path(root) / name
+    doc.write_text(f"content {name}", encoding="utf-8")
+    r = runner.invoke(
+        main,
+        [
+            "add",
+            str(doc),
+            "--slug",
+            name,
+            "--category",
+            "category-2",
+            "--owners",
+            "ceo",
+            "--org-yaml",
+            org,
+            "--actor",
+            "paco",
+            "--root",
+            root,
+        ],
+    )
+    assert r.exit_code == 0, r.output
+
+
+def _keypair(tmp_path, name):
+    """A fresh keypair, its hex pubkey/npub and an nsec file path."""
+    secret = coincurve.PrivateKey().secret.hex()
+    pubkey = signing.pubkey_from_nsec(secret)
+    nsec_path = tmp_path / f"{name}.nsec"
+    nsec_path.write_text(secret, encoding="utf-8")
+    return pubkey, signing.npub_encode(pubkey), str(nsec_path)
+
+
+def _manifest(tmp_path):
+    return yaml.safe_load((tmp_path / "manifest.yaml").read_text(encoding="utf-8"))
+
+
+def test_seal_records_identity_and_history(tmp_path):
+    """The first seal records the identity key and one history event (#104)."""
+    _root, _org, _pubkey, npub, _nsec, _runner = _setup(tmp_path, 1)
+    m = _manifest(tmp_path)["manifest"]
+    assert m["sealIdentityNpub"] == npub
+    events = m["seals"]
+    assert len(events) == 1
+    assert events[0]["npub"] == npub
+    assert events[0]["cs"] == m["sealedHeadSeq"]
+    assert events[0]["sig"] == m["signedRootMac"]
+    assert m["sealKeys"] == []
+
+
+def test_rotation_with_org_authorization_verifies(tmp_path):
+    """The identity key authorizes a second seal key; verify accepts it."""
+    root, org, pubkey, _npub, org_nsec, runner = _setup(tmp_path, 1)
+    _mutate(root, org, runner)
+    _b_pubkey, b_npub, b_nsec = _keypair(tmp_path, "seal-b")
+
+    r = runner.invoke(
+        main,
+        [
+            "seal",
+            "--nsec-file",
+            b_nsec,
+            "--org-nsec-file",
+            org_nsec,
+            "--root",
+            root,
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    assert "rotated" in r.output
+
+    m = _manifest(tmp_path)["manifest"]
+    assert m["sealPubkey"] == _b_pubkey
+    assert m["sealIdentityNpub"] == _npub
+    assert [rec["npub"] for rec in m["sealKeys"]] == [b_npub]
+    assert len(m["seals"]) == 2
+
+    r = _verify(runner, root, pubkey)
+    assert r.exit_code == 0, r.output
+    assert "org-authorized seal key" in r.output
+
+
+def test_rotation_without_org_key_refused(tmp_path):
+    """A new seal key is refused unless the identity key authorizes it."""
+    root, org, _pubkey, _npub, _org_nsec, runner = _setup(tmp_path, 1)
+    _mutate(root, org, runner)
+    _b_pubkey, _b_npub, b_nsec = _keypair(tmp_path, "seal-b")
+
+    r = runner.invoke(main, ["seal", "--nsec-file", b_nsec, "--root", root])
+    assert r.exit_code != 0
+    assert "--org-nsec-file" in r.output
+
+
+def test_rotation_with_wrong_org_key_refused(tmp_path):
+    """Only the namespace's own identity key can authorize a seal key."""
+    root, org, _pubkey, _npub, _org_nsec, runner = _setup(tmp_path, 1)
+    _mutate(root, org, runner)
+    _b_pubkey, _b_npub, b_nsec = _keypair(tmp_path, "seal-b")
+    _c_pubkey, _c_npub, c_nsec = _keypair(tmp_path, "not-the-org")
+
+    r = runner.invoke(
+        main,
+        ["seal", "--nsec-file", b_nsec, "--org-nsec-file", c_nsec, "--root", root],
+    )
+    assert r.exit_code != 0
+    assert "org identity key" in r.output
+
+
+def test_authorized_seal_key_keeps_sealing(tmp_path):
+    """Once authorized, a seal key re-seals on its own after mutations."""
+    root, org, pubkey, _npub, org_nsec, runner = _setup(tmp_path, 1)
+    _mutate(root, org, runner, "one.txt")
+    _b_pubkey, _b_npub, b_nsec = _keypair(tmp_path, "seal-b")
+    r = runner.invoke(
+        main,
+        ["seal", "--nsec-file", b_nsec, "--org-nsec-file", org_nsec, "--root", root],
+    )
+    assert r.exit_code == 0, r.output
+
+    _mutate(root, org, runner, "two.txt")
+    r = runner.invoke(main, ["seal", "--nsec-file", b_nsec, "--root", root])
+    assert r.exit_code == 0, r.output
+    r = _verify(runner, root, pubkey)
+    assert r.exit_code == 0, r.output
+
+
+def test_unauthorized_seal_key_history_rejected(tmp_path):
+    """A seal by a key with no org delegation must not verify (#104)."""
+    root, org, pubkey, _npub, org_nsec, runner = _setup(tmp_path, 1)
+    _mutate(root, org, runner)
+    _b_pubkey, b_npub, b_nsec = _keypair(tmp_path, "seal-b")
+    r = runner.invoke(
+        main,
+        ["seal", "--nsec-file", b_nsec, "--org-nsec-file", org_nsec, "--root", root],
+    )
+    assert r.exit_code == 0, r.output
+
+    # Drop the org delegation: the seal is now self-attested.
+    path = tmp_path / "manifest.yaml"
+    data = _manifest(tmp_path)
+    data["manifest"]["sealKeys"] = [
+        {"npub": b_npub, "valid_from": "2020-01-01T00:00:00Z", "delegation": "00" * 64}
+    ]
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    r = _verify(runner, root, pubkey)
+    assert r.exit_code != 0
+    assert "seal" in r.output
+
+
+def test_revoked_seal_key_fails_closed(tmp_path):
+    """A seal made at/after the key's revocation is rejected (#104)."""
+    root, org, pubkey, _npub, org_nsec, runner = _setup(tmp_path, 1)
+    _mutate(root, org, runner)
+    _b_pubkey, b_npub, b_nsec = _keypair(tmp_path, "seal-b")
+    r = runner.invoke(
+        main,
+        ["seal", "--nsec-file", b_nsec, "--org-nsec-file", org_nsec, "--root", root],
+    )
+    assert r.exit_code == 0, r.output
+    sealed_ts = _manifest(tmp_path)["manifest"]["seals"][-1]["ts"]
+
+    r = runner.invoke(
+        main,
+        [
+            "revoke-seal-key",
+            b_npub,
+            "--org-nsec-file",
+            org_nsec,
+            "--revoked-at",
+            sealed_ts,
+            "--root",
+            root,
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    r = _verify(runner, root, pubkey)
+    assert r.exit_code != 0
+    assert "revoked" in r.output or "validity window" in r.output
+
+
+def test_identity_key_cannot_be_revoked(tmp_path):
+    """The org identity key anchors the namespace; it cannot be revoked (#104)."""
+    root, _org, _pubkey, npub, org_nsec, runner = _setup(tmp_path, 1)
+    r = runner.invoke(
+        main, ["revoke-seal-key", npub, "--org-nsec-file", org_nsec, "--root", root]
+    )
+    assert r.exit_code != 0
+    assert "cannot be revoked" in r.output
+
+
+def test_revocation_requires_the_org_identity_key(tmp_path):
+    """A revocation the org identity key did not sign is refused (#104)."""
+    root, org, pubkey, _npub, org_nsec, runner = _setup(tmp_path, 1)
+    _mutate(root, org, runner)
+    _b_pubkey, b_npub, b_nsec = _keypair(tmp_path, "seal-b")
+    r = runner.invoke(
+        main,
+        ["seal", "--nsec-file", b_nsec, "--org-nsec-file", org_nsec, "--root", root],
+    )
+    assert r.exit_code == 0, r.output
+    _x_pubkey, _x_npub, x_nsec = _keypair(tmp_path, "not-the-org")
+
+    r = runner.invoke(
+        main, ["revoke-seal-key", b_npub, "--org-nsec-file", x_nsec, "--root", root]
+    )
+    assert r.exit_code != 0
+    assert "org identity key" in r.output
+    # The forged revocation was not applied: the namespace still verifies.
+    r = _verify(runner, root, pubkey)
+    assert r.exit_code == 0, r.output
+
+
+def test_identity_mismatch_rejected(tmp_path):
+    """A manifest declaring another seal identity must not verify (#104)."""
+    root, _org, pubkey, _npub, _nsec, runner = _setup(tmp_path, 1)
+    path = tmp_path / "manifest.yaml"
+    data = _manifest(tmp_path)
+    _other_pubkey, other_npub, _other_nsec = _keypair(tmp_path, "other")
+    data["manifest"]["sealIdentityNpub"] = other_npub
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    r = _verify(runner, root, pubkey)
+    assert r.exit_code != 0
+    assert "seal identity" in r.output
+
+
+def test_seal_keys_lists_history(tmp_path):
+    """``pd seal-keys`` shows the identity, authorized keys and seals."""
+    root, org, _pubkey, npub, org_nsec, runner = _setup(tmp_path, 1)
+    _mutate(root, org, runner)
+    _b_pubkey, b_npub, b_nsec = _keypair(tmp_path, "seal-b")
+    r = runner.invoke(
+        main,
+        ["seal", "--nsec-file", b_nsec, "--org-nsec-file", org_nsec, "--root", root],
+    )
+    assert r.exit_code == 0, r.output
+
+    r = runner.invoke(main, ["seal-keys", "--root", root])
+    assert r.exit_code == 0, r.output
+    assert npub in r.output
+    assert b_npub in r.output
+    assert "seals" in r.output

@@ -77,6 +77,12 @@ def empty_manifest(
             "signedRootMac": None,
             "sealPubkey": None,
             "sealedHeadSeq": None,
+            # Seal-key lifecycle (issue #104): the org identity key that anchors
+            # the namespace, the seal keys it has authorized, and the
+            # append-only history of seals made. See the module helpers below.
+            "sealIdentityNpub": None,
+            "sealKeys": [],
+            "seals": [],
             "requireSignatures": require_signatures,
             "profileTransition": None,
             "headSeq": 0,
@@ -177,6 +183,155 @@ def manifest_lock(path: str) -> Iterator[None]:
                 msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
 
 
+def seal_identity_npub(header: dict[str, Any]) -> str | None:
+    """The npub of the org identity key recorded at the first seal (#104).
+
+    The identity key is baked into ``root_mac`` and never rotates; ``verify
+    --org-pubkey`` cross-checks this field against the externally supplied
+    anchor, so a manifest that declares a different identity than the one the
+    operator trusts is rejected.
+    """
+    value = header.get("sealIdentityNpub")
+    return value if isinstance(value, str) and value else None
+
+
+def seal_key_records(header: dict[str, Any]) -> list[dict[str, Any]]:
+    """The authorized seal-key lifecycle records (issue #104)."""
+    records = header.get("sealKeys")
+    if not isinstance(records, list):
+        return []
+    return [r for r in records if isinstance(r, dict)]
+
+
+def seal_key_record(header: dict[str, Any], npub: str) -> dict[str, Any] | None:
+    """The lifecycle record for a seal key, or None when never authorized."""
+    for rec in seal_key_records(header):
+        if rec.get("npub") == npub:
+            return rec
+    return None
+
+
+def upsert_seal_key_record(
+    header: dict[str, Any],
+    *,
+    npub: str,
+    valid_from: str,
+    delegation: str,
+    valid_until: str | None = None,
+    revoked_at: str | None = None,
+) -> dict[str, Any]:
+    """Record (or update) an org-authorized seal key (issue #104).
+
+    The record carries the key's Nostr identity, its lifecycle window, and the
+    org identity key's ``delegation`` signature over that window — the
+    authorization that makes the entry trustworthy. A re-authorization (a
+    re-seal, a re-scope, or a revocation) updates the record *and replaces the
+    delegation*, because the delegation covers the window it authorizes.
+    """
+    records = header.setdefault("sealKeys", [])
+    for rec in records:
+        if isinstance(rec, dict) and rec.get("npub") == npub:
+            rec.update(
+                {
+                    "valid_from": valid_from,
+                    "valid_until": valid_until,
+                    "revoked_at": revoked_at,
+                    "delegation": delegation,
+                }
+            )
+            return rec
+    rec = {
+        "npub": npub,
+        "valid_from": valid_from,
+        "valid_until": valid_until,
+        "revoked_at": revoked_at,
+        "delegation": delegation,
+    }
+    records.append(rec)
+    return rec
+
+
+def seal_events(header: dict[str, Any]) -> list[dict[str, Any]]:
+    """The append-only seal history (one event per ``pd seal``, #104)."""
+    events = header.get("seals")
+    if not isinstance(events, list):
+        return []
+    return [e for e in events if isinstance(e, dict)]
+
+
+def latest_seal_event(
+    header: dict[str, Any], *, head_seq: int | None = None
+) -> dict[str, Any] | None:
+    """The most recent seal event for ``head_seq`` (default: the live seal).
+
+    History is append-only, so a re-seal at the same head (for example a
+    rotation at the same commit sequence) leaves the earlier event in place
+    and the *latest* matching one wins — the event whose signature is the one
+    the manifest currently carries.
+    """
+    target = header.get("sealedHeadSeq") if head_seq is None else head_seq
+    if target is None:
+        return None
+    for event in reversed(seal_events(header)):
+        if event.get("cs") == target:
+            return event
+    return None
+
+
+def record_seal_event(
+    header: dict[str, Any],
+    *,
+    npub: str,
+    ts: str,
+    head_seq: int,
+    head_mac: str,
+    audit_seq: int,
+    audit_head: str | None,
+    sig: str,
+    require_signatures: bool | None = None,
+    crypto_version: int | None = CRYPTO_VERSION,
+) -> dict[str, Any]:
+    """Append a seal event to the history (issue #104).
+
+    Each event records *what* was sealed (``cs`` = commit sequence, plus the
+    head/audit anchors), *who* sealed it (``npub``), *when* (``ts``), the
+    signing profile it was sealed under, and the signature — so a seal made
+    under a key that has since rotated out or been revoked stays verifiable
+    under the key that made it, even after a later profile transition.
+    """
+    event = {
+        "npub": npub,
+        "ts": ts,
+        "cs": head_seq,
+        "headMac": head_mac,
+        "auditSeq": audit_seq,
+        "auditHead": audit_head,
+        "sig": sig,
+        "requireSignatures": require_signatures,
+        "cryptoVersion": crypto_version,
+    }
+    header.setdefault("seals", []).append(event)
+    return event
+
+
+def seal_key_valid_at(rec: dict[str, Any], ts: str) -> bool:
+    """True iff a seal key was valid at ``ts`` (issue #104).
+
+    Mirrors ``access.key_valid_at`` for actor keys (#76): the key must not be
+    revoked at or before ``ts``, and ``ts`` must fall inside its
+    ``valid_from``/``valid_until`` window. Timestamps are ISO-8601 UTC strings
+    compared lexicographically.
+    """
+    revoked_at = rec.get("revoked_at")
+    if revoked_at and ts >= revoked_at:
+        return False
+    valid_from = rec.get("valid_from")
+    if valid_from and ts < valid_from:
+        return False
+    valid_until = rec.get("valid_until")
+    return not (valid_until and ts >= valid_until)
+
+
 def validate(data: dict[str, Any]) -> list[str]:
     """Return a list of validation errors (empty == valid).
 
@@ -253,6 +408,66 @@ def validate(data: dict[str, Any]) -> list[str]:
             not isinstance(value, str) or not is_valid_hex64(value)
         ):
             errors.append(f"manifest.{field} must be a 64-hex string")
+
+    # Seal-key lifecycle (issue #104). Shape only: the delegation signature
+    # and the seal signatures are cryptographic and checked by `pd verify`;
+    # load must stay tolerant so `pd verify` can report a bad seal history
+    # instead of both being unable to open the manifest.
+    identity_npub = m.get("sealIdentityNpub")
+    if identity_npub is not None and (
+        not isinstance(identity_npub, str) or not identity_npub.startswith("npub1")
+    ):
+        errors.append("manifest.sealIdentityNpub must be an npub string")
+    seal_keys = m.get("sealKeys")
+    if seal_keys is not None:
+        if not isinstance(seal_keys, list):
+            errors.append("manifest.sealKeys must be a list")
+        else:
+            for index, rec in enumerate(seal_keys):
+                prefix = f"manifest.sealKeys[{index}]"
+                if not isinstance(rec, dict):
+                    errors.append(f"{prefix}: must be a mapping")
+                    continue
+                npub = rec.get("npub")
+                if not isinstance(npub, str) or not npub.startswith("npub1"):
+                    errors.append(f"{prefix}: npub is required")
+                if not rec.get("valid_from"):
+                    errors.append(f"{prefix}: valid_from is required")
+                sig = rec.get("delegation")
+                if (
+                    not isinstance(sig, str)
+                    or len(sig) != 128
+                    or any(c not in "0123456789abcdef" for c in sig)
+                ):
+                    errors.append(f"{prefix}: delegation must be a 128-hex signature")
+                for field in ("valid_from", "valid_until", "revoked_at"):
+                    value = rec.get(field)
+                    if value is not None and not isinstance(value, str):
+                        errors.append(f"{prefix}.{field} must be an ISO-8601 string")
+    seals = m.get("seals")
+    if seals is not None:
+        if not isinstance(seals, list):
+            errors.append("manifest.seals must be a list")
+        else:
+            for index, event in enumerate(seals):
+                prefix = f"manifest.seals[{index}]"
+                if not isinstance(event, dict):
+                    errors.append(f"{prefix}: must be a mapping")
+                    continue
+                npub = event.get("npub")
+                if not isinstance(npub, str) or not npub.startswith("npub1"):
+                    errors.append(f"{prefix}: npub is required")
+                if not isinstance(event.get("ts"), str) or not event.get("ts"):
+                    errors.append(f"{prefix}: ts is required")
+                if not isinstance(event.get("cs"), int):
+                    errors.append(f"{prefix}: cs must be an integer")
+                sig = event.get("sig")
+                if (
+                    not isinstance(sig, str)
+                    or len(sig) != 128
+                    or any(c not in "0123456789abcdef" for c in sig)
+                ):
+                    errors.append(f"{prefix}: sig must be a 128-hex signature")
     root_mac = m.get("rootMac")
     if not root_mac:
         errors.append("manifest.rootMac is required")
