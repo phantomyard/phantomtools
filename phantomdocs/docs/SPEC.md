@@ -241,6 +241,17 @@ current head exists); day-to-day verification may omit it, accepting that a
 whole-state rollback to an older internally-consistent sealed copy is then
 undetectable.
 
+**Revocation anchor (issue #104):** seal-key revocations are append-only and
+hash-chained (`manifest.revocations`: 1-based generation, `prevHash`, and an
+org-identity signature per record), so a revoked key cannot be brought back by
+replaying the authorization that predated the revocation. Because a
+whole-state rollback could still erase the chain, `pd verify --checkpoint
+<path|url>` anchors both the revocation history and the head against an
+org-signed checkpoint published outside the namespace, and a namespace that
+records revocations is refused without one. The checkpoint is the
+non-replayable form of the rollback defense: the operator supplies a *source*,
+never a value, so no out-of-band bookkeeping is replayed by hand.
+
 ### 6.3 Single authoritative writer host (deployment boundary)
 
 PhantomDocs v1 supports **exactly one authoritative writer host per

@@ -360,7 +360,6 @@ def delegation_envelope(
     seal_npub: str,
     valid_from: str,
     valid_until: str | None = None,
-    revoked_at: str | None = None,
     crypto_version: int | None = CRYPTO_VERSION,
 ) -> bytes:
     """The canonical bytes the *org identity key* signs to authorize a seal key.
@@ -375,7 +374,10 @@ def delegation_envelope(
 
     The envelope binds the identity, the root, the authorized seal key and its
     lifecycle window, so a delegation cannot be replayed into another
-    namespace or reused for another key.
+    namespace or reused for another key. Revocation is deliberately *not* part
+    of this envelope: an authorization covers a window, and revoking it is a
+    separate, append-only record (:func:`revocation_envelope`) so that the
+    revocation cannot be undone by replaying the older authorization.
     """
     payload = {
         "identity_npub": identity_npub,
@@ -383,7 +385,6 @@ def delegation_envelope(
         "seal_npub": seal_npub,
         "valid_from": valid_from,
         "valid_until": valid_until or "",
-        "revoked_at": revoked_at or "",
     }
     if crypto_version is not None:
         payload["crypto_version"] = crypto_version
@@ -412,6 +413,137 @@ def verify_delegation(pubkey_hex: str, signature_hex: str, envelope: bytes) -> b
         pubkey = coincurve.PublicKeyXOnly(bytes.fromhex(pubkey_hex))
         signature = bytes.fromhex(signature_hex)
         return pubkey.verify(signature, delegation_message(envelope))
+    except (ValueError, TypeError):
+        return False
+
+
+# Domain separator for seal-key revocation (issue #104). A revocation is a
+# distinct statement from an authorization, in its own domain, so the two can
+# never be confused for one another.
+_REVOCATION_DOMAIN = b"phantomdocs-seal-revocation-v1"
+
+
+def revocation_envelope(
+    *,
+    identity_npub: str,
+    root_mac: str,
+    seal_npub: str,
+    revoked_at: str,
+    generation: int,
+    prev_hash: str,
+    crypto_version: int | None = CRYPTO_VERSION,
+) -> bytes:
+    """The canonical bytes the *org identity key* signs to revoke a seal key.
+
+    Revocation is permanent and append-only: it never overwrites the
+    authorization it revokes. The envelope binds the revocation to its
+    position in the revocation chain (``generation`` and ``prev_hash``), so a
+    record cannot be reordered, spliced out of the chain, or lifted into
+    another namespace; ``revoked_at`` is bound so a revocation cannot be
+    retimed.
+    """
+    payload = {
+        "identity_npub": identity_npub,
+        "root_mac": root_mac,
+        "seal_npub": seal_npub,
+        "revoked_at": revoked_at,
+        "generation": generation,
+        "prev_hash": prev_hash,
+    }
+    if crypto_version is not None:
+        payload["crypto_version"] = crypto_version
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+
+
+def revocation_message(envelope: bytes) -> bytes:
+    return _sha256(_REVOCATION_DOMAIN + envelope)
+
+
+def sign_revocation(secret_or_nsec: str, envelope: bytes) -> str:
+    """Schnorr-sign a seal-key revocation with the org identity key. 128-hex."""
+    secret = bytes.fromhex(nsec_to_secret_hex(secret_or_nsec))
+    return (
+        coincurve.PrivateKey(secret)
+        .sign_schnorr(revocation_message(envelope), None)
+        .hex()
+    )
+
+
+def verify_revocation(pubkey_hex: str, signature_hex: str, envelope: bytes) -> bool:
+    """Verify a seal-key revocation signature against the identity pubkey."""
+    try:
+        pubkey = coincurve.PublicKeyXOnly(bytes.fromhex(pubkey_hex))
+        signature = bytes.fromhex(signature_hex)
+        return pubkey.verify(signature, revocation_message(envelope))
+    except (ValueError, TypeError):
+        return False
+
+
+# Domain separator for revocation checkpoints (issue #104). A checkpoint is
+# the out-of-band, non-replayable anchor for the revocation history: it is
+# signed by the org identity key and published outside the namespace, so a
+# whole-state rollback that erases a revocation is detectable instead of
+# being indistinguishable from a legitimately older copy.
+_CHECKPOINT_DOMAIN = b"phantomdocs-revocation-checkpoint-v1"
+
+
+def checkpoint_envelope(
+    *,
+    identity_npub: str,
+    root_mac: str,
+    revocation_generation: int,
+    revocations_hash: str,
+    head_seq: int,
+    head_mac: str,
+    ts: str,
+    crypto_version: int | None = CRYPTO_VERSION,
+) -> bytes:
+    """The canonical bytes the *org identity key* signs for a checkpoint.
+
+    The checkpoint commits to the namespace's revocation state (its
+    ``generation`` and the hash of the entire revocation chain) *and* to the
+    head it was taken at, so a single published artifact anchors both the
+    revocation history and the head — the verifier needs no out-of-band
+    knowledge of either.
+    """
+    payload = {
+        "identity_npub": identity_npub,
+        "root_mac": root_mac,
+        "revocation_generation": revocation_generation,
+        "revocations_hash": revocations_hash,
+        "head_seq": head_seq,
+        "head_mac": head_mac,
+        "ts": ts,
+    }
+    if crypto_version is not None:
+        payload["crypto_version"] = crypto_version
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+
+
+def checkpoint_message(envelope: bytes) -> bytes:
+    return _sha256(_CHECKPOINT_DOMAIN + envelope)
+
+
+def sign_checkpoint(secret_or_nsec: str, envelope: bytes) -> str:
+    """Schnorr-sign a revocation checkpoint with the org identity key."""
+    secret = bytes.fromhex(nsec_to_secret_hex(secret_or_nsec))
+    return (
+        coincurve.PrivateKey(secret)
+        .sign_schnorr(checkpoint_message(envelope), None)
+        .hex()
+    )
+
+
+def verify_checkpoint(pubkey_hex: str, signature_hex: str, envelope: bytes) -> bool:
+    """Verify a revocation checkpoint against the org identity pubkey."""
+    try:
+        pubkey = coincurve.PublicKeyXOnly(bytes.fromhex(pubkey_hex))
+        signature = bytes.fromhex(signature_hex)
+        return pubkey.verify(signature, checkpoint_message(envelope))
     except (ValueError, TypeError):
         return False
 

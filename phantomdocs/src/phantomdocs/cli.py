@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import urllib.request
 from contextlib import nullcontext
 
 import click
@@ -44,6 +45,7 @@ from .identity import (
 from .manifest import (
     MANIFEST_FILENAME,
     ManifestError,
+    append_revocation,
     empty_manifest,
     latest_seal_event,
     load,
@@ -53,6 +55,10 @@ from .manifest import (
     record_seal_event,
     ref_target_mac,
     resolve_node,
+    revocation_generation,
+    revocation_records,
+    revocations_hash,
+    revoked_at_of,
     save,
     seal_events,
     seal_identity_npub,
@@ -71,18 +77,24 @@ from .setup import (
 )
 from .signing import (
     CRYPTO_VERSION,
+    checkpoint_envelope,
     delegation_envelope,
     mutation_envelope,
     npub_encode,
     npub_to_pubkey_hex,
     profile_envelope,
     pubkey_from_nsec,
+    revocation_envelope,
     seal_envelope,
+    sign_checkpoint,
     sign_delegation,
+    sign_revocation,
     sign_seal,
+    verify_checkpoint,
     verify_delegation,
     verify_mutation,
     verify_profile,
+    verify_revocation,
     verify_seal,
 )
 from .storage import (
@@ -560,8 +572,14 @@ def search(query, org_yaml, actor, root):
     help="The known-current head sequence (external trust root): fails if the "
     "manifest head has been rolled back below it (issue #70).",
 )
+@click.option(
+    "--checkpoint",
+    default=None,
+    help="Path or URL of a signed revocation checkpoint (issue #104): anchors "
+    "the revocation history and the head against rollback.",
+)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
+def verify(backend, org_yaml, org_pubkey, expected_head_seq, checkpoint, root):
     """Recompute MAC chain + content hashes against the manifest."""
     manifest = _load_or_die(root)
     # Crypto agility (audit decision 3): the namespace declares its crypto
@@ -974,6 +992,34 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, root):
                 "supplied; refusing to skip the trust anchor"
             )
 
+    # Revocation anchor (issue #104): the revocation chain is append-only and
+    # tamper-evident *within* the namespace, but a whole-state rollback could
+    # still restore a copy taken before a revocation. A checkpoint — signed by
+    # the org identity key and published outside the namespace — is the
+    # non-replayable anchor: it commits to the revocation history and to the
+    # head, so an erased revocation, a rewritten chain or a rolled-back head
+    # all fail here. Fail-closed: a namespace that records revocations is
+    # refused when no checkpoint is supplied.
+    anchored = _load_checkpoint(checkpoint) if checkpoint else None
+    revocations_recorded = revocation_generation(manifest_header)
+    if org_pubkey:
+        for problem in _revocation_problems(
+            manifest_header, _org_pubkey_hex(org_pubkey)
+        ):
+            failures += 1
+            click.echo(f"FAIL revocation: {problem}")
+    if anchored is not None:
+        for problem in _checkpoint_problems(manifest_header, anchored, org_pubkey):
+            failures += 1
+            click.echo(f"FAIL revocation: {problem}")
+    elif revocations_recorded:
+        failures += 1
+        click.echo(
+            f"FAIL revocation: {revocations_recorded} revocation(s) recorded "
+            "but no --checkpoint was supplied; refusing to trust an unanchored "
+            "revocation history"
+        )
+
     # Signing-profile transition (audit #1): the production/development
     # profile is authenticated state. A recorded transition must carry a valid
     # signature over its canonical envelope and must agree with the live
@@ -1187,7 +1233,7 @@ def seal(nsec_file, org_nsec_file, valid_until, root):
     rotated = False
     if seal_npub != identity_npub:
         rec = seal_key_record(m, seal_npub)
-        if rec is not None and seal_key_valid_at(rec, ts) and org_nsec is None:
+        if rec is not None and seal_key_valid_at(m, rec, ts) and org_nsec is None:
             # Already authorized: a re-seal by an authorized seal key needs no
             # repeat of the org-key ceremony.
             pass
@@ -1206,7 +1252,6 @@ def seal(nsec_file, org_nsec_file, valid_until, root):
                     seal_npub=seal_npub,
                     valid_from=valid_from,
                     valid_until=valid_until,
-                    revoked_at=None,
                     crypto_version=m.get("cryptoVersion"),
                 ),
             )
@@ -1269,16 +1314,23 @@ def seal(nsec_file, org_nsec_file, valid_until, root):
     default=None,
     help="ISO-8601 UTC revocation instant (default: now).",
 )
+@click.option(
+    "--checkpoint-out",
+    default=None,
+    help="Write the signed checkpoint that anchors this revocation.",
+)
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
-def revoke_seal_key(npub, org_nsec_file, revoked_at, root):
-    """Revoke a seal key from a point in time (issue #104).
+def revoke_seal_key(npub, org_nsec_file, revoked_at, checkpoint_out, root):
+    """Revoke a seal key, permanently (issue #104).
 
-    The revocation is authorized by the org identity key and recorded in the
-    key's lifecycle entry, so it cannot be forged or erased by editing the
-    manifest alone. Fail-closed: a seal made with the key at or after
-    ``--revoked-at`` no longer verifies. Seals made *before* the revocation
-    stay valid — a compromised key does not retroactively invalidate the
-    evidence of earlier heads.
+    The revocation is authorized by the org identity key and *appended* to a
+    hash-chained history, so it cannot be forged, reordered or erased by
+    editing the manifest alone: restoring the older authorization leaves the
+    chain short, which the chain check and a published checkpoint both detect.
+    Fail-closed: a seal made with the key at or after ``--revoked-at`` no
+    longer verifies, and the key can never be un-revoked. Seals made *before*
+    the revocation stay valid — a compromised key does not retroactively
+    invalidate the evidence of earlier heads.
     """
     path = _manifest_path(root)
     data = _load_or_die(root)
@@ -1300,29 +1352,134 @@ def revoke_seal_key(npub, org_nsec_file, revoked_at, root):
             "--org-nsec-file is not the namespace's org identity key "
             f"(expected {identity_npub})"
         )
+    already = revoked_at_of(m, npub)
+    if already is not None:
+        raise click.ClickException(
+            f"{npub} was already revoked at {already} (revocation is permanent)"
+        )
     ts = revoked_at or _now_iso()
-    delegation = sign_delegation(
+    generation = revocation_generation(m) + 1
+    delegation = sign_revocation(
         org_nsec,
-        delegation_envelope(
+        revocation_envelope(
             identity_npub=identity_npub,
             root_mac=m["rootMac"],
             seal_npub=npub,
-            valid_from=rec.get("valid_from") or ts,
-            valid_until=rec.get("valid_until"),
             revoked_at=ts,
+            generation=generation,
+            prev_hash=revocations_hash(revocation_records(m)),
             crypto_version=m.get("cryptoVersion"),
         ),
     )
-    upsert_seal_key_record(
-        m,
-        npub=npub,
-        valid_from=rec.get("valid_from") or ts,
-        valid_until=rec.get("valid_until"),
-        revoked_at=ts,
-        delegation=delegation,
-    )
+    append_revocation(m, npub=npub, revoked_at=ts, delegation=delegation)
     save(path, data)
-    click.echo(f"revoked seal key {npub} at {ts}")
+    click.echo(f"revoked seal key {npub} at {ts} (revocation #{generation})")
+    if checkpoint_out:
+        _emit_checkpoint(m, org_nsec, out=checkpoint_out, publish_url=None)
+        click.echo(f"checkpoint written to {checkpoint_out}")
+    else:
+        click.echo(
+            "anchor it outside the namespace: `pd checkpoint --org-nsec-file "
+            "<org.nsec> --out <path>`"
+        )
+
+
+def _checkpoint_document(m: dict[str, object], *, ts: str) -> dict[str, object]:
+    """The unsigned checkpoint body for the manifest's current state."""
+    return {
+        "identity_npub": seal_identity_npub(m) or "",
+        "root_mac": str(m.get("rootMac") or ""),
+        "revocation_generation": revocation_generation(m),
+        "revocations_hash": revocations_hash(revocation_records(m)),
+        "head_seq": int(m.get("headSeq") or 0),
+        "head_mac": str(m.get("headMac") or m.get("rootMac") or ""),
+        "ts": ts,
+        "crypto_version": m.get("cryptoVersion"),
+    }
+
+
+def _checkpoint_envelope(body: dict[str, object]) -> bytes:
+    return checkpoint_envelope(
+        identity_npub=str(body["identity_npub"]),
+        root_mac=str(body["root_mac"]),
+        revocation_generation=int(body["revocation_generation"]),
+        revocations_hash=str(body["revocations_hash"]),
+        head_seq=int(body["head_seq"]),
+        head_mac=str(body["head_mac"]),
+        ts=str(body["ts"]),
+        crypto_version=body.get("crypto_version"),
+    )
+
+
+def _emit_checkpoint(
+    m: dict[str, object], org_nsec: str, *, out: str | None, publish_url: str | None
+) -> str:
+    """Sign the namespace's current revocation state and emit the checkpoint.
+
+    Returns the JSON document that was written, published or printed.
+    """
+    body = _checkpoint_document(m, ts=_now_iso())
+    sig = sign_checkpoint(org_nsec, _checkpoint_envelope(body))
+    text = json.dumps({"checkpoint": body, "sig": sig}, indent=2, sort_keys=True)
+    text += "\n"
+    if out:
+        with open(out, "w", encoding="utf-8") as handle:
+            handle.write(text)
+    if publish_url:
+        if not publish_url.startswith(("http://", "https://")):
+            raise click.ClickException(
+                f"--publish-url must be http(s), got {publish_url!r}"
+            )
+        request = urllib.request.Request(
+            publish_url,
+            data=text.encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="PUT",
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310
+            response.read()
+    return text
+
+
+@main.command("checkpoint")
+@click.option(
+    "--org-nsec-file",
+    required=True,
+    help="File containing the org identity key's nsec (the anchor key).",
+)
+@click.option("--out", default=None, help="Write the signed checkpoint to this path.")
+@click.option(
+    "--publish-url",
+    default=None,
+    help="HTTP(S) endpoint to PUT the checkpoint to (append-only mirror).",
+)
+@click.option("--root", default=".", show_default=True, help="Local backend root.")
+def checkpoint(org_nsec_file, out, publish_url, root):
+    """Emit a signed revocation checkpoint (issue #104).
+
+    The checkpoint commits to the revocation history and to the head, and is
+    signed by the org identity key. Publish it outside the namespace (an
+    append-only mirror, a relay, a cron job) so that ``pd verify
+    --checkpoint`` can catch a rollback that erases a revocation.
+    """
+    data = _load_or_die(root)
+    m = data["manifest"]
+    identity_npub = seal_identity_npub(m)
+    if identity_npub is None:
+        raise click.ClickException("namespace has no seal identity recorded")
+    org_nsec = _read_secret_file(org_nsec_file, "--org-nsec-file")
+    if npub_encode(pubkey_from_nsec(org_nsec)) != identity_npub:
+        raise click.ClickException(
+            "--org-nsec-file is not the namespace's org identity key "
+            f"(expected {identity_npub})"
+        )
+    text = _emit_checkpoint(m, org_nsec, out=out, publish_url=publish_url)
+    if out:
+        click.echo(f"checkpoint written to {out}")
+    if publish_url:
+        click.echo(f"checkpoint published to {publish_url}")
+    if not out and not publish_url:
+        click.echo(text, nl=False)
 
 
 @main.command("seal-keys")
@@ -1344,9 +1501,16 @@ def seal_keys(root):
             parts.append(f"  from {rec['valid_from']}")
         if rec.get("valid_until"):
             parts.append(f"  until {rec['valid_until']}")
-        if rec.get("revoked_at"):
-            parts.append(f"  REVOKED {rec['revoked_at']}")
+        revocation = revoked_at_of(m, str(rec.get("npub") or ""))
+        if revocation:
+            parts.append(f"  REVOKED {revocation}")
         click.echo("".join(parts))
+    chain = revocation_records(m)
+    click.echo(f"revocations  {len(chain)}")
+    for record in chain:
+        click.echo(
+            f"  #{record.get('n')}  {record.get('npub')}  @ {record.get('revoked_at')}"
+        )
     events = seal_events(m)
     if not events:
         click.echo("no recorded seals")
@@ -1424,18 +1588,133 @@ def _seal_authorization_problem(
             seal_npub=npub,
             valid_from=str(rec.get("valid_from") or ""),
             valid_until=rec.get("valid_until"),
-            revoked_at=rec.get("revoked_at"),
             crypto_version=m.get("cryptoVersion"),
         ),
     ):
         return "the seal key's org authorization signature is invalid"
     ts = event.get("ts")
-    if not isinstance(ts, str) or not seal_key_valid_at(rec, ts):
+    if not isinstance(ts, str) or not seal_key_valid_at(m, rec, ts):
         return (
             "the seal key was revoked or outside its validity window when the "
             "head was sealed"
         )
     return None
+
+
+def _load_checkpoint(source: str) -> dict[str, object]:
+    """Read a signed checkpoint document from a local path or a URL.
+
+    The checkpoint is the *out-of-band* anchor, so it is read from wherever the
+    org publishes it and never from the namespace being verified.
+    """
+    if source.startswith(("http://", "https://")):
+        try:
+            with urllib.request.urlopen(source, timeout=30) as response:  # nosec B310
+                raw = response.read()
+        except Exception as exc:
+            raise click.ClickException(
+                f"cannot fetch checkpoint {source!r}: {exc}"
+            ) from exc
+    else:
+        try:
+            with open(source, "rb") as handle:
+                raw = handle.read()
+        except OSError as exc:
+            raise click.ClickException(
+                f"cannot read checkpoint {source!r}: {exc}"
+            ) from exc
+    try:
+        document = json.loads(raw)
+    except ValueError as exc:
+        raise click.ClickException(
+            f"checkpoint {source!r} is not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(document, dict):
+        raise click.ClickException(f"checkpoint {source!r} must be a JSON object")
+    return document
+
+
+def _checkpoint_problems(
+    m: dict[str, object], document: dict[str, object], org_pubkey: str | None
+) -> list[str]:
+    """Every way a checkpoint fails to anchor the manifest (issue #104)."""
+    body = document.get("checkpoint")
+    sig = document.get("sig")
+    if not isinstance(body, dict):
+        return ["the checkpoint has no 'checkpoint' object"]
+    if not isinstance(sig, str):
+        return ["the checkpoint has no signature"]
+    if not org_pubkey:
+        return [
+            (
+                "a checkpoint was supplied but --org-pubkey was not, so the "
+                "anchor key cannot be checked"
+            )
+        ]
+    identity_hex = _org_pubkey_hex(org_pubkey)
+    envelope = _checkpoint_envelope(body)
+    if not verify_checkpoint(identity_hex, sig, envelope):
+        return ["checkpoint signature invalid (not the trusted org key)"]
+    problems: list[str] = []
+    if body.get("identity_npub") != seal_identity_npub(m):
+        problems.append("checkpoint identity does not match the manifest's")
+    if body.get("root_mac") != m.get("rootMac"):
+        problems.append("checkpoint root does not match the manifest's")
+    generation = int(body.get("revocation_generation") or 0)
+    records = revocation_records(m)
+    if generation > len(records):
+        problems.append(
+            "revocation history rolled back: checkpoint anchors "
+            f"{generation} revocation(s), the manifest has {len(records)}"
+        )
+    elif revocations_hash(records[:generation]) != body.get("revocations_hash"):
+        problems.append(
+            "revocation chain does not match the anchored checkpoint "
+            "(a revocation was rewritten or deleted)"
+        )
+    anchored_head = int(body.get("head_seq") or 0)
+    manifest_head = int(m.get("headSeq") or 0)
+    if manifest_head < anchored_head:
+        problems.append(
+            f"head rolled back: checkpoint anchors headSeq {anchored_head}, "
+            f"the manifest has {manifest_head}"
+        )
+    elif manifest_head == anchored_head:
+        live_mac = str(m.get("headMac") or m.get("rootMac") or "")
+        if live_mac != str(body.get("head_mac") or ""):
+            problems.append("head MAC does not match the anchored checkpoint")
+    return problems
+
+
+def _revocation_problems(m: dict[str, object], identity_pubkey_hex: str) -> list[str]:
+    """Every revocation record that is not org-signed exactly as recorded.
+
+    The chain is hash-linked, but only the org identity key's signature makes
+    a revocation trustworthy: an unsigned or re-signed record would let anyone
+    able to edit the manifest lock a legitimate key out — or present a
+    revocation the org never made.
+    """
+    problems: list[str] = []
+    for rec in revocation_records(m):
+        delegation = rec.get("delegation")
+        if not isinstance(delegation, str) or not verify_revocation(
+            identity_pubkey_hex,
+            delegation,
+            revocation_envelope(
+                identity_npub=seal_identity_npub(m) or "",
+                root_mac=str(m.get("rootMac") or ""),
+                seal_npub=str(rec.get("npub") or ""),
+                revoked_at=str(rec.get("revoked_at") or ""),
+                generation=int(rec.get("n") or 0),
+                prev_hash=str(rec.get("prevHash") or ""),
+                crypto_version=m.get("cryptoVersion"),
+            ),
+        ):
+            problems.append(
+                f"revocation #{rec.get('n')} of {rec.get('npub')} has no valid "
+                "org signature"
+            )
+    return problems
 
 
 def _seal_history_problems(m: dict[str, object], identity_pubkey_hex: str) -> list[str]:

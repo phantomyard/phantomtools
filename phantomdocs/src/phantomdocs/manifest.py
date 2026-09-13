@@ -17,6 +17,8 @@ or rename the same temp file.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import tempfile
@@ -218,15 +220,20 @@ def upsert_seal_key_record(
     valid_from: str,
     delegation: str,
     valid_until: str | None = None,
-    revoked_at: str | None = None,
 ) -> dict[str, Any]:
     """Record (or update) an org-authorized seal key (issue #104).
 
-    The record carries the key's Nostr identity, its lifecycle window, and the
-    org identity key's ``delegation`` signature over that window — the
-    authorization that makes the entry trustworthy. A re-authorization (a
-    re-seal, a re-scope, or a revocation) updates the record *and replaces the
-    delegation*, because the delegation covers the window it authorizes.
+    The record carries the key's Nostr identity, its authorization window, and
+    the org identity key's ``delegation`` signature over that window — the
+    authorization that makes the entry trustworthy. A re-authorization updates
+    the window and replaces the delegation, because the delegation covers the
+    window it authorizes.
+
+    Revocation is deliberately *not* recorded here. Overwriting an
+    authorization in place would let anyone able to edit the manifest bring a
+    revoked key back by restoring the older record: the org signed that window
+    once and that signature never stops being valid. Revoking appends a
+    permanent record to ``revocations`` instead (:func:`append_revocation`).
     """
     records = header.setdefault("sealKeys", [])
     for rec in records:
@@ -235,7 +242,6 @@ def upsert_seal_key_record(
                 {
                     "valid_from": valid_from,
                     "valid_until": valid_until,
-                    "revoked_at": revoked_at,
                     "delegation": delegation,
                 }
             )
@@ -244,11 +250,106 @@ def upsert_seal_key_record(
         "npub": npub,
         "valid_from": valid_from,
         "valid_until": valid_until,
-        "revoked_at": revoked_at,
         "delegation": delegation,
     }
     records.append(rec)
     return rec
+
+
+def revocation_records(header: dict[str, Any]) -> list[dict[str, Any]]:
+    """The append-only seal-key revocation chain (issue #104).
+
+    Each record is ``{n, npub, revoked_at, prevHash, delegation}``: a 1-based
+    generation ``n``, the revoked key, the effective timestamp, the hash of
+    the chain *before* this record, and the org identity key's signature over
+    all of it. The chain is never rewritten — that is what makes a revocation
+    irreversible.
+    """
+    records = header.get("revocations")
+    if not isinstance(records, list):
+        return []
+    return [r for r in records if isinstance(r, dict)]
+
+
+def revocations_hash(records: list[dict[str, Any]]) -> str:
+    """The canonical 64-hex hash of a revocation chain (or chain prefix).
+
+    Both the chain itself (each record commits to its prefix via ``prevHash``)
+    and a published checkpoint (which commits to a whole history) are built on
+    this, so a verifier can tell a truncated or rewritten chain from the
+    anchored one.
+    """
+    payload = json.dumps(
+        records, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def revocation_generation(header: dict[str, Any]) -> int:
+    """The number of revocations recorded (the chain's high-water mark)."""
+    return len(revocation_records(header))
+
+
+def append_revocation(
+    header: dict[str, Any], *, npub: str, revoked_at: str, delegation: str
+) -> dict[str, Any]:
+    """Append a permanent revocation to the chain (issue #104).
+
+    Returns the new record. The chain is only ever appended to, so a
+    revocation cannot be undone by restoring an older manifest: the restored
+    copy loses the record, and that loss is exactly what the chain, the head
+    seal or a published checkpoint detects.
+    """
+    records = header.setdefault("revocations", [])
+    if not isinstance(records, list):
+        raise TypeError("manifest.revocations must be a list")
+    rec = {
+        "n": len(records) + 1,
+        "npub": npub,
+        "revoked_at": revoked_at,
+        "prevHash": revocations_hash(records),
+        "delegation": delegation,
+    }
+    records.append(rec)
+    return rec
+
+
+def revoked_at_of(header: dict[str, Any], npub: str) -> str | None:
+    """When ``npub`` was revoked, or None if it never was.
+
+    Revocation is permanent, so the *earliest* revocation of a key governs: a
+    later duplicate cannot restore validity.
+    """
+    stamps = [
+        r["revoked_at"]
+        for r in revocation_records(header)
+        if r.get("npub") == npub and isinstance(r.get("revoked_at"), str)
+    ]
+    return min(stamps) if stamps else None
+
+
+def revocation_chain_issues(header: dict[str, Any]) -> list[str]:
+    """Chain-shape problems in the revocation history (issue #104).
+
+    The chain must be contiguous (``n`` = 1..N), each record's ``prevHash``
+    must equal the hash of the records before it, and each revoked key must
+    still have its org authorization on file — so a deletion, reorder or edit
+    anywhere in the history is reported instead of silently accepted.
+    """
+    issues: list[str] = []
+    records = revocation_records(header)
+    for index, rec in enumerate(records):
+        prefix = f"manifest.revocations[{index}]"
+        if rec.get("n") != index + 1:
+            issues.append(f"{prefix}: generation {rec.get('n')!r} is not {index + 1}")
+        if rec.get("prevHash") != revocations_hash(records[:index]):
+            issues.append(f"{prefix}: prevHash does not chain to the previous record")
+        if seal_key_record(header, str(rec.get("npub") or "")) is None:
+            issues.append(
+                f"{prefix}: revokes a key the org never authorized "
+                "(its authorization record is missing)"
+            )
+    return issues
 
 
 def seal_events(header: dict[str, Any]) -> list[dict[str, Any]]:
@@ -314,15 +415,19 @@ def record_seal_event(
     return event
 
 
-def seal_key_valid_at(rec: dict[str, Any], ts: str) -> bool:
+def seal_key_valid_at(header: dict[str, Any], rec: dict[str, Any], ts: str) -> bool:
     """True iff a seal key was valid at ``ts`` (issue #104).
 
     Mirrors ``access.key_valid_at`` for actor keys (#76): the key must not be
     revoked at or before ``ts``, and ``ts`` must fall inside its
     ``valid_from``/``valid_until`` window. Timestamps are ISO-8601 UTC strings
     compared lexicographically.
+
+    The revocation is read from the append-only chain, never from the
+    authorization record, so replaying an older authorization cannot un-revoke
+    a key.
     """
-    revoked_at = rec.get("revoked_at")
+    revoked_at = revoked_at_of(header, str(rec.get("npub") or ""))
     if revoked_at and ts >= revoked_at:
         return False
     valid_from = rec.get("valid_from")
@@ -440,10 +545,43 @@ def validate(data: dict[str, Any]) -> list[str]:
                     or any(c not in "0123456789abcdef" for c in sig)
                 ):
                     errors.append(f"{prefix}: delegation must be a 128-hex signature")
-                for field in ("valid_from", "valid_until", "revoked_at"):
+                for field in ("valid_from", "valid_until"):
                     value = rec.get(field)
                     if value is not None and not isinstance(value, str):
                         errors.append(f"{prefix}.{field} must be an ISO-8601 string")
+                if rec.get("revoked_at") is not None:
+                    errors.append(
+                        f"{prefix}: revoked_at is not an authorization field; "
+                        "revocations are append-only in manifest.revocations"
+                    )
+    revocations = m.get("revocations")
+    if revocations is not None:
+        if not isinstance(revocations, list):
+            errors.append("manifest.revocations must be a list")
+        else:
+            for index, rec in enumerate(revocations):
+                prefix = f"manifest.revocations[{index}]"
+                if not isinstance(rec, dict):
+                    errors.append(f"{prefix}: must be a mapping")
+                    continue
+                if not isinstance(rec.get("n"), int):
+                    errors.append(f"{prefix}: n must be an integer")
+                npub = rec.get("npub")
+                if not isinstance(npub, str) or not npub.startswith("npub1"):
+                    errors.append(f"{prefix}: npub is required")
+                revoked_at = rec.get("revoked_at")
+                if not isinstance(revoked_at, str) or not revoked_at:
+                    errors.append(f"{prefix}: revoked_at is required")
+                prev_hash = rec.get("prevHash")
+                if not isinstance(prev_hash, str) or not is_valid_hex64(prev_hash):
+                    errors.append(f"{prefix}: prevHash must be 64-hex")
+                sig = rec.get("delegation")
+                if (
+                    not isinstance(sig, str)
+                    or len(sig) != 128
+                    or any(c not in "0123456789abcdef" for c in sig)
+                ):
+                    errors.append(f"{prefix}: delegation must be a 128-hex signature")
     seals = m.get("seals")
     if seals is not None:
         if not isinstance(seals, list):
@@ -825,6 +963,11 @@ def structural_issues(data: dict[str, Any]) -> list[str]:
                     f"{urn}: version {index + 1} previous does not point at "
                     "the immediately preceding version"
                 )
+
+    # Revocation chain (issue #104): the seal-key revocation history must be
+    # append-only, contiguous and hash-chained, so a revocation cannot be
+    # deleted or reordered without breaking the chain.
+    issues.extend(revocation_chain_issues(data["manifest"]))
     return issues
 
 

@@ -6,12 +6,14 @@ the org identity and verifies the seal. A forged root, a deleted version, or a
 rolled-back/truncated audit head all change the sealed envelope and must fail.
 """
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import coincurve
 import yaml
 from click.testing import CliRunner
 
+from phantomdocs import manifest as manifest_mod
 from phantomdocs import signing
 from phantomdocs.cli import main
 
@@ -564,3 +566,193 @@ def test_seal_keys_lists_history(tmp_path):
     assert npub in r.output
     assert b_npub in r.output
     assert "seals" in r.output
+
+
+def _revoke(runner, root, npub, org_nsec, extra=None):
+    args = ["revoke-seal-key", npub, "--org-nsec-file", org_nsec, "--root", root]
+    if extra:
+        args += extra
+    return runner.invoke(main, args)
+
+
+def _revoke_after_seal(tmp_path, runner, root, npub, org_nsec, extra=None):
+    """Revoke with an explicit instant strictly after the last seal.
+
+    Revoking *at* the seal instant would (correctly) invalidate that seal: the
+    tests below care about the revocation history, not about retroactive
+    seals, so they revoke just after the last one.
+    """
+    stamps = [event["ts"] for event in _manifest(tmp_path)["manifest"]["seals"]]
+    base = max(stamps)
+    moment = datetime.strptime(base, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    ) + timedelta(seconds=1)
+    revoke_at = moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return _revoke(
+        runner, root, npub, org_nsec, (extra or []) + ["--revoked-at", revoke_at]
+    )
+
+
+def _authorized_and_revoked(tmp_path, checkpoint=None):
+    """setup + an authorized second seal key + its revocation (#104)."""
+    root, org, pubkey, npub, org_nsec, runner = _setup(tmp_path, 1)
+    _mutate(root, org, runner)
+    _b_pubkey, b_npub, b_nsec = _keypair(tmp_path, "seal-b")
+    r = runner.invoke(
+        main,
+        ["seal", "--nsec-file", b_nsec, "--org-nsec-file", org_nsec, "--root", root],
+    )
+    assert r.exit_code == 0, r.output
+    extra = ["--checkpoint-out", checkpoint] if checkpoint else None
+    r = _revoke_after_seal(tmp_path, runner, root, b_npub, org_nsec, extra)
+    assert r.exit_code == 0, r.output
+    return root, org, pubkey, npub, org_nsec, runner, b_npub
+
+
+def test_revocation_is_appended_and_the_authorization_is_intact(tmp_path):
+    """Revocation appends to a hash-chained history; it never overwrites (#104).
+
+    The old shape rewrote the key's single lifecycle record, so replaying the
+    org-signed delegation that predated the revocation brought the key back.
+    The authorization is now immutable and the revocation is its own
+    append-only, org-signed record.
+    """
+    _root, _org, pubkey, _npub, _org_nsec, _runner, b_npub = _authorized_and_revoked(
+        tmp_path
+    )
+    m = _manifest(tmp_path)["manifest"]
+
+    chain = m["revocations"]
+    assert len(chain) == 1
+    assert chain[0]["n"] == 1
+    assert chain[0]["npub"] == b_npub
+    assert chain[0]["prevHash"] == manifest_mod.revocations_hash([])
+
+    authorization = next(rec for rec in m["sealKeys"] if rec["npub"] == b_npub)
+    assert "revoked_at" not in authorization
+    assert signing.verify_revocation(
+        pubkey,
+        chain[0]["delegation"],
+        signing.revocation_envelope(
+            identity_npub=m["sealIdentityNpub"],
+            root_mac=m["rootMac"],
+            seal_npub=b_npub,
+            revoked_at=chain[0]["revoked_at"],
+            generation=1,
+            prev_hash=chain[0]["prevHash"],
+            crypto_version=m.get("cryptoVersion"),
+        ),
+    )
+
+
+def test_revocation_is_permanent(tmp_path):
+    """A key that was already revoked cannot be revoked again (#104)."""
+    root, _org, _pubkey, _npub, org_nsec, runner, b_npub = _authorized_and_revoked(
+        tmp_path
+    )
+    r = _revoke(runner, root, b_npub, org_nsec)
+    assert r.exit_code != 0
+    assert "permanent" in r.output
+
+
+def test_a_recorded_revocation_demands_an_anchor(tmp_path):
+    """A revocation is not trusted on the namespace's word alone (#104)."""
+    root, _org, pubkey, _npub, _org_nsec, runner, _b_npub = _authorized_and_revoked(
+        tmp_path
+    )
+    r = _verify(runner, root, pubkey)
+    assert r.exit_code != 0
+    assert "--checkpoint" in r.output
+
+
+def test_checkpoint_anchors_a_revoked_history(tmp_path):
+    """A checkpoint published at revocation time re-verifies the namespace."""
+    checkpoint = str(tmp_path / "checkpoint.json")
+    root, _org, pubkey, _npub, _org_nsec, runner, _b_npub = _authorized_and_revoked(
+        tmp_path, checkpoint
+    )
+    r = _verify(runner, root, pubkey, ["--checkpoint", checkpoint])
+    assert r.exit_code == 0, r.output
+
+
+def test_rollback_that_erases_a_revocation_is_detected(tmp_path):
+    """Restoring a pre-revocation copy no longer un-revokes a key (#104).
+
+    This is the reproduction from the review: revoke a key, restore the copy
+    taken before the revocation, and the revoked key looks valid again. The
+    checkpoint published with the revocation is the non-replayable anchor that
+    catches it.
+    """
+    checkpoint = str(tmp_path / "checkpoint.json")
+    root, org, pubkey, _npub, org_nsec, runner = _setup(tmp_path, 1)
+    _mutate(root, org, runner)
+    _b_pubkey, b_npub, b_nsec = _keypair(tmp_path, "seal-b")
+    r = runner.invoke(
+        main,
+        ["seal", "--nsec-file", b_nsec, "--org-nsec-file", org_nsec, "--root", root],
+    )
+    assert r.exit_code == 0, r.output
+
+    path = tmp_path / "manifest.yaml"
+    before = path.read_text(encoding="utf-8")
+    r = _revoke_after_seal(
+        tmp_path, runner, root, b_npub, org_nsec, ["--checkpoint-out", checkpoint]
+    )
+    assert r.exit_code == 0, r.output
+    assert _verify(runner, root, pubkey, ["--checkpoint", checkpoint]).exit_code == 0
+
+    path.write_text(before, encoding="utf-8")
+    r = _verify(runner, root, pubkey, ["--checkpoint", checkpoint])
+    assert r.exit_code != 0
+    assert "rolled back" in r.output
+
+
+def test_checkpoint_head_anchor_detects_a_head_rollback(tmp_path):
+    """The checkpoint anchors the head too, so a stale copy fails (#104).
+
+    This is what replaces the human-supplied ``--expected-head-seq``: the
+    operator passes a *source*, the tool reads the current value.
+    """
+    checkpoint = str(tmp_path / "checkpoint.json")
+    root, org, pubkey, _npub, org_nsec, runner = _setup(tmp_path, 1)
+    path = tmp_path / "manifest.yaml"
+    stale = path.read_text(encoding="utf-8")
+    _mutate(root, org, runner)
+    r = runner.invoke(
+        main,
+        ["seal", "--nsec-file", org_nsec, "--root", root],
+    )
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(
+        main,
+        [
+            "checkpoint",
+            "--org-nsec-file",
+            org_nsec,
+            "--out",
+            checkpoint,
+            "--root",
+            root,
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    assert _verify(runner, root, pubkey, ["--checkpoint", checkpoint]).exit_code == 0
+
+    path.write_text(stale, encoding="utf-8")
+    r = _verify(runner, root, pubkey, ["--checkpoint", checkpoint])
+    assert r.exit_code != 0
+    assert "head rolled back" in r.output
+
+
+def test_forged_revocation_record_is_rejected(tmp_path):
+    """A revocation record the org did not sign is rejected (#104)."""
+    root, _org, pubkey, _npub, _org_nsec, runner, _b_npub = _authorized_and_revoked(
+        tmp_path
+    )
+    path = tmp_path / "manifest.yaml"
+    data = _manifest(tmp_path)
+    data["manifest"]["revocations"][0]["revoked_at"] = "1999-01-01T00:00:00Z"
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    r = _verify(runner, root, pubkey)
+    assert r.exit_code != 0
+    assert "org signature" in r.output
