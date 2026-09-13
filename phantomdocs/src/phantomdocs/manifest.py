@@ -4,8 +4,10 @@ A per-namespace YAML document mapping identity (urn + MAC) to location,
 metadata, classification and relations. Version 1 is single-tenant.
 
 Versioning: a URN may map to several nodes (one per version, each with its own
-MAC). The *current* version is the last node for that URN; earlier versions are
-linked via the `previous` field (git commit-parent style).
+MAC). The *current* version is an explicit head ref — ``currentVersions[urn]``
+(issue #99) — not an array position; earlier versions are linked via the
+`previous` field (git commit-parent style), and the head ref is validated
+against the MAC-chained lineage tip.
 
 Concurrency: every mutating command performs a read-modify-write under an
 inter-process lock (``manifest.lock``), and each write uses its own unique
@@ -83,6 +85,12 @@ def empty_manifest(
             "auditHead": None,
         },
         "refs": {},
+        # Explicit per-URN head refs (issue #99): "current" is a field, not an
+        # array position. ``currentVersions[urn]`` names the version MAC that
+        # is current for that URN; the path/slug/urn resolvers read this map
+        # instead of taking ``matches[-1]``. Manifests written before issue
+        # #99 have no map and fall back to the MAC-chained lineage tip.
+        "currentVersions": {},
         "nodes": [],
     }
 
@@ -381,6 +389,23 @@ def validate(data: dict[str, Any]) -> list[str]:
         elif not isinstance(mac, str) or not is_valid_hex64(mac):
             errors.append(f"refs[{name!r}]: target MAC must be 64-hex, got {mac!r}")
 
+    # --- current-version head refs (issue #99) ---
+    # Shape only: whether a ref still names a version of its URN is a semantic
+    # (verify-time) question — ``load`` must stay tolerant so ``pd verify`` can
+    # *report* a dangling ref and ``pd recover`` can re-align a broken manifest
+    # instead of both being unable to open it. ``structural_issues`` performs
+    # that check.
+    heads = data.get("currentVersions")
+    if heads is not None:
+        if not isinstance(heads, dict):
+            errors.append("manifest.currentVersions must be a mapping")
+        else:
+            for urn, mac in heads.items():
+                if not isinstance(mac, str) or not is_valid_hex64(mac):
+                    errors.append(
+                        f"currentVersions[{urn!r}]: must be a 64-hex version MAC"
+                    )
+
     return errors
 
 
@@ -393,32 +418,102 @@ def _matches(data: dict[str, Any], predicate) -> list[dict[str, Any]]:
     return [n for n in data.get("nodes", []) if predicate(n)]
 
 
+def current_versions(data: dict[str, Any]) -> dict[str, Any]:
+    """The explicit ``urn -> current version MAC`` map (issue #99).
+
+    This map is the *authority* for which version is current; the array order
+    is an implementation detail. Manifests written before issue #99 carry no
+    map (an empty dict is returned) and keep resolving through the
+    MAC-chained lineage tip.
+    """
+    heads = data.get("currentVersions")
+    return heads if isinstance(heads, dict) else {}
+
+
+def lineage_tip_mac(versions: list[dict[str, Any]]) -> str | None:
+    """The MAC of the version no other version names as its ``previous``.
+
+    Derived from the explicit ``previous`` links — the MAC-chained,
+    tamper-evident part of a version — never from array position. Returns
+    ``None`` when the versions do not form a single chain (fork or cycle);
+    :func:`structural_issues` reports that and the explicit head ref is
+    checked against this value.
+    """
+    if not versions:
+        return None
+    referenced = {v.get("previous") for v in versions}
+    tips = [v.get("mac") for v in versions if v.get("mac") not in referenced]
+    return tips[0] if len(tips) == 1 else None
+
+
 def node_by_urn(data: dict[str, Any], urn: str) -> dict[str, Any] | None:
-    """The current (latest) node for a URN."""
+    """The current node for a URN (explicit head ref, issue #99)."""
     matches = _matches(data, lambda n: n.get("urn") == urn)
-    return matches[-1] if matches else None
+    return _current_of(data, matches)
 
 
 def node_by_path(data: dict[str, Any], path: str) -> dict[str, Any] | None:
-    """The current (latest) node for a logical path."""
+    """The current node for a logical path (explicit head ref, issue #99)."""
     matches = _matches(data, lambda n: urn_path(n.get("urn", "")) == path)
-    return matches[-1] if matches else None
+    return _current_of(data, matches)
 
 
 def node_by_slug(data: dict[str, Any], slug: str) -> dict[str, Any] | None:
-    """The current (latest) node for a slug."""
+    """The current node for a slug (explicit head ref, issue #99)."""
     matches = _matches(data, lambda n: n.get("slug") == slug)
-    return matches[-1] if matches else None
+    return _current_of(data, matches)
+
+
+def _current_of(
+    data: dict[str, Any], matches: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """The current version among the versions a lookup matched (issue #99).
+
+    A lookup can span several URNs — duplicate basenames across folders are
+    valid, so a slug is not URN-unique — so the candidate URN is selected
+    *first*, by the established cross-URN rule (the URN owning the last
+    matching node in physical order), and only then is a version resolved
+    within it. Inside the selected URN, resolution is deliberately independent
+    of array position:
+
+    1. ``currentVersions[urn]`` — the explicit head ref. A ref naming no
+       version of this URN (dangling) is a structural error reported by
+       :func:`structural_issues`; resolution then falls through.
+    2. the MAC-chained lineage tip — the version no other version names as
+       its ``previous`` (legacy manifests, and the value the explicit ref is
+       checked against).
+    3. the last entry in physical order — only reached by an already-
+       structurally-broken manifest, so read paths stay total.
+    """
+    if not matches:
+        return None
+    urn = matches[-1].get("urn")
+    versions = [n for n in matches if n.get("urn") == urn]
+    pointer = current_versions(data).get(urn)
+    if pointer is not None:
+        for node in versions:
+            if node.get("mac") == pointer:
+                return node
+    tip = lineage_tip_mac(versions)
+    if tip is not None:
+        for node in versions:
+            if node.get("mac") == tip:
+                return node
+    return versions[-1]
 
 
 def node_by_mac(data: dict[str, Any], mac: str) -> dict[str, Any] | None:
-    """The node for a version MAC."""
+    """The node for a version MAC (exact MAC; never a current-version alias)."""
     matches = _matches(data, lambda n: n.get("mac") == mac)
     return matches[-1] if matches else None
 
 
 def versions_of(data: dict[str, Any], urn: str) -> list[dict[str, Any]]:
-    """All versions of a URN, oldest first."""
+    """All versions of a URN, oldest first.
+
+    Physical order is retained for display only; "current" is resolved by the
+    explicit ``currentVersions`` head ref, never by position (issue #99).
+    """
     return _matches(data, lambda n: n.get("urn") == urn)
 
 
@@ -445,6 +540,31 @@ def structural_issues(data: dict[str, Any]) -> list[str]:
     root_mac = data["manifest"]["rootMac"]
     nodes = data.get("nodes", [])
     mac_to_node = {n["mac"]: n for n in nodes}
+
+    # Current-version head refs (issue #99): "current" is an explicit field
+    # (``currentVersions[urn]``), never array position. Each ref must name a
+    # version of its URN and must agree with the MAC-chained lineage tip — the
+    # version no other version names as its ``previous``. A dangling ref is
+    # rejected here instead of being silently resolved by position, and a
+    # lineage without exactly one tip (fork/cycle) is reported because
+    # "current" would otherwise be ambiguous.
+    by_urn_current: dict[str, list[dict[str, Any]]] = {}
+    for node in nodes:
+        if node.get("kind") == "doc":
+            by_urn_current.setdefault(node["urn"], []).append(node)
+    for urn, versions in by_urn_current.items():
+        tip = lineage_tip_mac(versions)
+        if tip is None:
+            issues.append(f"{urn}: version lineage does not have exactly one tip")
+        pointer = current_versions(data).get(urn)
+        if pointer is None:
+            continue
+        if pointer not in {v.get("mac") for v in versions}:
+            issues.append(f"{urn}: currentVersions points at unknown version {pointer}")
+        elif tip is not None and pointer != tip:
+            issues.append(
+                f"{urn}: currentVersions {pointer} is not the lineage tip {tip}"
+            )
 
     # Tree connectivity: the parentMac chain must terminate at rootMac and
     # must not cycle.
@@ -636,8 +756,23 @@ class ManifestRepository:
 
     # -- mutations --
 
+    @property
+    def current_versions(self) -> dict[str, Any]:
+        """The explicit ``urn -> current version MAC`` head map (issue #99)."""
+        return self._data.setdefault("currentVersions", {})
+
     def add_node(self, node: dict[str, Any]) -> dict[str, Any]:
-        """Append a node (a new folder, or a new document version)."""
+        """Append a node (a new folder, or a new document version).
+
+        A document node becomes its URN's current version by pointing the
+        explicit head map at it (issue #99): ``currentVersions[urn]`` is the
+        authority for "current", so the append never rewrites an existing
+        node — earlier versions stay byte-for-byte as committed (the manifest
+        is append-only, which is what keeps the MAC chain and the audit log
+        auditable).
+        """
+        if node.get("kind") == "doc":
+            self.current_versions[node["urn"]] = node["mac"]
         self.nodes.append(node)
         return node
 
