@@ -48,6 +48,7 @@ from .manifest import (
     load,
     mutation_sequence_issues,
     node_by_mac,
+    node_by_urn,
     ref_target_mac,
     resolve_node,
     save,
@@ -482,9 +483,10 @@ def versions(ref, org_yaml, actor, root):
     if not history:
         click.echo("no versions")
         return
-    current = history[-1]["mac"]
+    current = node_by_urn(manifest, node["urn"])
+    current_mac = current["mac"] if current else history[-1]["mac"]
     for index, version in enumerate(history, 1):
-        marker = " (current)" if version["mac"] == current else ""
+        marker = " (current)" if version["mac"] == current_mac else ""
         size = version.get("size", 0)
         click.echo(f"v{index}  {display_id(version['mac'])}{marker}  {size} bytes")
 
