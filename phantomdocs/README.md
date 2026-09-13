@@ -127,9 +127,11 @@ pd recover --root ./docs
 ```
 
 `pd verify` detects that window, and `pd recover` repairs it; the next
-mutation also self-heals automatically. Anything else — a broken hash chain,
-the audit log *behind* the manifest, a head-hash mismatch — is tampering, not
-a crash, and `pd recover` refuses fail-closed. See
+mutation also self-heals automatically. A crash *during* the audit append is a
+separate, **fail-closed** window: it can leave a short or torn final line, and
+`pd recover` refuses it — as it refuses a broken hash chain, the log *behind*
+the manifest, or a head-hash mismatch — because a torn write and an edit are
+indistinguishable; that one needs an operator repair. See
 [`docs/CONSISTENCY.md`](docs/CONSISTENCY.md) for the artifact model, the exact
 failure windows, and what is atomic vs eventually consistent.
 
