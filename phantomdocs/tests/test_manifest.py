@@ -220,6 +220,70 @@ def test_current_version_is_not_array_position():
     assert manifest.node_by_slug(data, "r.md")["mac"] == expected
 
 
+def _two_urns_each_with_two_versions_sharing_a_slug():
+    """Two URNs (`reports/r.md`, `archive/r.md`) with two versions each.
+
+    Duplicate basenames across folders are valid, so a slug lookup spans both
+    URNs and every version carries the slug ``r.md``.
+    """
+    data = _valid_manifest()
+    root = data["manifest"]["rootMac"]
+    folder_a = data["nodes"][0]
+    doc_a1 = data["nodes"][1]
+    doc_a2 = dict(doc_a1)
+    doc_a2["mac"] = "c" * 64
+    doc_a2["contentHash"] = identity.content_hash(b"a2")
+    doc_a2["previous"] = doc_a1["mac"]
+
+    folder_b_mac = identity.node_mac(root, identity.component_for_folder("archive"))
+    folder_b = dict(folder_a)
+    folder_b.update(
+        {"urn": "urn:org:folder:archive", "mac": folder_b_mac, "slug": "archive"}
+    )
+    doc_b1 = dict(doc_a1)
+    doc_b1.update(
+        {
+            "urn": "urn:org:doc:archive/r.md",
+            "mac": identity.node_mac(
+                folder_b_mac, identity.component_for_doc("r.md", b"b1")
+            ),
+            "parentMac": folder_b_mac,
+            "contentHash": identity.content_hash(b"b1"),
+        }
+    )
+    doc_b2 = dict(doc_b1)
+    doc_b2["mac"] = "d" * 64
+    doc_b2["contentHash"] = identity.content_hash(b"b2")
+    doc_b2["previous"] = doc_b1["mac"]
+
+    data["nodes"] = [folder_a, doc_a1, doc_a2, folder_b, doc_b1, doc_b2]
+    data["currentVersions"] = {
+        doc_a1["urn"]: doc_a2["mac"],
+        doc_b1["urn"]: doc_b2["mac"],
+    }
+    return data
+
+
+def test_duplicate_slug_selects_the_urn_first_then_its_head_ref():
+    """Issue #99 review: a slug shared by two URNs must not change cross-URN
+    selection. The candidate URN is the one owning the last matching node (the
+    pre-#99 rule) and only then does that URN's explicit head ref pick the
+    version -- never the head ref of the first match's URN."""
+    data = _two_urns_each_with_two_versions_sharing_a_slug()
+    doc_a1, doc_a2, doc_b1, doc_b2 = (n for n in data["nodes"] if n["kind"] == "doc")
+    assert doc_a1["slug"] == doc_b1["slug"] == "r.md"
+    # Pre-#99 the last match in physical order won: B2. Resolving the head ref
+    # of matches[0]'s URN instead would answer A2.
+    assert manifest.node_by_slug(data, "r.md")["mac"] == doc_b2["mac"]
+    # Each URN still resolves to its own explicit head, not to its last node.
+    assert manifest.node_by_urn(data, doc_a1["urn"])["mac"] == doc_a2["mac"]
+    assert manifest.node_by_urn(data, doc_b1["urn"])["mac"] == doc_b2["mac"]
+    assert manifest.node_by_path(data, "archive/r.md")["mac"] == doc_b2["mac"]
+    # Reordering one URN's own versions leaves that URN's resolution untouched.
+    data["nodes"] = [doc_a2, doc_a1, doc_b1, doc_b2]
+    assert manifest.node_by_urn(data, doc_a1["urn"])["mac"] == doc_a2["mac"]
+
+
 def test_lineage_tip_is_derived_from_previous_links():
     """The tip is the version no other version names as its ``previous``."""
     data = _two_version_manifest()

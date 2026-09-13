@@ -467,9 +467,14 @@ def node_by_slug(data: dict[str, Any], slug: str) -> dict[str, Any] | None:
 def _current_of(
     data: dict[str, Any], matches: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
-    """The current version among a URN's versions (issue #99).
+    """The current version among the versions a lookup matched (issue #99).
 
-    Resolution is deliberately independent of array position:
+    A lookup can span several URNs — duplicate basenames across folders are
+    valid, so a slug is not URN-unique — so the candidate URN is selected
+    *first*, by the established cross-URN rule (the URN owning the last
+    matching node in physical order), and only then is a version resolved
+    within it. Inside the selected URN, resolution is deliberately independent
+    of array position:
 
     1. ``currentVersions[urn]`` — the explicit head ref. A ref naming no
        version of this URN (dangling) is a structural error reported by
@@ -482,17 +487,19 @@ def _current_of(
     """
     if not matches:
         return None
-    pointer = current_versions(data).get(matches[0].get("urn"))
+    urn = matches[-1].get("urn")
+    versions = [n for n in matches if n.get("urn") == urn]
+    pointer = current_versions(data).get(urn)
     if pointer is not None:
-        for node in matches:
+        for node in versions:
             if node.get("mac") == pointer:
                 return node
-    tip = lineage_tip_mac(matches)
+    tip = lineage_tip_mac(versions)
     if tip is not None:
-        for node in matches:
+        for node in versions:
             if node.get("mac") == tip:
                 return node
-    return matches[-1]
+    return versions[-1]
 
 
 def node_by_mac(data: dict[str, Any], mac: str) -> dict[str, Any] | None:
