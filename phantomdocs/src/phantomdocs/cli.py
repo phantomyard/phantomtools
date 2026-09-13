@@ -49,6 +49,7 @@ from .manifest import (
     empty_manifest,
     latest_seal_event,
     load,
+    manifest_lock,
     mutation_sequence_issues,
     node_by_mac,
     node_by_urn,
@@ -1205,7 +1206,18 @@ def seal(nsec_file, org_nsec_file, valid_until, root):
     ``--org-nsec-file`` so the identity key can authorize that seal key
     (``manifest.sealKeys``). A key already authorized keeps sealing on its own
     until it is revoked.
+
+    The whole cycle (load/derive/sign/append/save) runs under
+    ``manifest_lock``: ``save`` writes the manifest it read, so a concurrent
+    ``add`` committing between the load and the save would otherwise be
+    erased by the seal.
     """
+    with manifest_lock(_manifest_path(root)):
+        _seal_locked(nsec_file, org_nsec_file, valid_until, root)
+
+
+def _seal_locked(nsec_file, org_nsec_file, valid_until, root):
+    """The seal cycle. Callers must hold ``manifest_lock`` for the root."""
     path = _manifest_path(root)
     data = _load_or_die(root)
     nsec = _read_secret_file(nsec_file, "--nsec-file")
@@ -1333,49 +1345,53 @@ def revoke_seal_key(npub, org_nsec_file, revoked_at, checkpoint_out, root):
     invalidate the evidence of earlier heads.
     """
     path = _manifest_path(root)
-    data = _load_or_die(root)
-    m = data["manifest"]
-    identity_npub = seal_identity_npub(m)
-    if identity_npub is None:
-        raise click.ClickException("namespace has no seal identity recorded")
-    if npub == identity_npub:
-        raise click.ClickException(
-            "the org identity key anchors the namespace and cannot be revoked "
-            "(rotating it is a namespace re-issue, issue #104)"
-        )
-    rec = seal_key_record(m, npub)
-    if rec is None:
-        raise click.ClickException(f"no seal-key history entry for {npub}")
     org_nsec = _read_secret_file(org_nsec_file, "--org-nsec-file")
-    if npub_encode(pubkey_from_nsec(org_nsec)) != identity_npub:
-        raise click.ClickException(
-            "--org-nsec-file is not the namespace's org identity key "
-            f"(expected {identity_npub})"
+    with manifest_lock(path):
+        data = _load_or_die(root)
+        m = data["manifest"]
+        identity_npub = seal_identity_npub(m)
+        if identity_npub is None:
+            raise click.ClickException("namespace has no seal identity recorded")
+        if npub == identity_npub:
+            raise click.ClickException(
+                "the org identity key anchors the namespace and cannot be revoked "
+                "(rotating it is a namespace re-issue, issue #104)"
+            )
+        rec = seal_key_record(m, npub)
+        if rec is None:
+            raise click.ClickException(f"no seal-key history entry for {npub}")
+        if npub_encode(pubkey_from_nsec(org_nsec)) != identity_npub:
+            raise click.ClickException(
+                "--org-nsec-file is not the namespace's org identity key "
+                f"(expected {identity_npub})"
+            )
+        already = revoked_at_of(m, npub)
+        if already is not None:
+            raise click.ClickException(
+                f"{npub} was already revoked at {already} (revocation is permanent)"
+            )
+        ts = revoked_at or _now_iso()
+        generation = revocation_generation(m) + 1
+        delegation = sign_revocation(
+            org_nsec,
+            revocation_envelope(
+                identity_npub=identity_npub,
+                root_mac=m["rootMac"],
+                seal_npub=npub,
+                revoked_at=ts,
+                generation=generation,
+                prev_hash=revocations_hash(revocation_records(m)),
+                crypto_version=m.get("cryptoVersion"),
+            ),
         )
-    already = revoked_at_of(m, npub)
-    if already is not None:
-        raise click.ClickException(
-            f"{npub} was already revoked at {already} (revocation is permanent)"
-        )
-    ts = revoked_at or _now_iso()
-    generation = revocation_generation(m) + 1
-    delegation = sign_revocation(
-        org_nsec,
-        revocation_envelope(
-            identity_npub=identity_npub,
-            root_mac=m["rootMac"],
-            seal_npub=npub,
-            revoked_at=ts,
-            generation=generation,
-            prev_hash=revocations_hash(revocation_records(m)),
-            crypto_version=m.get("cryptoVersion"),
-        ),
-    )
-    append_revocation(m, npub=npub, revoked_at=ts, delegation=delegation)
-    save(path, data)
+        append_revocation(m, npub=npub, revoked_at=ts, delegation=delegation)
+        save(path, data)
+        # Anchor the committed state (the reviewer's point: the checkpoint must
+        # describe what was just written, not what the lock-free read saw).
+        text = _render_checkpoint(m, org_nsec) if checkpoint_out else None
     click.echo(f"revoked seal key {npub} at {ts} (revocation #{generation})")
-    if checkpoint_out:
-        _emit_checkpoint(m, org_nsec, out=checkpoint_out, publish_url=None)
+    if text is not None:
+        _publish_checkpoint(text, out=checkpoint_out, publish_url=None)
         click.echo(f"checkpoint written to {checkpoint_out}")
     else:
         click.echo(
@@ -1411,17 +1427,24 @@ def _checkpoint_envelope(body: dict[str, object]) -> bytes:
     )
 
 
-def _emit_checkpoint(
-    m: dict[str, object], org_nsec: str, *, out: str | None, publish_url: str | None
-) -> str:
-    """Sign the namespace's current revocation state and emit the checkpoint.
+def _render_checkpoint(m: dict[str, object], org_nsec: str) -> str:
+    """Sign the manifest's *current* revocation state as a checkpoint.
 
-    Returns the JSON document that was written, published or printed.
+    Pure: reads ``m`` and the key and returns the JSON document. Callers hold
+    ``manifest_lock`` so the checkpoint describes the committed state rather
+    than whatever an unlocked read happened to see.
     """
     body = _checkpoint_document(m, ts=_now_iso())
     sig = sign_checkpoint(org_nsec, _checkpoint_envelope(body))
-    text = json.dumps({"checkpoint": body, "sig": sig}, indent=2, sort_keys=True)
-    text += "\n"
+    return json.dumps({"checkpoint": body, "sig": sig}, indent=2, sort_keys=True) + "\n"
+
+
+def _publish_checkpoint(text: str, *, out: str | None, publish_url: str | None) -> None:
+    """Write or publish an already-signed checkpoint.
+
+    I/O only, so callers do not have to hold ``manifest_lock`` across a file
+    write or a network round trip.
+    """
     if out:
         with open(out, "w", encoding="utf-8") as handle:
             handle.write(text)
@@ -1438,7 +1461,6 @@ def _emit_checkpoint(
         )
         with urllib.request.urlopen(request, timeout=30) as response:  # nosec B310
             response.read()
-    return text
 
 
 @main.command("checkpoint")
@@ -1462,18 +1484,21 @@ def checkpoint(org_nsec_file, out, publish_url, root):
     append-only mirror, a relay, a cron job) so that ``pd verify
     --checkpoint`` can catch a rollback that erases a revocation.
     """
-    data = _load_or_die(root)
-    m = data["manifest"]
-    identity_npub = seal_identity_npub(m)
-    if identity_npub is None:
-        raise click.ClickException("namespace has no seal identity recorded")
+    path = _manifest_path(root)
     org_nsec = _read_secret_file(org_nsec_file, "--org-nsec-file")
-    if npub_encode(pubkey_from_nsec(org_nsec)) != identity_npub:
-        raise click.ClickException(
-            "--org-nsec-file is not the namespace's org identity key "
-            f"(expected {identity_npub})"
-        )
-    text = _emit_checkpoint(m, org_nsec, out=out, publish_url=publish_url)
+    with manifest_lock(path):
+        data = _load_or_die(root)
+        m = data["manifest"]
+        identity_npub = seal_identity_npub(m)
+        if identity_npub is None:
+            raise click.ClickException("namespace has no seal identity recorded")
+        if npub_encode(pubkey_from_nsec(org_nsec)) != identity_npub:
+            raise click.ClickException(
+                "--org-nsec-file is not the namespace's org identity key "
+                f"(expected {identity_npub})"
+            )
+        text = _render_checkpoint(m, org_nsec)
+    _publish_checkpoint(text, out=out, publish_url=publish_url)
     if out:
         click.echo(f"checkpoint written to {out}")
     if publish_url:

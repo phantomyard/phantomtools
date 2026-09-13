@@ -6,6 +6,8 @@ the org identity and verifies the seal. A forged root, a deleted version, or a
 rolled-back/truncated audit head all change the sealed envelope and must fail.
 """
 
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -13,6 +15,7 @@ import coincurve
 import yaml
 from click.testing import CliRunner
 
+from phantomdocs import cli as cli_mod
 from phantomdocs import manifest as manifest_mod
 from phantomdocs import signing
 from phantomdocs.cli import main
@@ -756,3 +759,129 @@ def test_forged_revocation_record_is_rejected(tmp_path):
     r = _verify(runner, root, pubkey)
     assert r.exit_code != 0
     assert "org signature" in r.output
+
+
+def test_concurrent_revocations_do_not_lose_an_update(tmp_path, monkeypatch):
+    """Two racing revocations must both land (#104 review: lost update).
+
+    ``revoke-seal-key`` is a read/derive/sign/append/save cycle: without the
+    manifest lock both commands load generation N, sign different records as
+    N+1 and atomically overwrite each other, so one *permanent* revocation
+    disappears while both commands report success. The cycle must hold the
+    same lock the document mutation paths use.
+    """
+    root, _org, _pubkey, _npub, org_nsec, runner = _setup(tmp_path, 1)
+    keys = []
+    for name in ("seal-b", "seal-c"):
+        _pub, npub, nsec = _keypair(tmp_path, name)
+        r = runner.invoke(
+            main,
+            [
+                "seal",
+                "--nsec-file",
+                nsec,
+                "--org-nsec-file",
+                org_nsec,
+                "--root",
+                root,
+            ],
+        )
+        assert r.exit_code == 0, r.output
+        keys.append(npub)
+
+    active = 0
+    peak = 0
+    guard = threading.Lock()
+    real_generation = manifest_mod.revocation_generation
+
+    def slow_generation(data):
+        nonlocal active, peak
+        with guard:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.3)
+        try:
+            return real_generation(data)
+        finally:
+            with guard:
+                active -= 1
+
+    monkeypatch.setattr(cli_mod, "revocation_generation", slow_generation)
+
+    results = []
+    start = threading.Barrier(len(keys))
+
+    def revoke(npub):
+        start.wait()
+        results.append(
+            CliRunner().invoke(
+                main,
+                [
+                    "revoke-seal-key",
+                    npub,
+                    "--org-nsec-file",
+                    org_nsec,
+                    "--root",
+                    root,
+                ],
+            )
+        )
+
+    threads = [threading.Thread(target=revoke, args=(npub,)) for npub in keys]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert [r.exit_code for r in results] == [0, 0], [r.output for r in results]
+    assert peak == 1, "the revocation cycle ran concurrently"
+    chain = manifest_mod.revocation_records(_manifest(tmp_path)["manifest"])
+    assert [rec["n"] for rec in chain] == [1, 2], chain
+    assert {rec["npub"] for rec in chain} == set(keys), chain
+
+
+def test_seal_does_not_erase_a_concurrent_add(tmp_path, monkeypatch):
+    """A seal must not overwrite a document committed while it was running.
+
+    ``seal`` saves the whole manifest it read, so an ``add`` committing
+    between the seal's load and its save is erased silently — and the result
+    still looks consistent (sealedHeadSeq matches the stale head). The seal
+    cycle must hold the lock.
+    """
+    root, org, _pubkey, _npub, org_nsec, _runner = _setup(tmp_path, 1)
+    started = threading.Event()
+    real_envelope = cli_mod.seal_envelope
+
+    def slow_envelope(*args, **kwargs):
+        started.set()
+        time.sleep(0.4)
+        return real_envelope(*args, **kwargs)
+
+    monkeypatch.setattr(cli_mod, "seal_envelope", slow_envelope)
+
+    results = {}
+
+    def do_seal():
+        results["seal"] = CliRunner().invoke(
+            main, ["seal", "--nsec-file", org_nsec, "--root", root]
+        )
+
+    def do_add():
+        started.wait(timeout=10)
+        try:
+            _mutate(root, org, CliRunner())
+            results["add"] = "ok"
+        except AssertionError as error:
+            results["add"] = f"failed: {error}"
+
+    threads = [threading.Thread(target=do_seal), threading.Thread(target=do_add)]
+    threads[0].start()
+    threads[1].start()
+    for thread in threads:
+        thread.join()
+
+    assert results["seal"].exit_code == 0, results["seal"].output
+    assert results["add"] == "ok", results["add"]
+    assert manifest_mod.node_by_slug(_manifest(tmp_path), "extra.txt") is not None, (
+        "the concurrent add was erased by the seal"
+    )

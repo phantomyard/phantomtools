@@ -116,6 +116,16 @@ pd revoke-seal-key <npub> --org-nsec-file org-identity.nsec \
   --checkpoint-out ./anchor/revocations.json --root ./docs
 ```
 
+**Serialization (SPEC §6.3):** revoking, sealing and rendering a checkpoint all
+run under the namespace's inter-process `manifest.lock`, like the document
+mutation paths. The revocation cycle is a read/derive/sign/append/save
+sequence, so without the lock two concurrent revocations could both read
+generation *N*, sign different records as *N+1* and overwrite each other —
+both commands reporting success while a permanent revocation disappears. The
+lock also keeps `seal` from saving a manifest it read before a concurrent
+`add` committed (which would erase that document), and makes a checkpoint
+describe the committed state rather than an unlocked read.
+
 ### Revocation anchoring (checkpoint)
 
 The chain above is monotonic and tamper-evident *inside* the namespace, but a
