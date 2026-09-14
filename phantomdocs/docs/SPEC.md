@@ -241,12 +241,32 @@ current head exists); day-to-day verification may omit it, accepting that a
 whole-state rollback to an older internally-consistent sealed copy is then
 undetectable.
 
+**Revocation anchor (issue #104):** seal-key revocations are append-only and
+hash-chained (`manifest.revocations`: 1-based generation, `prevHash`, and an
+org-identity signature per record), so a revoked key cannot be brought back by
+replaying the authorization that predated the revocation. Because a
+whole-state rollback could still erase the chain, `pd verify --checkpoint
+<path|url>` anchors both the revocation history and the head against an
+org-signed checkpoint published outside the namespace, and a namespace that
+records revocations is refused without one. The checkpoint is the
+non-replayable form of the rollback defense: the operator supplies a *source*,
+never a value, so no out-of-band bookkeeping is replayed by hand.
+
 ### 6.3 Single authoritative writer host (deployment boundary)
 
 PhantomDocs v1 supports **exactly one authoritative writer host per
 namespace** (Model A). All mutating commands (`mkdir`, `add`, `tag`,
-`rollback`, `seal`) must run on that host, serialized by the inter-process
-`manifest.lock`.
+`rollback`, `seal`, `revoke-seal-key`) must run on that host, serialized by
+the inter-process `manifest.lock`.
+
+The lock covers the whole read-modify-write cycle of every command that saves
+the manifest, including the seal-key lifecycle: `seal` (which saves the
+manifest it read, so a concurrent `add` would otherwise be erased) and
+`revoke-seal-key` (whose generation/sign/append sequence would otherwise
+allow two concurrent revocations to both derive generation *N+1* and
+overwrite each other, silently losing a permanent revocation). Checkpoint
+rendering reads the committed state under the same lock; writing or
+publishing the checkpoint happens outside it.
 
 The lock is **host-local**: it uses `fcntl.flock` (POSIX) or `msvcrt` range
 locking (Windows), which serializes concurrent *processes on the same host*
