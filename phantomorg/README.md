@@ -13,6 +13,11 @@ See the full technical specification in [`docs/PhantomOrg-spec.md`](docs/Phantom
 for the design, external references (Google A2A, FIPA-ACL, CrewAI,
 RBAC/ABAC/PBAC) and the development backlog.
 
+The proposed containment program starts with the machine-validatable
+[`docs/containment/`](docs/containment/) A0 evidence contracts. They keep a
+read-only host/store inventory separate from the owner's later per-host boundary
+authorization; neither artifact changes a running deployment.
+
 ## Install
 
 Installation is manual on all supported OSes (Linux, macOS, Windows). The
