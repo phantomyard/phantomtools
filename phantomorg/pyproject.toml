@@ -18,7 +18,7 @@ pf = "phantomorg.cli:main"
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "jsonschema>=4.23",
+    "jsonschema[format]>=4.23",
     "types-PyYAML",
     "types-click",
     "types-Jinja2",

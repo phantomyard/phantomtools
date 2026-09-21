@@ -32,7 +32,7 @@ def test_boundary_declaration_example_conforms_to_contract():
     )
 
 
-def test_boundary_declaration_rejects_hostname_only_authorization():
+def test_boundary_declaration_rejects_empty_boundaries():
     schema = _load(CONTRACTS / "boundary-declaration-v1.schema.json")
     declaration = _load(EXAMPLES / "boundary-declaration.synthetic.json")
     declaration["boundaries"] = []
@@ -47,4 +47,24 @@ def test_inventory_rejects_unlabelled_evidence():
     del inventory["hosts"][0]["evidence"]["status"]
 
     validator = jsonschema.Draft202012Validator(schema)
+    assert list(validator.iter_errors(inventory))
+
+
+def test_boundary_declaration_requires_shared_record_isolation():
+    schema = _load(CONTRACTS / "boundary-declaration-v1.schema.json")
+    declaration = _load(EXAMPLES / "boundary-declaration.synthetic.json")
+    del declaration["boundaries"][0]["shared_record_isolation"]
+
+    validator = jsonschema.Draft202012Validator(schema)
+    assert list(validator.iter_errors(declaration))
+
+
+def test_inventory_rejects_malformed_timestamp():
+    schema = _load(CONTRACTS / "inventory-v1.schema.json")
+    inventory = _load(EXAMPLES / "inventory.synthetic.json")
+    inventory["collected_at"] = "not-a-timestamp"
+
+    validator = jsonschema.Draft202012Validator(
+        schema, format_checker=jsonschema.FormatChecker()
+    )
     assert list(validator.iter_errors(inventory))

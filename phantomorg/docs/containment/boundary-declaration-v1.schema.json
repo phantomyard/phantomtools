@@ -33,7 +33,7 @@
     "boundary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["boundary_id", "workspace_ids", "workloads", "store_ids"],
+      "required": ["boundary_id", "workspace_ids", "workloads", "store_ids", "shared_record_isolation"],
       "properties": {
         "boundary_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
         "workspace_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},

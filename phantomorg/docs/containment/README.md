@@ -1,7 +1,9 @@
 # Containment evidence contracts
 
 These contracts start roadmap phase A0. They describe evidence; they do not
-change a host, grant access, or declare a boundary.
+change a host, grant access, or declare a boundary. The containment program
+roadmap itself is not yet part of this repository; this directory is its A0
+scope.
 
 The workflow deliberately produces two separate artifacts:
 
@@ -45,3 +47,25 @@ python -m pytest tests/test_containment_contracts.py -q
 ```
 
 The examples are contract fixtures, not a suggested production topology.
+
+## Limits of A0
+
+The contracts validate the shape of the evidence, not its meaning. A document
+that validates is still only a document, and a boundary declaration is a claim
+until it is checked. In particular, A0 does not establish that:
+
+- the `inventory_digest` refers to a real, previously collected inventory, or
+  that the declared `store_ids` and `workload_id` values appear in it;
+- the declaration's `exclusions` cover everything the inventory marked
+  `unreachable` or unknown — an empty `exclusions` list is valid, so acceptance
+  must compare the two documents;
+- a store marked `requires_split` is kept out of a boundary — the G1 gate that
+  rejects a mixed-boundary store lives outside these schemas;
+- a `credential_references` entry is a reference rather than a value — any
+  string validates, so keeping secret material out remains a review duty;
+- `authorized_by` is authentic — the field is free text, and a declaration is
+  not a capability until the owner's authorization is signed or anchored (for
+  example, to the signed, append-only machinery used elsewhere in the
+  ecosystem).
+
+Treat a validating declaration as something to verify, never as access granted.
