@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://phantomyard.org/schemas/containment/inventory-v1.schema.json",
+  "title": "PhantomOrg A0 content-host inventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "inventory_id",
+    "collected_at",
+    "collector",
+    "hosts",
+    "unknowns",
+    "exclusions"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "inventory_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+    "collected_at": {"type": "string", "format": "date-time"},
+    "collector": {"type": "string", "minLength": 1},
+    "hosts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/host"}
+    },
+    "unknowns": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "exclusions": {"type": "array", "items": {"$ref": "#/$defs/exclusion"}}
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "source", "collected_at"],
+      "properties": {
+        "status": {"enum": ["observed", "reported", "unreachable"]},
+        "source": {"type": "string", "minLength": 1},
+        "collected_at": {"type": "string", "format": "date-time"},
+        "artifact_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "notes": {"type": "string"}
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workload_id", "runtime", "os_identity", "candidate_boundary", "evidence"],
+      "properties": {
+        "workload_id": {"type": "string", "minLength": 1},
+        "runtime": {"type": "string", "minLength": 1},
+        "os_identity": {"type": "string", "minLength": 1},
+        "candidate_boundary": {"type": ["string", "null"]},
+        "service_units": {"type": "array", "items": {"type": "string"}},
+        "evidence": {"$ref": "#/$defs/evidence"}
+      }
+    },
+    "store": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "store_id",
+        "kind",
+        "location",
+        "disposition",
+        "candidate_boundary",
+        "allowed_workloads",
+        "evidence"
+      ],
+      "properties": {
+        "store_id": {"type": "string", "minLength": 1},
+        "kind": {
+          "enum": [
+            "org_model", "human_register", "persona_files", "memory_database",
+            "memory_index", "knowledge_base", "vault", "connector_state",
+            "documents", "mailbox", "task_state", "logs", "cache", "backup",
+            "other"
+          ]
+        },
+        "location": {"type": "string", "minLength": 1},
+        "disposition": {"enum": ["authoritative", "replica", "retained_copy", "unknown"]},
+        "candidate_boundary": {"type": ["string", "null"]},
+        "allowed_workloads": {"type": "array", "items": {"type": "string"}},
+        "requires_split": {"type": "boolean", "default": false},
+        "credential_references": {"type": "array", "items": {"type": "string"}},
+        "evidence": {"$ref": "#/$defs/evidence"}
+      }
+    },
+    "surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["surface_id", "interface", "privileged_effect", "authentication", "evidence"],
+      "properties": {
+        "surface_id": {"type": "string", "minLength": 1},
+        "interface": {"type": "string", "minLength": 1},
+        "privileged_effect": {"enum": ["yes", "no", "unknown"]},
+        "authentication": {"type": "string", "minLength": 1},
+        "credential_references": {"type": "array", "items": {"type": "string"}},
+        "evidence": {"$ref": "#/$defs/evidence"}
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host_id", "evidence", "workload_identities", "stores", "maintenance_surfaces"],
+      "properties": {
+        "host_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+        "evidence": {"$ref": "#/$defs/evidence"},
+        "workload_identities": {"type": "array", "items": {"$ref": "#/$defs/identity"}},
+        "stores": {"type": "array", "items": {"$ref": "#/$defs/store"}},
+        "maintenance_surfaces": {"type": "array", "items": {"$ref": "#/$defs/surface"}},
+        "deployed_revisions": {
+          "type": "object",
+          "additionalProperties": {"type": "string", "minLength": 1}
+        },
+        "unknowns": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "exclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "reason"],
+      "properties": {
+        "scope": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "follow_up_owner": {"type": "string"}
+      }
+    }
+  }
+}
