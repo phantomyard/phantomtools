@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://phantomyard.org/schemas/containment/boundary-declaration-v1.schema.json",
+  "title": "PhantomOrg owner-authorized host boundary declaration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "declaration_id",
+    "host_id",
+    "inventory_digest",
+    "authorized_at",
+    "authorized_by",
+    "boundaries",
+    "exclusions"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "declaration_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+    "host_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+    "inventory_digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "authorized_at": {"type": "string", "format": "date-time"},
+    "authorized_by": {"type": "string", "minLength": 1},
+    "boundaries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/boundary"}
+    },
+    "exclusions": {"type": "array", "items": {"$ref": "#/$defs/exclusion"}},
+    "notes": {"type": "string"}
+  },
+  "$defs": {
+    "boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["boundary_id", "workspace_ids", "workloads", "store_ids"],
+      "properties": {
+        "boundary_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+        "workspace_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "workloads": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["workload_id", "os_identity"],
+            "properties": {
+              "workload_id": {"type": "string", "minLength": 1},
+              "os_identity": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "store_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "shared_record_isolation": {"const": "not_provided_at_g1"}
+      }
+    },
+    "exclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "reason"],
+      "properties": {
+        "scope": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "follow_up_owner": {"type": "string"}
+      }
+    }
+  }
+}

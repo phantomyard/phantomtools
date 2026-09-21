@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **A0 containment evidence contracts.** Added JSON Schema contracts and
+  synthetic fixtures for read-only content-host inventory and owner-authorized
+  per-host boundary declarations. Inventory facts carry observed/reported/
+  unreachable provenance; declarations must enumerate boundaries, workload OS
+  identities and stores, and explicitly retain G1's shared-record limitation.
+  These contracts describe evidence only and do not mutate or authorize a host.
+
 - **Norms filed as drawer rows, not a markdown drawer (#34).** On
   phantombot ≥ 1.1.282 the five memory drawers are rows in `memory.sqlite`
   (`drawer_entries`) ranked by `weight · 2^(-age/halfLife)` (norms: 365d),
