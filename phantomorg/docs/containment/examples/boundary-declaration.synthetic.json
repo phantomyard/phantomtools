@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "declaration_id": "declaration-2026-09-21-lab-a",
+  "host_id": "lab-a",
+  "inventory_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "authorized_at": "2026-09-21T12:00:00Z",
+  "authorized_by": "synthetic-owner",
+  "boundaries": [
+    {
+      "boundary_id": "project-a",
+      "workspace_ids": ["workspace-project-a"],
+      "workloads": [
+        {
+          "workload_id": "project-lead",
+          "os_identity": "svc-project-lead"
+        }
+      ],
+      "store_ids": ["project-a-persona-files"],
+      "shared_record_isolation": "not_provided_at_g1"
+    }
+  ],
+  "exclusions": [
+    {
+      "scope": "backup-host-b",
+      "reason": "unreachable; excluded from this host acceptance",
+      "follow_up_owner": "synthetic-owner"
+    }
+  ],
+  "notes": "Synthetic fixture only; this is not an authorization."
+}

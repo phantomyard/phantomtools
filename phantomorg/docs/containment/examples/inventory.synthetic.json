@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "inventory_id": "inventory-2026-09-21-lab-a",
+  "collected_at": "2026-09-21T10:00:00Z",
+  "collector": "synthetic-operator",
+  "hosts": [
+    {
+      "host_id": "lab-a",
+      "evidence": {
+        "status": "observed",
+        "source": "read-only local inspection",
+        "collected_at": "2026-09-21T10:00:00Z"
+      },
+      "workload_identities": [
+        {
+          "workload_id": "project-lead",
+          "runtime": "phantombot",
+          "os_identity": "svc-project-lead",
+          "candidate_boundary": "project-a",
+          "service_units": ["phantombot-project-lead.service"],
+          "evidence": {
+            "status": "observed",
+            "source": "service manager and process ownership",
+            "collected_at": "2026-09-21T10:00:00Z"
+          }
+        }
+      ],
+      "stores": [
+        {
+          "store_id": "project-a-persona-files",
+          "kind": "persona_files",
+          "location": "/srv/example/project-a/personas/project-lead",
+          "disposition": "authoritative",
+          "candidate_boundary": "project-a",
+          "allowed_workloads": ["project-lead"],
+          "requires_split": false,
+          "credential_references": ["operator evidence: persona vault present; value not read"],
+          "evidence": {
+            "status": "observed",
+            "source": "filesystem metadata; content values not copied",
+            "collected_at": "2026-09-21T10:00:00Z"
+          }
+        }
+      ],
+      "maintenance_surfaces": [
+        {
+          "surface_id": "maintenance-gateway",
+          "interface": "unix socket /run/example-maintenance.sock",
+          "privileged_effect": "yes",
+          "authentication": "operator-owned credential and socket ACL",
+          "credential_references": ["operator evidence record maint-credential-a"],
+          "evidence": {
+            "status": "observed",
+            "source": "socket metadata and service configuration",
+            "collected_at": "2026-09-21T10:00:00Z"
+          }
+        }
+      ],
+      "deployed_revisions": {
+        "phantombot": "synthetic-revision-a",
+        "phantomorg": "synthetic-revision-b"
+      },
+      "unknowns": ["Whether a retained backup exists on an inaccessible host"]
+    }
+  ],
+  "unknowns": ["Remote backup topology is not yet established"],
+  "exclusions": [
+    {
+      "scope": "backup-host-b",
+      "reason": "unreachable during this inventory",
+      "follow_up_owner": "synthetic-owner"
+    }
+  ]
+}
