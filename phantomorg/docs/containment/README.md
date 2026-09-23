@@ -48,6 +48,44 @@ python -m pytest tests/test_containment_contracts.py -q
 
 The examples are contract fixtures, not a suggested production topology.
 
+## Collecting and checking evidence
+
+Two commands in the `phantomorg` CLI carry A0 from a schema to a checked
+pair of documents. Both are read-only and make no network calls.
+
+Collect an inventory from a plan. The plan is a JSON file naming the host,
+the candidate workload identities, stores and maintenance surfaces; each
+entry names a probe (`path`, `unix_socket`, `os_identity` or `declared`).
+The collector only stats local paths, resolves local accounts and reads
+local unit files — it never copies file contents or opens a connection —
+and it writes every confirmed miss into `unknowns`:
+
+```bash
+po containment-collect --plan plan.json --out inventory.json
+```
+
+It prints the inventory's digest (`sha256:` over its canonical JSON). Record
+that digest in the declaration's `inventory_digest`.
+
+Validate a document against its schema, and cross-check a boundary
+declaration against the inventory it cites:
+
+```bash
+po containment-validate inventory.json
+po containment-validate boundary-declaration.json --inventory inventory.json
+```
+
+The first form checks the shape only. The second also requires that every
+declared `store_id` and `workload_id` exists on the referenced host, that the
+declaration's `inventory_digest` matches the inventory, and that anything the
+inventory marked `unreachable` is covered by a declaration exclusion (an
+exclusion covers an entry when its `scope` equals the entry id or the host
+id); a declaration with no exclusions is rejected when the inventory records
+unknowns. Exit status is non-zero on any failure.
+
+Keep both documents outside this repository: a real inventory names real
+hosts.
+
 ## Limits of A0
 
 The contracts validate the shape of the evidence, not its meaning. A document
