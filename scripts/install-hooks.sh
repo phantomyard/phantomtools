@@ -5,4 +5,4 @@ set -e
 cd "$(dirname "$0")/.."
 git config core.hooksPath .githooks
 echo "core.hooksPath = $(git config core.hooksPath)"
-echo "Hooks instalados. Para saltar el pre-push: git push --no-verify"
+echo "Hooks installed. To skip the pre-push hook: git push --no-verify"

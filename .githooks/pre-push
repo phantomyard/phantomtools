@@ -13,14 +13,16 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     if git rev-parse --verify -q origin/main >/dev/null 2>&1; then
       range="origin/main..${local_sha}"
     else
+      # Heuristic fallback (no origin/main ref to anchor on): check the last
+      # 10 commits. Only reached on a repo/branch without origin/main.
       range="HEAD~10..HEAD"
     fi
   else
     range="${remote_sha}..${local_sha}"
   fi
-  echo "pre-push: comprobando $range (${local_ref##*/})"
+  echo "pre-push: checking $range (${local_ref##*/})"
   if ! "$REPO_ROOT/scripts/prepush-check.sh" "$range"; then
-    echo "pre-push: checks fallaron — push abortado."
+    echo "pre-push: checks failed — push aborted."
     exit 1
   fi
 done

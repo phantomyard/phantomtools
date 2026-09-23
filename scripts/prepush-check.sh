@@ -41,7 +41,7 @@ fi
 fail=0
 note_ok()   { echo "  ✓ $1"; }
 note_fail() { echo "  ✗ $1"; fail=1; }
-warn_opt()  { echo "  ⚠ $1 no instalado (CI lo correrá): $2 -m pip install $1"; }
+warn_opt()  { echo "  ⚠ $1 not installed (CI will run it): $2 -m pip install $1"; }
 
 # Pick the interpreter for a tool dir: its .venv if present, else system python3.
 # Returned absolute: callers resolve it while standing in the tool dir, but the
@@ -129,7 +129,7 @@ if [ "$CHECK_PHANTOMDOCS" = "1" ]; then
   if [ -n "$PD" ]; then
     if smoke_pd "$PD"; then note_ok "smoke (init+add+verify)"; else note_fail "smoke (init+add+verify)"; fi
   else
-    echo "  ⚠ pd no instalado (CI lo correrá): pip install -e ."
+    echo "  ⚠ pd not installed (CI will run it): pip install -e ."
   fi
 fi
 
@@ -158,7 +158,7 @@ if [ "$CHECK_PHANTOMORG" = "1" ]; then
   if [ -n "$PO" ]; then
     if smoke_po "$PO"; then note_ok "smoke (new-org+build)"; else note_fail "smoke (new-org+build)"; fi
   else
-    echo "  ⚠ po no instalado (CI lo correrá): pip install -e ."
+    echo "  ⚠ po not installed (CI will run it): pip install -e ."
   fi
 fi
 
@@ -182,7 +182,7 @@ if [ "$CHECK_PHANTOMMEET" = "1" ]; then
   if [ -n "$PM" ]; then
     if smoke_pm "$PM"; then note_ok "smoke (derive+validate)"; else note_fail "smoke (derive+validate)"; fi
   else
-    echo "  ⚠ pm no instalado (CI lo correrá): pip install -e ."
+    echo "  ⚠ pm not installed (CI will run it): pip install -e ."
   fi
 fi
 
@@ -192,7 +192,18 @@ fi
 if [ "$CHECK_PHANTOMBRIDGE" = "1" ]; then
   echo "== phantombridge =="
   cd "$REPO_ROOT/phantombridge"
-  for f in bridge.js org-routing.js secrets.js mcp-bridge.mjs test-*.js; do
+  # Same files as the phantombridge CI. Literal names stay in the list even
+  # when the file is missing, so we report it instead of letting node --check
+  # fail on a path that a rename removed; the test-*.js glob expands to
+  # whatever exists (nullglob: nothing at all when there are no test files).
+  shopt -s nullglob
+  bridge_files=(bridge.js org-routing.js secrets.js mcp-bridge.mjs test-*.js)
+  shopt -u nullglob
+  for f in "${bridge_files[@]}"; do
+    if [ ! -f "$f" ]; then
+      echo "  ⚠ $f missing — skipped (CI lists it explicitly)"
+      continue
+    fi
     node --check "$f" && note_ok "node --check $f" || note_fail "node --check $f"
   done
   npm test && note_ok "npm test" || note_fail "npm test"
@@ -200,8 +211,8 @@ fi
 
 echo
 if [ "$fail" = "0" ]; then
-  echo "prepush-check: OK — listo para pushear."
+  echo "prepush-check: OK — ready to push."
 else
-  echo "prepush-check: FALLÓ. Arregla los checks (ruff check --fix && ruff format ayudan) o usa git push --no-verify SOLO si sabes que el fallo es falso."
+  echo "prepush-check: FAILED. Fix the checks (ruff check --fix && ruff format help) or use git push --no-verify ONLY when you know the failure is a false positive."
 fi
 exit "$fail"
