@@ -69,3 +69,38 @@ until it is checked. In particular, A0 does not establish that:
   ecosystem).
 
 Treat a validating declaration as something to verify, never as access granted.
+
+## G1 compiler producer candidate
+
+`po build-boundary --org ORG_YAML --projection PROJECTION_JSON
+--declaration DECLARATION_JSON --out NEW_DIRECTORY` compiles a candidate from
+explicitly selected model entries. The projection policy uses
+`projection-v1.schema.json` and pins SHA-256 digests of the exact `org.yaml`
+and A0 per-host boundary declaration bytes. Its `boundary_id` must occur once
+in that declaration, and its selected actor IDs must equal the declared
+workload IDs. The declaration must say `not_provided_at_g1` for shared-record
+isolation. Generate digests locally; do not copy values from an artifact
+producer's release notes and treat them as authority.
+
+The compiler sees only the projected organization, departments, roles,
+actors, humans, access policies, and boundary-specific communication settings.
+It does not inherit escalation routes or opaque `documents`. G1 candidates
+strip legacy actor tools and messaging endpoints and reject communication
+channels. A missing parent/role/policy reference fails compilation rather than
+pulling an org-wide record into the candidate. The output directory must be
+new because the ordinary compiler preserves existing runtime and manually
+edited files. `candidate-manifest.json` lists source, declaration, policy,
+projection, and generated-file digests. It is an unsigned producer record,
+not an installable release or an out-of-band trust anchor.
+
+The policy is a reviewed allowlist of *entries*, not a semantic scanner for
+private text inside a selected entry. Review selected free text and access
+policy labels for cross-boundary data. The G1 canary tests exercise the
+projection and actual compiler output, including a human email, role text,
+tools, channel data, stale output, changed source/declaration digests, and
+sequential builds for two boundaries.
+Per-host acceptance still requires observed store separation, per-persona OS
+identities, disabled or confined runtime adapters, maintenance-surface denial
+evidence, and the owner's real boundary declaration. No host or workload is
+accepted by this command alone. Per-principal record isolation within a
+shared boundary store remains a G2 deliverable.

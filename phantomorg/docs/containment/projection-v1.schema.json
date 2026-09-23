@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://phantomyard.org/schemas/containment/projection-v1.schema.json",
+  "title": "PhantomOrg G1 compiler input projection",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format_version", "boundary_id", "declaration_digest", "source_digest", "organization", "communication", "department_ids", "role_ids", "actor_ids", "human_ids", "access_level_ids", "security_category_ids"],
+  "properties": {
+    "format_version": {"const": 1},
+    "boundary_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "declaration_digest": {"$ref": "#/$defs/digest"},
+    "source_digest": {"$ref": "#/$defs/digest"},
+    "organization": {"type": "object"},
+    "communication": {
+      "type": "object",
+      "not": {"required": ["channels"]}
+    },
+    "department_ids": {"$ref": "#/$defs/ids"},
+    "role_ids": {"$ref": "#/$defs/ids"},
+    "actor_ids": {"$ref": "#/$defs/ids"},
+    "human_ids": {"$ref": "#/$defs/ids"},
+    "access_level_ids": {"$ref": "#/$defs/ids"},
+    "security_category_ids": {"$ref": "#/$defs/ids"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "not": {"const": "*"}}
+    }
+  }
+}
