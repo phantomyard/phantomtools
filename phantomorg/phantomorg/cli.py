@@ -8,6 +8,7 @@ are omitted, falls back to the interactive wizard (click.prompt).
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,13 @@ from .compiler import CompileError
 from .compiler import build as compiler_build
 from .compiler.phantomchat import verify_phantomchat
 from .compiler.telegram import TelegramError, verify_telegram
+from .containment.collector import CollectorError, collect_inventory, inventory_digest
+from .containment.validator import (
+    cross_check_errors,
+    detect_kind,
+    load_document,
+    schema_errors,
+)
 from .deploy.norms import (
     NORMS_STATE_FILENAME,
     NormFilingResult,
@@ -2132,6 +2140,111 @@ def update_cmd(check, force, repo_override):
     repo to check.
     """
     raise SystemExit(run_updater(check=check, force=force, repo_override=repo_override))
+
+
+@main.command("containment-collect")
+@click.option(
+    "--plan",
+    "plan_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Read-only collection plan (JSON).",
+)
+@click.option(
+    "--out",
+    "out_path",
+    required=True,
+    type=click.Path(dir_okay=False),
+    help="Where to write the inventory document.",
+)
+@click.option("--host-id", default=None, help="Collect only this planned host.")
+@click.option(
+    "--now",
+    "collected_at",
+    default=None,
+    help="Override collected_at (RFC 3339) for a reproducible run.",
+)
+def containment_collect_cmd(plan_path, out_path, host_id, collected_at):
+    """Read-only A0 inventory collector: probe a host, emit an inventory."""
+    try:
+        plan = load_document(plan_path)
+        inventory = collect_inventory(plan, host_id=host_id, collected_at=collected_at)
+    except (CollectorError, OSError, ValueError) as e:
+        click.secho(f"Collection failed: {e}", fg="red")
+        raise SystemExit(1) from e
+
+    Path(out_path).write_text(
+        json.dumps(inventory, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    click.echo(f"Wrote {out_path}")
+    click.echo(f"inventory_id: {inventory['inventory_id']}")
+    click.echo(f"hosts: {len(inventory['hosts'])}")
+    click.echo(f"inventory_digest: {inventory_digest(inventory)}")
+    click.echo(
+        "An inventory is evidence, not an authorization; keep it out of the repo."
+    )
+
+
+@main.command("containment-validate")
+@click.argument("document", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--kind",
+    type=click.Choice(["auto", "inventory", "declaration"]),
+    default="auto",
+    help="Document kind; 'auto' infers it from the top-level keys.",
+)
+@click.option(
+    "--inventory",
+    "inventory_path",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Inventory to cross-check a declaration against.",
+)
+def containment_validate_cmd(document, kind, inventory_path):
+    """Validate a containment document; optionally cross-check a declaration."""
+    try:
+        doc = load_document(document)
+        resolved = detect_kind(doc) if kind == "auto" else kind
+    except (OSError, ValueError) as e:
+        click.secho(f"Validation failed: {e}", fg="red")
+        raise SystemExit(1) from e
+
+    errors = schema_errors(resolved, doc)
+    if errors:
+        click.secho(f"{document}: {len(errors)} schema error(s)", fg="red")
+        for message in errors:
+            click.echo(f"  - {message}")
+        raise SystemExit(1)
+    click.secho(f"{document}: valid {resolved}", fg="green")
+
+    if inventory_path is None:
+        return
+    if resolved != "declaration":
+        click.secho("--inventory only applies to a boundary declaration", fg="red")
+        raise SystemExit(1)
+
+    try:
+        inventory = load_document(inventory_path)
+    except (OSError, ValueError) as e:
+        click.secho(f"Validation failed: {inventory_path}: {e}", fg="red")
+        raise SystemExit(1) from e
+    inv_errors = schema_errors("inventory", inventory)
+    if inv_errors:
+        click.secho(f"{inventory_path}: {len(inv_errors)} schema error(s)", fg="red")
+        for message in inv_errors:
+            click.echo(f"  - {message}")
+        raise SystemExit(1)
+
+    mismatches = cross_check_errors(inventory, doc)
+    if mismatches:
+        click.secho(
+            f"cross-check against {inventory_path}: {len(mismatches)} mismatch(es)",
+            fg="red",
+        )
+        for message in mismatches:
+            click.echo(f"  - {message}")
+        raise SystemExit(1)
+    click.secho(f"cross-check against {inventory_path}: OK", fg="green")
 
 
 if __name__ == "__main__":
