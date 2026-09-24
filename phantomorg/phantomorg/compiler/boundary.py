@@ -252,6 +252,8 @@ def build_candidate(
                 if not stat.S_ISREG(path.lstat().st_mode):
                     raise BoundaryBuildError("candidate contains a non-regular file")
                 files[path.relative_to(temp).as_posix()] = _sha256(path.read_bytes())
+        # Sealed before the manifest is written, so the manifest never lists
+        # its own digest.
         provenance["files"] = files
         (temp / "candidate-manifest.json").write_text(
             json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"

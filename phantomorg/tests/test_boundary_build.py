@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 from click.testing import CliRunner
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 
 from phantomorg.cli import main
 from phantomorg.compiler.boundary import BoundaryBuildError, build_candidate
@@ -197,3 +197,17 @@ def test_cli_builds_candidate(tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert (out / "candidate-manifest.json").exists()
+
+
+def test_schema_and_code_agree_on_required_selectors(tmp_path):
+    source, policy_path, declaration_path, policy = _inputs(tmp_path)
+    schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    policy["actor_ids"] = []
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(policy)
+    with pytest.raises(
+        BoundaryBuildError, match="requires actors, roles and departments"
+    ):
+        build_candidate(source, policy_path, declaration_path, tmp_path / "candidate")

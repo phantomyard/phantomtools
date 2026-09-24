@@ -15,9 +15,9 @@
       "type": "object",
       "not": {"required": ["channels"]}
     },
-    "department_ids": {"$ref": "#/$defs/ids"},
-    "role_ids": {"$ref": "#/$defs/ids"},
-    "actor_ids": {"$ref": "#/$defs/ids"},
+    "department_ids": {"$ref": "#/$defs/ids", "minItems": 1},
+    "role_ids": {"$ref": "#/$defs/ids", "minItems": 1},
+    "actor_ids": {"$ref": "#/$defs/ids", "minItems": 1},
     "human_ids": {"$ref": "#/$defs/ids"},
     "access_level_ids": {"$ref": "#/$defs/ids"},
     "security_category_ids": {"$ref": "#/$defs/ids"}
