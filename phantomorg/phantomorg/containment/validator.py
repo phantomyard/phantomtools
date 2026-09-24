@@ -33,7 +33,12 @@ SCHEMA_FILES = {
 
 
 def load_document(path: str | Path) -> dict[str, Any]:
-    """Load a JSON containment document; raises ``CollectorError``-like errors."""
+    """Load a JSON containment document.
+
+    Raises ``OSError``/``UnicodeError`` when the file cannot be read and
+    ``json.JSONDecodeError`` (a ``ValueError``) when it is not JSON; callers
+    turn either into a one-line failure instead of a traceback.
+    """
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 

@@ -102,10 +102,15 @@ def _current_account() -> str:
     return pwd.getpwuid(os.getuid()).pw_name
 
 
+def _short_temp_root() -> str:
+    """AF_UNIX caps ``sun_path`` at ~107 bytes, so keep the probe base short."""
+    return "/tmp" if os.path.isdir("/tmp") else tempfile.gettempdir()
+
+
 @pytest.fixture()
 def probed_host():
     """A temp dir with one observable store, one observable socket, one miss."""
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(prefix="pgt-", dir=_short_temp_root()) as tmp:
         base = Path(tmp)
         (base / "personas" / "project-lead").mkdir(parents=True)
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -307,3 +312,24 @@ def test_cli_validate_fails_on_mismatch(tmp_path):
     )
     assert result.exit_code == 1
     assert "mismatch" in result.output
+
+
+def test_cli_collect_fails_cleanly_on_unreadable_plan(tmp_path):
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text("{not json", encoding="utf-8")
+    out_path = tmp_path / "inventory.json"
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "containment-collect",
+            "--plan",
+            str(plan_path),
+            "--out",
+            str(out_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Collection failed" in result.output
+    assert not out_path.exists()

@@ -2,9 +2,11 @@
 
 The collector turns an operator-supplied *plan* (JSON) into an inventory
 document that conforms to ``docs/containment/inventory-v1.schema.json``. It
-is read-only by construction: it only stats local paths, resolves local
-accounts and reads local systemd unit files. It never writes to the host,
-never copies file contents and never opens a socket or a connection.
+is read-only by construction: it only stats local paths and resolves local
+accounts. It never writes to the host, never copies file contents, never
+reads unit files (``service_units`` come from the plan) and never opens a
+socket or a connection. The probes are POSIX-only, so run the collector on
+the host it inspects.
 
 The plan names the candidate host, workload identities, stores and
 maintenance surfaces. Each entry carries a ``probe`` that decides how its
@@ -40,7 +42,7 @@ SURFACE_PROBES = ("unix_socket", "declared")
 WORKLOAD_PROBES = ("os_identity", "declared")
 HOST_PROBES = ("local", "declared")
 
-# These limits are documented in the module docstring; keep them in sync.
+# Probe allowlist per entry kind; the module docstring documents each probe.
 
 
 class CollectorError(Exception):

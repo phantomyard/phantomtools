@@ -56,9 +56,10 @@ pair of documents. Both are read-only and make no network calls.
 Collect an inventory from a plan. The plan is a JSON file naming the host,
 the candidate workload identities, stores and maintenance surfaces; each
 entry names a probe (`path`, `unix_socket`, `os_identity` or `declared`).
-The collector only stats local paths, resolves local accounts and reads
-local unit files — it never copies file contents or opens a connection —
-and it writes every confirmed miss into `unknowns`:
+The collector only stats local paths and resolves local accounts — it never
+copies file contents, never reads unit files (`service_units` come from the
+plan) and never opens a connection — and it writes every confirmed miss into
+`unknowns`:
 
 ```bash
 po containment-collect --plan plan.json --out inventory.json

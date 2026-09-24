@@ -2129,7 +2129,7 @@ def containment_collect_cmd(plan_path, out_path, host_id, collected_at):
     try:
         plan = load_document(plan_path)
         inventory = collect_inventory(plan, host_id=host_id, collected_at=collected_at)
-    except (CollectorError, json.JSONDecodeError) as e:
+    except (CollectorError, OSError, ValueError) as e:
         click.secho(f"Collection failed: {e}", fg="red")
         raise SystemExit(1) from e
 
@@ -2165,7 +2165,7 @@ def containment_validate_cmd(document, kind, inventory_path):
     try:
         doc = load_document(document)
         resolved = detect_kind(doc) if kind == "auto" else kind
-    except (ValueError, json.JSONDecodeError) as e:
+    except (OSError, ValueError) as e:
         click.secho(f"Validation failed: {e}", fg="red")
         raise SystemExit(1) from e
 
@@ -2183,7 +2183,11 @@ def containment_validate_cmd(document, kind, inventory_path):
         click.secho("--inventory only applies to a boundary declaration", fg="red")
         raise SystemExit(1)
 
-    inventory = load_document(inventory_path)
+    try:
+        inventory = load_document(inventory_path)
+    except (OSError, ValueError) as e:
+        click.secho(f"Validation failed: {inventory_path}: {e}", fg="red")
+        raise SystemExit(1) from e
     inv_errors = schema_errors("inventory", inventory)
     if inv_errors:
         click.secho(f"{inventory_path}: {len(inv_errors)} schema error(s)", fg="red")
