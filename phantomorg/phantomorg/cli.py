@@ -615,6 +615,46 @@ def build_cmd(org_path, out_dir, only_actor, scope_rule):
         click.secho(f"⚠ {w}", fg="yellow")
 
 
+@main.command("build-boundary")
+@click.option(
+    "--org",
+    "org_path",
+    required=True,
+    type=_ExpandUserPath(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--projection",
+    "projection_path",
+    required=True,
+    type=_ExpandUserPath(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--declaration",
+    "declaration_path",
+    required=True,
+    type=_ExpandUserPath(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--out",
+    "out_dir",
+    required=True,
+    type=_ExpandUserPath(file_okay=False, path_type=Path),
+)
+def build_boundary_cmd(org_path, projection_path, declaration_path, out_dir):
+    """Build a fresh, explicitly projected G1 candidate bundle."""
+    from .compiler.boundary import BoundaryBuildError, build_candidate
+
+    try:
+        manifest = build_candidate(org_path, projection_path, declaration_path, out_dir)
+    except (BoundaryBuildError, CompileError, OSError) as exc:
+        click.secho(f"Cannot build boundary candidate: {exc}", fg="red")
+        raise SystemExit(1) from exc
+    click.echo(
+        f"Candidate {manifest['boundary_id']}: {len(manifest['files'])} "
+        f"file(s) at {out_dir}"
+    )
+
+
 @main.command("telegram-check")
 @click.option(
     "--org",
