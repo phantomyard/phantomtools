@@ -47,6 +47,7 @@ const CONFIG = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
 // Secret resolution lives in secrets.js (shared with mcp-bridge.mjs so the
 // MCP client resolves vault:/env: references exactly like the bridge does).
 const { resolveSecretRef, readSecret } = require('./secrets.js');
+const { warnIfRelayNotCanonical } = require('./canonical-relays.js');
 
 const MODE = (CONFIG.mode || 'jitsi').toLowerCase();
 const JITSI_MODE = MODE === 'jitsi' || MODE === 'both';
@@ -3240,6 +3241,12 @@ if (require.main === module) {
     console.error('[http] refusing to start: configure httpAdminToken ("vault:NAME"/"env:VAR") or PHANTOMBRIDGE_ADMIN_TOKEN');
     process.exit(1);
   }
+
+  // Diagnostic only (fail-quiet, never blocks): warn when this relay is not
+  // where the personas listen, so a routed-but-undelivered DM is visible at
+  // startup instead of only as silence.
+  warnIfRelayNotCanonical(CONFIG.nostr.relay).catch(() => {});
+
   server.listen(CONFIG.httpPort || 8090, '127.0.0.1', () => {
     console.log('[http] local API on :' + (CONFIG.httpPort || 8090));
   });
