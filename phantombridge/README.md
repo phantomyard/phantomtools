@@ -479,6 +479,26 @@ Requires the extra dependency `@modelcontextprotocol/sdk` (added to
 - **Communication norm v1.2**: the agent channel declares
   `phantomchat` (relay) as the bot↔bot and bot↔human path.
 
+### Relay reachability: your agents must read your relay
+
+The bridge publishes DMs to `nostr.relay` **only**. Personas resolve their relay
+set from the canonical list the PhantomChat PWA serves
+(`https://chat.phantomyard.ai/relays.json` — phantombot fetches that same URL and
+the per-persona `phantomchat.json` only carries the cached copy, overridable
+with `PHANTOMCHAT_RELAYS_URL`). A shared public list cannot know about a
+private, per-deployment relay.
+
+So when the bridge's relay is absent from the list the personas read, every
+routed DM is published on a relay nobody subscribed to. The log shows a healthy
+`[routing] alice -> bob` while the recipient never sees the message — a silent
+failure that is expensive to diagnose. The bridge now warns at startup when
+`nostr.relay` is missing from that list; the diagnostic is read-only, never
+blocks startup, and stays silent when the list cannot be fetched.
+
+Fix: serve a list that includes the bridge relay and point every persona at it
+(`PHANTOMCHAT_RELAYS_URL=<your list>` on each persona), then restart the
+personas. Test: `node test-canonical-relays.js`.
+
 ## org.yaml as source of truth — v1.6.0
 
 Norma v1.6: the org.yaml compiled by PhantomOrg is the single source of
@@ -519,6 +539,15 @@ curl -s http://127.0.0.1:8090/status | jq .routing
 Test: `node test-org-routing.js` (15 tests: unit + bridge integration).
 
 ## Changelog
+
+- **Unreleased** — startup relay-reachability diagnostic: the bridge warns when
+  `nostr.relay` is missing from the canonical relay list its personas resolve
+  (`https://chat.phantomyard.ai/relays.json`, or the `PHANTOMCHAT_RELAYS_URL`
+  mirror a deployment points them at). Diagnostic only — the relay set is never
+  changed, startup never blocks, and an unfetchable list stays silent. It breaks
+  a silent failure mode: with a per-deployment relay absent from the list, DMs
+  were routed (`[routing] a -> b`) but published where nobody listened, so the
+  recipient never saw them. Test: `test-canonical-relays.js` (7 checks).
 
 - **v1.7.3** — AUDIT kaieriksen/ChatGPT OPCION2 FIX (🔴 BLOCKING): the
   `recoveryWatermark` advance is now BOUNDED — a single event after a
