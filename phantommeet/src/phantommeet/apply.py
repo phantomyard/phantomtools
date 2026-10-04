@@ -609,6 +609,26 @@ def _strip_stale_protocol_duplicate(text: str) -> str:
     return before.rstrip("\n") + "\n"
 
 
+def _render_kb_body(
+    env: Environment, manifest: dict[str, Any], ctx: dict[str, Any], lang: str
+) -> str:
+    """Render the marker-delimited Meetings.md managed body.
+
+    The managed body is the protocol template followed by the org-specific
+    ``kb_appendix`` blocks (rendered per-role as Jinja). This is the single
+    source of truth for the body: ``apply`` writes it and ``check-infra``
+    regenerates it to compare against the live file, so the writer and the
+    doctor cannot drift on the appendix.
+    """
+    kb_name = "protocol.en.md" if lang == "en" else "protocol.es.md"
+    body = _render_template(env, kb_name, ctx)
+    appendix = manifest.get("kb_appendix", [])
+    if appendix:
+        rendered = [env.from_string(a).render(**ctx).rstrip() for a in appendix]
+        body += "\n---\n\n" + "\n\n---\n\n".join(rendered) + "\n"
+    return body
+
+
 def _upsert_kb(existing: str, frontmatter: str, body: str) -> str:
     """Upsert the managed Meetings.md: frontmatter + marker-delimited body.
 
@@ -1039,24 +1059,14 @@ def apply_manifest(
 
         ctx = _persona_context(persona_id, manifest)
 
-        # 1) KB protocol file: OKF frontmatter + marker-delimited managed body.
-        kb_name = "protocol.en.md" if lang == "en" else "protocol.es.md"
+        # 1) KB protocol file: OKF frontmatter + marker-delimited managed body
+        # (protocol template + kb_appendix). _render_kb_body is shared with
+        # check-infra so the doctor compares against exactly what we write.
         try:
-            kb_body = _render_template(env, kb_name, ctx)
+            kb_body = _render_kb_body(env, manifest, ctx, lang)
         except Exception as exc:  # noqa: BLE001
-            result.errors.append(f"{persona_id}: template {kb_name!r} failed: {exc}")
+            result.errors.append(f"{persona_id}: Meetings.md render failed: {exc}")
             continue
-        appendix = manifest.get("kb_appendix", [])
-        if appendix:
-            # kb_appendix blocks are Jinja templates too: org-specific text in
-            # base.yaml can use ctx tokens (e.g. destination_folder/owner) so
-            # the appendix renders per-role, not as static text.
-            try:
-                rendered = [env.from_string(a).render(**ctx).rstrip() for a in appendix]
-            except Exception as exc:  # noqa: BLE001
-                result.errors.append(f"{persona_id}: kb_appendix render failed: {exc}")
-                continue
-            kb_body += "\n---\n\n" + "\n\n---\n\n".join(rendered) + "\n"
         frontmatter = _render_kb_frontmatter(ctx, lang)
         kb_dest = persona_dir / KB_REL
         kb_existing = kb_dest.read_text(encoding="utf-8") if kb_dest.exists() else ""

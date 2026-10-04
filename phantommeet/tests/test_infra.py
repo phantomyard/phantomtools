@@ -263,3 +263,84 @@ def test_run_checks_covers_scoped_personas(tmp_path: Path) -> None:
     results = run_checks(manifest, target=target)
     names = [r.name for r in results]
     assert any(n.startswith("pedro:") for n in names)
+
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def _renderable_manifest() -> dict[str, Any]:
+    """The smoke base manifest (protocol + kb_appendix + storage + defaults)
+    plus the roles/permissions the persona-state checks need, so the protocol
+    template renders exactly as in a real deployment."""
+    import yaml
+
+    manifest: dict[str, Any] = yaml.safe_load(
+        (FIXTURES / "base.smoke.yaml").read_text(encoding="utf-8")
+    )
+    manifest["roles"] = {"maria": "responsible"}
+    manifest["permissions"] = {"full": ["maria"]}
+    return manifest
+
+
+def _render_managed_body_for_test(manifest: dict[str, Any], persona_id: str) -> str:
+    """Reproduce *by hand* what ``apply`` writes as the Meetings.md managed
+    body: the protocol template followed by the manifest ``kb_appendix``
+    blocks. Kept independent of ``_render_kb_body`` so the test pins the
+    doctor against the spec, not against the implementation under test."""
+    from phantommeet.apply import _env, _persona_context, _render_template
+
+    lang = manifest["language"]
+    env = _env(lang)
+    ctx = _persona_context(persona_id, manifest)
+    kb_name = "protocol.en.md" if lang == "en" else "protocol.es.md"
+    body = _render_template(env, kb_name, ctx)
+    appendix = manifest.get("kb_appendix", [])
+    if appendix:
+        rendered = [env.from_string(a).render(**ctx).rstrip() for a in appendix]
+        body += "\n---\n\n" + "\n\n---\n\n".join(rendered) + "\n"
+    return body
+
+
+def test_check_persona_state_meetings_current_includes_kb_appendix(
+    tmp_path: Path,
+) -> None:
+    """Regression (#128): the doctor must compare Meetings.md against the
+    protocol *plus* the manifest ``kb_appendix`` -- exactly what ``apply``
+    writes. Comparing only the protocol flagged every applied persona as
+    ``stale content`` whenever the manifest carried a ``kb_appendix``."""
+    from phantommeet.apply import MARKER_END, MARKER_START
+
+    manifest = _renderable_manifest()
+    assert manifest.get("kb_appendix"), "fixture must carry a kb_appendix"
+    persona_dir = tmp_path / "maria"
+    kb = persona_dir / "kb" / "procedures" / "Meetings.md"
+    kb.parent.mkdir(parents=True)
+    body = _render_managed_body_for_test(manifest, "maria")
+    kb.write_text(f"{MARKER_START}\n{body}{MARKER_END}\n", encoding="utf-8")
+
+    results = check_persona_state("maria", persona_dir, manifest)
+    meetings = [r for r in results if r.name.endswith(" Meetings.md")]
+    assert meetings and meetings[0].state == "ok", meetings
+
+
+def test_check_persona_state_meetings_stale_when_appendix_missing(
+    tmp_path: Path,
+) -> None:
+    """A Meetings.md whose managed body is the protocol only (a partial
+    deployment that dropped the ``kb_appendix``) must FAIL as stale, proving
+    the appendix is part of what the doctor compares."""
+    from phantommeet.apply import MARKER_END, MARKER_START
+
+    manifest = _renderable_manifest()
+    persona_dir = tmp_path / "maria"
+    kb = persona_dir / "kb" / "procedures" / "Meetings.md"
+    kb.parent.mkdir(parents=True)
+    protocol_only = _render_managed_body_for_test(
+        {**manifest, "kb_appendix": []}, "maria"
+    )
+    kb.write_text(f"{MARKER_START}\n{protocol_only}{MARKER_END}\n", encoding="utf-8")
+
+    results = check_persona_state("maria", persona_dir, manifest)
+    meetings = [r for r in results if r.name.endswith(" Meetings.md")]
+    assert meetings and meetings[0].state == "fail"
+    assert "stale content" in meetings[0].detail

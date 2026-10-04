@@ -13,6 +13,14 @@
   absent and never reorders an existing entry; `check-infra` requires
   **presence**, not position. A relay an operator moved keeps its place on
   re-apply, and `pm unapply` can still reverse it.
+- **Fix `check-infra` flagging every applied persona's `Meetings.md` as stale.**
+  The Meetings.md probe regenerated only the protocol template and compared it
+  against the live managed body, but `apply` writes the protocol *plus* the
+  manifest `kb_appendix`. Any manifest carrying a `kb_appendix` (every real
+  org manifest) therefore reported `stale content` for every persona, even
+  right after a successful apply. The managed body is now rendered by a single
+  shared `_render_kb_body` used by both `apply` and `check-infra`, so the
+  writer and the doctor can no longer drift on the appendix.
 
 - **`_patch_phantomchat` evicts a legacy bridge npub from `allowed_npubs`.**
   The bridge npub is never a principal: it belongs in the untrusted
