@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **`_patch_phantomchat` evicts a legacy bridge npub from `allowed_npubs`.**
+  The bridge npub is never a principal: it belongs in the untrusted
+  `relay_npubs` tier. A persona whose `allowed_npubs` still holds the bridge
+  npub (left by a pre-`relay_npubs` apply, or a hand edit) is now healed by
+  `pm apply` — the npub is evicted and the removal recorded in the owned delta,
+  so `pm unapply` restores it. `pm check-infra` already failed such a persona;
+  the apply now repairs it instead of leaving the trust grant for a hand edit.
+
 - **Add `sala-send.js` — the speak-in-room tool, now a managed template.**
   `sala-send` was a hand-maintained persona tool (Mac-local, unversioned). It
   is now a PhantomMeet template (`tools/sala-send.js.j2`) deployed to every
