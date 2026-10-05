@@ -8,7 +8,10 @@ channels (private relay, bridge npub, human npubs) and the actor identities
 (``actors[].npub``), and each persona gets a ready-to-deploy phantomchat.json
 with:
 
-- ``relays``: the org private relay first, then the optional public relays.
+- ``relays``: the optional public relays, then the org private relay last. The
+  runtime replaces this list with the served ``PHANTOMCHAT_RELAYS_URL`` list on
+  its first fetch, so this is the initial/offline order and is kept consistent
+  with what the deployment actually serves.
 - ``allowed_npubs``: explicitly designated PRINCIPALS only (``principal_npubs``).
   The shared human group identity (``human_npubs``), relays, the bridge and
   peer actors are delivery endpoints, never promoted to principal trust.
@@ -67,7 +70,10 @@ def phantomchat_config(
 
     principal_npubs = list(channel.principal_npubs or [])
 
-    relays = [channel.relay] + list(channel.public_relays or [])
+    # The private relay goes LAST, matching the order of the relay list the
+    # runtime serves (phantombot replaces this list on its first fetch; the
+    # initial/offline order should agree with what the deployment serves).
+    relays = list(channel.public_relays or []) + [channel.relay]
 
     # ``allowed_npubs`` is a PRINCIPAL trust grant, not a delivery list. Only
     # the explicitly designated principal keys (``principal_npubs``) are

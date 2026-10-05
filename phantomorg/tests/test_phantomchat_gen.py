@@ -77,8 +77,8 @@ class TestPhantomchatGeneration(unittest.TestCase):
         for actor in actors.values():
             pc = phantomchat_config(spec, actor)
             self.assertIsNotNone(pc)
-            # Relays: private first, then the 5 public ones.
-            self.assertEqual(pc.relays[0], "ws://relay.example.invalid:7777")
+            # Relays: the 5 public ones, then the private relay last.
+            self.assertEqual(pc.relays[-1], "ws://relay.example.invalid:7777")
             self.assertEqual(len(pc.relays), 6)
             # No principal designated -> empty allowlist (fail-closed).
             self.assertEqual(pc.allowed_npubs, [])
