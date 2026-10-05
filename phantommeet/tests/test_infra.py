@@ -92,7 +92,7 @@ def test_check_persona_state_fails_missing_relay_npubs(tmp_path: Path) -> None:
 
 
 def test_check_persona_state_patched_is_ok(tmp_path: Path) -> None:
-    """A correctly patched ``phantomchat.json`` (private relay first, bridge
+    """A correctly patched ``phantomchat.json`` (private relay present, bridge
     npub in relay_npubs only) reports OK."""
     persona_dir = tmp_path / "maria"
     _write_phantomchat(
@@ -107,6 +107,46 @@ def test_check_persona_state_patched_is_ok(tmp_path: Path) -> None:
     result = _phantomchat_result(results)
     assert result.state == "ok"
     assert result.detail == "patched"
+
+
+def test_check_persona_state_relay_order_is_not_asserted(tmp_path: Path) -> None:
+    """The relay's position is not asserted: the runtime resolves the list from
+    the served source, so a private relay first *or* last both pass."""
+    orders = (
+        [BRIDGE_RELAY, "wss://public.relay"],
+        ["wss://public.relay", BRIDGE_RELAY],
+    )
+    for relays in orders:
+        persona_dir = tmp_path / "maria"
+        _write_phantomchat(
+            persona_dir,
+            {
+                "relays": relays,
+                "allowed_npubs": ["npub1existing"],
+                "relay_npubs": [BRIDGE_NPUB],
+            },
+        )
+        results = check_persona_state("maria", persona_dir, _manifest())
+        result = _phantomchat_result(results)
+        assert result.state == "ok", (relays, result.detail)
+
+
+def test_check_persona_state_fails_relay_missing(tmp_path: Path) -> None:
+    """Presence is still required: a phantomchat.json without the org's private
+    relay FAILS, wherever it would have sat."""
+    persona_dir = tmp_path / "maria"
+    _write_phantomchat(
+        persona_dir,
+        {
+            "relays": ["wss://public.relay"],
+            "allowed_npubs": ["npub1existing"],
+            "relay_npubs": [BRIDGE_NPUB],
+        },
+    )
+    results = check_persona_state("maria", persona_dir, _manifest())
+    result = _phantomchat_result(results)
+    assert result.state == "fail"
+    assert "missing from relays" in result.detail
 
 
 def test_check_persona_state_skips_relay_npubs_without_access(

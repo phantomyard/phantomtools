@@ -67,9 +67,11 @@ Per persona, PhantomMeet manages:
 - `MEMORY.md` — a one-line pointer to `kb/procedures/Meetings.md` between
   `<!-- phantommeet:start -->` / `<!-- phantommeet:end -->` markers (procedural
   content stays in the KB, never in the persona's curated memory)
-- `phantomchat.json` — private relay moved first; bridge npub registered in
-  `relay_npubs` (phantombot's untrusted relay tier — never `allowed_npubs`,
-  which is a trust grant) and evicted from `allowed_npubs` when a legacy apply
+- `phantomchat.json` — private relay ensured present (its position is left
+  untouched: the runtime resolves the list from the served source); bridge npub
+  registered in `relay_npubs` (phantombot's untrusted relay tier — never
+  `allowed_npubs`, which is a trust grant) and evicted from `allowed_npubs` when
+  a legacy apply
   left it there, with the owned delta recorded to
   `.phantommeet-phantomchat.delta.json` so the patch is reversible
 - `legacy_kb_files` — deprecated **in place** (a `> Superseded by
