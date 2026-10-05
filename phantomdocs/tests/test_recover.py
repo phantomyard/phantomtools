@@ -9,6 +9,7 @@ is refused fail-closed.
 
 import json
 import os
+import stat
 
 import coincurve
 import pytest
@@ -199,3 +200,14 @@ def test_truncate_is_atomic_replace(tmp_path, monkeypatch):
     assert len(audit.raw_lines(root)) == keep
     leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith(".audit-")]
     assert leftovers == []
+
+
+def test_truncate_preserves_the_log_permissions(tmp_path):
+    """The recovery rewrite must not reset the audit log's permissions."""
+    if os.name != "posix":
+        return
+    root, _org, _runner = _setup(tmp_path, n_docs=2)
+    audit_path = tmp_path / "audit.log"
+    os.chmod(audit_path, 0o664)
+    audit.truncate(root, len(audit.raw_lines(root)) - 1)
+    assert stat.S_IMODE(os.stat(audit_path).st_mode) == 0o664

@@ -6,6 +6,14 @@ All notable changes to PhantomDocs are documented in this file.
 
 **Hierarchical categories (#31), index by reference (#35), update package (#33), mutation signing (#30 v2).**
 
+- **Store files keep their permissions across an atomic replace**
+  (`manifest.save`, `audit.truncate`): `mkstemp` creates the temp file 0600, so
+  renaming it over the manifest or the audit log silently dropped any group
+  access an operator had granted — a store shared through a group (a
+  multi-persona deployment) stopped being writable for every account but the
+  last writer. The destination's mode is now carried onto the temp file before
+  the rename (`fsutil.preserve_mode`).
+
 - **Hierarchical / project-scoped categories** (`access.py`, `cli.py`):
   category ids are now `category-...` strings with a project umbrella
   (`category-4` → `category-4-almaponia`). Holding a parent grants every
