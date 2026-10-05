@@ -633,24 +633,30 @@ def _upsert_kb(existing: str, frontmatter: str, body: str) -> str:
 
 def _patch_phantomchat(
     data: dict[str, Any], relay: str, bridge_npub: str | None, include_bridge: bool
-) -> tuple[dict[str, Any], str | None, str | None]:
+) -> tuple[dict[str, Any], str | None, str | None, str | None]:
     """Ensure the private relay is first and the bridge npub is registered in
     the untrusted ``relay_npubs`` tier. Returns
-    ``(patched, relay_added, npub_added)``:
+    ``(patched, relay_added, npub_added, allowed_removed)``:
 
     - ``relay_added`` — the relay string when PhantomMeet *added* it to the
       ``relays`` list (it was not present before) — the owned delta — or None
       when it was already present (mere reorder) or empty.
     - ``npub_added`` — the bridge npub when PhantomMeet *added* it to
       ``relay_npubs`` (it was not present before) — the owned delta — or None.
+    - ``allowed_removed`` — the bridge npub when PhantomMeet *evicted* it from
+      ``allowed_npubs`` (a pre-``relay_npubs`` apply left it there) — the owned
+      delta — or None.
 
     The bridge npub is NEVER added to ``allowed_npubs``: that is a trust
     grant in phantombot (allowlisted senders skip the threat judge), not a
     delivery ACL. It goes to ``relay_npubs`` instead — phantombot's untrusted
     relay tier (phantomyard/phantombot#423), where a relay sender is
     threat-screened, treated as untrusted, never arms TOFU, and replies as
-    ``shared`` even in a 1:1 DM. When ``include_bridge`` is false the
-    ``relay_npubs`` list is left untouched.
+    ``shared`` even in a 1:1 DM. A bridge npub already sitting in
+    ``allowed_npubs`` (left by a pre-``relay_npubs`` apply or a hand edit) is
+    evicted, so a re-apply self-heals a legacy persona instead of leaving the
+    trust grant for a hand edit. When ``include_bridge`` is false both
+    ``relay_npubs`` and ``allowed_npubs`` are left untouched.
     """
     relays = list(data.get("relays", []))
     relay_added: str | None = None
@@ -663,6 +669,7 @@ def _patch_phantomchat(
     data["relays"] = relays
 
     npub_added: str | None = None
+    allowed_removed: str | None = None
     if include_bridge and bridge_npub:
         relay_npubs = list(data.get("relay_npubs", []))
         if bridge_npub not in relay_npubs:
@@ -670,14 +677,20 @@ def _patch_phantomchat(
             npub_added = bridge_npub
         data["relay_npubs"] = relay_npubs
 
-    return data, relay_added, npub_added
+        allowed = list(data.get("allowed_npubs", []))
+        if bridge_npub in allowed:
+            allowed_removed = bridge_npub
+            data["allowed_npubs"] = [n for n in allowed if n != bridge_npub]
+
+    return data, relay_added, npub_added, allowed_removed
 
 
 def _read_owned_delta(delta_dest: Path) -> dict[str, str]:
     """Load the existing owned delta, failing closed on corruption.
 
     The delta is the only record of what PhantomMeet owns in phantomchat.json
-    (the relay it prepended and the bridge npub it registered). A delta file
+    (the relay it prepended, the bridge npub it registered and any bridge npub
+    it evicted from ``allowed_npubs``). A delta file
     that exists but cannot be parsed is corruption, not absence: treating it
     as absent would let a re-apply delete the delta, after which
     ``pm unapply`` could no longer reverse the owned relay/npub. So a corrupt
@@ -697,7 +710,7 @@ def _read_owned_delta(delta_dest: Path) -> dict[str, str]:
     if not isinstance(data, dict):
         raise TypeError("owned delta is corrupt (expected a JSON object)")
     owned: dict[str, str] = {}
-    for key in ("relay_added", "npub_added"):
+    for key in ("relay_added", "npub_added", "allowed_removed"):
         if key not in data:
             continue
         value = data[key]
@@ -1111,7 +1124,7 @@ def apply_manifest(
                     f"{persona_id}/phantomchat.json: invalid JSON ({exc})"
                 )
                 continue
-            patched, relay_added, npub_added = _patch_phantomchat(
+            patched, relay_added, npub_added, allowed_removed = _patch_phantomchat(
                 pc_data, relay, bridge_npub, include_bridge
             )
             if patched == json.loads(original_text):
@@ -1136,6 +1149,8 @@ def apply_manifest(
                     owned["relay_added"] = relay_added
                 if npub_added is not None:
                     owned["npub_added"] = npub_added
+                if allowed_removed is not None:
+                    owned["allowed_removed"] = allowed_removed
                 if owned:
                     delta_writes.append(
                         _PendingWrite(delta_dest, json.dumps(owned, indent=2) + "\n")
@@ -1211,9 +1226,10 @@ def unapply_manifest(manifest_path: str | Path, target: str | Path) -> ApplyResu
     deltas — never by replacing unrelated current configuration:
 
     - ``phantomchat.json``: remove the relay and bridge npub recorded in the
-      owned delta (``.phantommeet-phantomchat.delta.json``), leaving every
-      other relay, ``relay_npubs`` entry and all other fields exactly as they
-      are.
+      owned delta (``.phantommeet-phantomchat.delta.json``) and restore a
+      bridge npub the apply evicted from ``allowed_npubs``, leaving every
+      other relay, ``relay_npubs``/``allowed_npubs`` entry and all other
+      fields exactly as they are.
     - ``kb/procedures/Meetings.md``: strip the managed marker block, keeping
       the OKF frontmatter and any operator content around it.
     - ``MEMORY.md``: strip the managed marker section, keeping the rest.
@@ -1232,7 +1248,7 @@ def unapply_manifest(manifest_path: str | Path, target: str | Path) -> ApplyResu
         if not persona_dir.is_dir():
             continue
 
-        # 1) phantomchat.json — reverse the owned relay + relay_npubs deltas.
+        # 1) phantomchat.json — reverse the owned relay/relay_npubs/allowlist deltas.
         pc_dest = persona_dir / PHANTOMCHAT_REL
         delta_dest = persona_dir / PHANTOMCHAT_DELTA_REL
         if delta_dest.exists() and pc_dest.exists():
@@ -1246,7 +1262,8 @@ def unapply_manifest(manifest_path: str | Path, target: str | Path) -> ApplyResu
                 continue
             relay_added = delta.get("relay_added")
             npub_added = delta.get("npub_added")
-            if relay_added or npub_added:
+            allowed_removed = delta.get("allowed_removed")
+            if relay_added or npub_added or allowed_removed:
                 try:
                     data = json.loads(pc_dest.read_text(encoding="utf-8"))
                 except ValueError as exc:
@@ -1279,6 +1296,19 @@ def unapply_manifest(manifest_path: str | Path, target: str | Path) -> ApplyResu
                                 PHANTOMCHAT_REL,
                                 "patch",
                                 f"removed bridge npub {npub_added!r} from relay_npubs",
+                            )
+                        )
+                    if allowed_removed:
+                        allowed = list(data.get("allowed_npubs", []))
+                        if allowed_removed not in allowed:
+                            allowed.append(allowed_removed)
+                        data["allowed_npubs"] = allowed
+                        result.changes.append(
+                            Change(
+                                persona_id,
+                                PHANTOMCHAT_REL,
+                                "patch",
+                                f"restored bridge npub {allowed_removed!r} to allowed_npubs",
                             )
                         )
                     _atomic_write(

@@ -67,9 +67,10 @@ Per persona, PhantomMeet manages:
 - `MEMORY.md` — a one-line pointer to `kb/procedures/Meetings.md` between
   `<!-- phantommeet:start -->` / `<!-- phantommeet:end -->` markers (procedural
   content stays in the KB, never in the persona's curated memory)
-- `phantomchat.json` — private relay moved first; bridge npub added to
+- `phantomchat.json` — private relay moved first; bridge npub registered in
   `relay_npubs` (phantombot's untrusted relay tier — never `allowed_npubs`,
-  which is a trust grant), with the owned delta recorded to
+  which is a trust grant) and evicted from `allowed_npubs` when a legacy apply
+  left it there, with the owned delta recorded to
   `.phantommeet-phantomchat.delta.json` so the patch is reversible
 - `legacy_kb_files` — deprecated **in place** (a `> Superseded by
   [[procedures/Meetings]]` banner is prepended); files are never deleted, so
@@ -110,9 +111,9 @@ pm apply --manifest examples/example-org.yaml \
 pm check-infra --manifest examples/example-org.yaml \
                --target ~/.local/share/phantombot/personas
 
-# Reverse PhantomMeet's owned changes (phantomchat relay + bridge npub,
-# Meetings.md block, MEMORY.md section) without touching unrelated operator
-# configuration.
+# Reverse PhantomMeet's owned changes (phantomchat relay + bridge npub, the
+# allowlist eviction, Meetings.md block, MEMORY.md section) without touching
+# unrelated operator configuration.
 pm unapply --manifest examples/example-org.yaml \
             --target ~/.local/share/phantombot/personas
 ```
