@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **The org's private relay is generated last, matching the served list.**
+  ``phantomchat_gen`` wrote the private relay first (``[relay] + public_relays``)
+  while the runtime *replaces* a persona's relay list with the one it serves
+  (``PHANTOMCHAT_RELAYS_URL``) — and the canonical list keeps the private relay
+  last. A freshly provisioned persona therefore started with an order the
+  deployment did not use, and an offline start kept that order until the first
+  successful fetch. The generator now emits the public relays first and the
+  private relay last, so the initial order agrees with what the runtime
+  resolves; the generator's order only matters before the first fetch, after
+  which the served list is authoritative.
+
 - **Norms filed as drawer rows, not a markdown drawer (#34).** On
   phantombot ≥ 1.1.282 the five memory drawers are rows in `memory.sqlite`
   (`drawer_entries`) ranked by `weight · 2^(-age/halfLife)` (norms: 365d),

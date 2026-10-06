@@ -170,7 +170,7 @@ communication:
       # PRINCIPALES: solo estas claves reciben confianza de principal (saltan el
       # judge). Vacío por defecto (fail-closed): el operador aprueba explícitamente.
       principal_npubs: []
-      # Relays públicos adicionales (el privado del org va siempre primero).
+      # Relays públicos adicionales (el privado del org va al final, tras los públicos).
       public_relays:
         - "wss://relay.damus.io"
         - "wss://nos.lol"
