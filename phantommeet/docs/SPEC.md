@@ -234,8 +234,9 @@ check runs from another machine.
 
 With `--target`, it also verifies each persona from the manifest is **fully
 applied**: `Meetings.md` present, legacy kb files removed, MEMORY markers in
-place, private relay first + bridge pubkey in `relay_npubs` in `phantomchat.json`
-(and never in `allowed_npubs`). This mirrors the `apply` logic exactly
+place, the private relay present at any position + bridge pubkey in
+`relay_npubs` in `phantomchat.json` (and never in `allowed_npubs`). This
+mirrors the `apply` logic exactly
 (read-only).
 
 The report goes to the **screen** and (unless `--no-log`) is **appended to a
@@ -305,9 +306,11 @@ Applied **idempotently** to a PhantomOrg persona installation:
   (rendered from templates; role-aware: responsible vs support).
 - `MEMORY.md` — compact "Meetings" section (bounded by
   `<!-- phantommeet:start -->` / `<!-- phantommeet:end -->` markers).
-- `phantomchat.json` (or equivalent) — ensure private relay first in relays
-  list; register the bridge pubkey in `relay_npubs` (phantombot's untrusted
-  relay tier), never in `allowed_npubs` (a trust grant that skips the threat
+- `phantomchat.json` (or equivalent) — ensure the private relay is present in
+  the relays list (its position is not asserted: the runtime resolves the list
+  from the served source); register the bridge pubkey in `relay_npubs`
+  (phantombot's untrusted relay tier), never in `allowed_npubs` (a trust grant
+  that skips the threat
   judge); evict it from `allowed_npubs` when a legacy apply left it there, so
   a re-apply heals the persona.
 - Meeting invitation tool (`meeting-invite.sh`) — installed into `tools/` of

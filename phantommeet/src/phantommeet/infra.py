@@ -445,9 +445,11 @@ def check_persona_state(
     else:
         results.append(ProbeResult(f"{prefix} MEMORY", "fail", f"missing {MEMORY_REL}"))
 
-    # 4) phantomchat.json: private relay first; the bridge npub must be in the
-    # untrusted relay_npubs tier (phantombot #423), never in allowed_npubs
-    # (a trust grant — allowlisted senders skip the threat judge).
+    # 4) phantomchat.json: the private relay must be PRESENT (its position is
+    # not asserted — phantombot resolves the relay list from the served source
+    # and rewrites this file); the bridge npub must be in the untrusted
+    # relay_npubs tier (phantombot #423), never in allowed_npubs (a trust grant
+    # — allowlisted senders skip the threat judge).
     bridge = manifest.get("bridge", {})
     relay = bridge.get("relay", "")
     bridge_npub = bridge.get("npub", "")
@@ -466,8 +468,8 @@ def check_persona_state(
 
         problems: list[str] = []
         relays = data.get("relays", [])
-        if relay and (not relays or relays[0] != relay):
-            problems.append(f"relay {relay!r} not first in relays")
+        if relay and relay not in relays:
+            problems.append(f"relay {relay!r} missing from relays")
         if bridge_npub and bridge_npub in data.get("allowed_npubs", []):
             problems.append(
                 "bridge npub in allowed_npubs (trust grant; must be removed)"

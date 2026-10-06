@@ -41,7 +41,7 @@ MEMORY_REL = Path("MEMORY.md")
 PHANTOMCHAT_REL = Path("phantomchat.json")
 
 # Reversible patch bookkeeping: records only the field delta PhantomMeet
-# owns in phantomchat.json (the private relay it moves to the front), never a
+# owns in phantomchat.json (the private relay it adds), never a
 # frozen snapshot of the whole file. ``pm unapply`` consumes it.
 PHANTOMCHAT_DELTA_REL = Path(".phantommeet-phantomchat.delta.json")
 
@@ -634,13 +634,13 @@ def _upsert_kb(existing: str, frontmatter: str, body: str) -> str:
 def _patch_phantomchat(
     data: dict[str, Any], relay: str, bridge_npub: str | None, include_bridge: bool
 ) -> tuple[dict[str, Any], str | None, str | None, str | None]:
-    """Ensure the private relay is first and the bridge npub is registered in
+    """Ensure the private relay is present and the bridge npub is registered in
     the untrusted ``relay_npubs`` tier. Returns
     ``(patched, relay_added, npub_added, allowed_removed)``:
 
     - ``relay_added`` — the relay string when PhantomMeet *added* it to the
       ``relays`` list (it was not present before) — the owned delta — or None
-      when it was already present (mere reorder) or empty.
+      when it was already present or empty.
     - ``npub_added`` — the bridge npub when PhantomMeet *added* it to
       ``relay_npubs`` (it was not present before) — the owned delta — or None.
     - ``allowed_removed`` — the bridge npub when PhantomMeet *evicted* it from
@@ -657,15 +657,17 @@ def _patch_phantomchat(
     evicted, so a re-apply self-heals a legacy persona instead of leaving the
     trust grant for a hand edit. When ``include_bridge`` is false both
     ``relay_npubs`` and ``allowed_npubs`` are left untouched.
+
+    The relay's *position* is deliberately left untouched: phantombot resolves
+    the persona's relay list from the served source and rewrites
+    ``phantomchat.json`` with it, so the order belongs to the deployment, not
+    to PhantomMeet. PhantomMeet only guarantees the relay is present.
     """
     relays = list(data.get("relays", []))
     relay_added: str | None = None
     if relay and relay not in relays:
+        relays.append(relay)
         relay_added = relay
-    if relay and relay in relays:
-        relays.remove(relay)
-    if relay:
-        relays.insert(0, relay)
     data["relays"] = relays
 
     npub_added: str | None = None
@@ -689,7 +691,7 @@ def _read_owned_delta(delta_dest: Path) -> dict[str, str]:
     """Load the existing owned delta, failing closed on corruption.
 
     The delta is the only record of what PhantomMeet owns in phantomchat.json
-    (the relay it prepended, the bridge npub it registered and any bridge npub
+    (the relay it added, the bridge npub it registered and any bridge npub
     it evicted from ``allowed_npubs``). A delta file
     that exists but cannot be parsed is corruption, not absence: treating it
     as absent would let a re-apply delete the delta, after which
@@ -1124,6 +1126,19 @@ def apply_manifest(
                     f"{persona_id}/phantomchat.json: invalid JSON ({exc})"
                 )
                 continue
+            # Validate the owned delta BEFORE deciding whether to patch: the
+            # delta is the only record `pm unapply` can reverse with, so a
+            # corrupt one must abort the apply even when this run would leave
+            # phantomchat.json unchanged — never be silently skipped.
+            delta_dest = persona_dir / PHANTOMCHAT_DELTA_REL
+            try:
+                owned = _read_owned_delta(delta_dest)
+            except (ValueError, TypeError) as exc:
+                # Fail closed: a corrupt delta must abort the apply, never be
+                # silently dropped (dropping it would orphan the owned
+                # relay/npub — pm unapply could no longer reverse them).
+                result.errors.append(f"{persona_id}: {exc}")
+                continue
             patched, relay_added, npub_added, allowed_removed = _patch_phantomchat(
                 pc_data, relay, bridge_npub, include_bridge
             )
@@ -1133,18 +1148,9 @@ def apply_manifest(
                 )
             else:
                 result.changes.append(Change(persona_id, PHANTOMCHAT_REL, "patch"))
-                # Merge this run's additions with any prior owned delta so a
-                # mere reorder (relay already present) cannot erase the
-                # ownership record `pm unapply` relies on.
-                delta_dest = persona_dir / PHANTOMCHAT_DELTA_REL
-                try:
-                    owned = _read_owned_delta(delta_dest)
-                except (ValueError, TypeError) as exc:
-                    # Fail closed: a corrupt delta must abort the apply, never
-                    # be silently dropped (dropping it would orphan the owned
-                    # relay/npub — pm unapply could no longer reverse them).
-                    result.errors.append(f"{persona_id}: {exc}")
-                    continue
+                # Merge this run's additions into the prior owned delta: a
+                # re-apply where the relay is already present adds nothing but
+                # must preserve the record `pm unapply` relies on.
                 if relay_added is not None:
                     owned["relay_added"] = relay_added
                 if npub_added is not None:
