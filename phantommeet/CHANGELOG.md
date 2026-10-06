@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **PhantomMeet no longer imposes an order on `phantomchat.json` relays.**
+  `apply` used to move the org's private relay to the front (`insert(0, …)`)
+  and `check-infra` required exactly that position — but phantombot resolves
+  the persona's relay list from the served source (`PHANTOMCHAT_RELAYS_URL` or
+  the canonical list) and rewrites `phantomchat.json` with it, so the position
+  PhantomMeet asserted was one it does not own: any deployment that serves a
+  different order (a private relay appended as a fallback) failed
+  `check-infra` on every run. `apply` now only *adds* the relay when it is
+  absent and never reorders an existing entry; `check-infra` requires
+  **presence**, not position. A relay an operator moved keeps its place on
+  re-apply, and `pm unapply` can still reverse it.
+
 - **`_patch_phantomchat` evicts a legacy bridge npub from `allowed_npubs`.**
   The bridge npub is never a principal: it belongs in the untrusted
   `relay_npubs` tier. A persona whose `allowed_npubs` still holds the bridge
