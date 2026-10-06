@@ -19,7 +19,7 @@ import tempfile
 import time
 from typing import Any
 
-from .fsutil import fsync_dir
+from .fsutil import fsync_dir, preserve_mode
 
 AUDIT_FILENAME = "audit.log"
 
@@ -231,6 +231,8 @@ def truncate(root: str, keep: int) -> None:
     lines = raw_lines(root)
     directory = os.path.dirname(os.path.abspath(path)) or "."
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".audit-", suffix=".tmp")
+    # Keep the log's permissions across the rewrite (mkstemp is 0600).
+    preserve_mode(fd, path)
     fd_unclaimed = True
     try:
         with os.fdopen(fd, "wb") as f:
