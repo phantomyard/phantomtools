@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phantomblog"
+version = "0.1.0"
+description = "Static bilingual publishing and a human-agent editorial workspace"
+requires-python = ">=3.11"
+dependencies = []
+license = {text = "MIT"}
+
+[project.scripts]
+phantomblog = "phantomblog.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["phantomblog*"]
+
+[tool.setuptools.package-data]
+phantomblog = ["resources/*.html", "resources/*.css", "resources/*.js"]

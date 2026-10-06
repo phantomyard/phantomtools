@@ -1,0 +1,23 @@
+name: PhantomBlog
+on:
+  pull_request:
+    paths: ["phantomblog/**", ".github/workflows/phantomblog-ci.yml"]
+  push:
+    branches: [main]
+    paths: ["phantomblog/**", ".github/workflows/phantomblog-ci.yml"]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: phantomblog
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Standard-library tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Python and browser source syntax
+        run: |
+          python3 -m compileall -q phantomblog
+          node --check phantomblog/resources/dashboard.js

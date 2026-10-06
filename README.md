@@ -15,6 +15,7 @@ deps, and license.
 | [`phantombridge/`](./phantombridge) | Node.js bridge between Jitsi (XMPP/MUC) and Nostr — text presence for phantombot personas in meetings: multi-room join, agent DMs (NIP-17), hardened anti-loop envelope, local HTTP API, per-side kill-switches. `bridge.js` CLI + `install.sh` + CI. |
 | [`phantommeet/`](./phantommeet) | Meeting layer for PhantomForge deployments — text participation via bridge, recordings, transcription, calendar logistics, per-scope recording custody. `pm` CLI (validate / derive-manifest / apply / check-infra). |
 | [`phantomorg/`](./phantomorg) | Spec-driven organization compiler for phantombot personas — departments, roles, actors, access policies, escalation matrix, communication rules → compiled persona files (SOUL/IDENTITY/tools/memory/kb). `po` CLI (validate / build / deploy / rollback / update). |
+| [`phantomblog/`](./phantomblog) | Static bilingual publishing with an authenticated editorial dashboard, scoped article design, reviewed agent proposals and configurable MCP deployment/social/messaging adapters. Python standard library; public sites need no build runtime. |
 
 ## Tool dependency chain
 
