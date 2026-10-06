@@ -22,6 +22,7 @@ the final crash window left by ``fsync(file) + os.replace``.
 from __future__ import annotations
 
 import os
+import stat
 
 
 def fsync_dir(directory: str) -> None:
@@ -44,3 +45,29 @@ def fsync_dir(directory: str) -> None:
         pass
     finally:
         os.close(fd)
+
+
+def preserve_mode(fd: int, target: str) -> None:
+    """Give the open file ``fd`` the permission bits ``target`` already has.
+
+    ``tempfile.mkstemp`` always creates its temporary file 0600, so renaming
+    that temp over an existing file — the atomic-replace idiom — silently
+    resets the file's permissions. On a store shared through a group (a
+    multi-persona PhantomDocs deployment) that means the first writer leaves
+    the manifest and the audit log unreadable/unwritable for every other
+    account. Copying the destination's mode onto the temp first makes the
+    replace change the *contents* and nothing else.
+
+    A first write (no ``target`` yet) is left untouched: the private 0600
+    default stands, and a shared deployment grants the group bits on the store
+    once. Best-effort — a platform without ``fchmod``, or a ``stat`` that
+    fails, leaves the temp's default mode rather than failing the commit.
+    """
+    try:
+        st = os.stat(target)
+    except OSError:
+        return
+    try:
+        os.fchmod(fd, stat.S_IMODE(st.st_mode))
+    except OSError:
+        pass

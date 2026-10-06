@@ -28,7 +28,7 @@ from typing import Any
 
 import yaml
 
-from .fsutil import fsync_dir
+from .fsutil import fsync_dir, preserve_mode
 from .identity import is_valid_hex64
 from .signing import CRYPTO_VERSION
 
@@ -123,6 +123,9 @@ def save(path: str, data: dict[str, Any]) -> None:
     """
     directory = os.path.dirname(os.path.abspath(path)) or "."
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".manifest-", suffix=".tmp")
+    # mkstemp() creates the temp file 0600; carry the destination's mode so the
+    # replace does not reset a shared store's group permissions.
+    preserve_mode(fd, path)
     fd_unclaimed = True
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:

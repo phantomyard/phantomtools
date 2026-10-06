@@ -10,10 +10,12 @@ non-POSIX platform) does not break the atomic write path.
 from __future__ import annotations
 
 import os
+import stat
+import tempfile
 from unittest import mock
 
 from phantomdocs import identity, manifest
-from phantomdocs.fsutil import fsync_dir
+from phantomdocs.fsutil import fsync_dir, preserve_mode
 from phantomdocs.identity import content_hash
 from phantomdocs.storage import LocalBackend
 
@@ -97,3 +99,51 @@ def test_blob_put_fsyncs_shard_directory(tmp_path, monkeypatch):
     # At least the blob file and the shard directory were fsynced.
     assert len(calls) >= 2
     assert backend.get(h) == b"payload"
+
+
+def test_manifest_save_preserves_permission_bits(tmp_path):
+    """An atomic replace must not reset the manifest's permissions.
+
+    ``mkstemp`` creates the temp file 0600, so a store shared through a group
+    (a multi-persona deployment) would lose its group-write bit on the first
+    save — the next persona could no longer write. ``save`` carries the
+    destination's mode onto the temp file instead.
+    """
+    if os.name != "posix":
+        return
+    path = os.path.join(str(tmp_path), "manifest.yaml")
+    data = manifest.empty_manifest("org", "docs", identity.root_mac("org", "", "docs"))
+    manifest.save(path, data)
+    os.chmod(path, 0o664)  # an operator shares the store with the group
+    manifest.save(path, data)
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o664
+
+
+def test_preserve_mode_copies_the_target_mode(tmp_path):
+    """preserve_mode gives the open fd the mode the target already has."""
+    if os.name != "posix":
+        return
+    target = os.path.join(str(tmp_path), "target")
+    with open(target, "w", encoding="utf-8") as f:
+        f.write("x")
+    os.chmod(target, 0o640)
+    fd, tmp = tempfile.mkstemp(dir=str(tmp_path))
+    try:
+        preserve_mode(fd, target)
+        assert stat.S_IMODE(os.stat(tmp).st_mode) == 0o640
+    finally:
+        os.close(fd)
+        os.unlink(tmp)
+
+
+def test_preserve_mode_leaves_a_fresh_file_private(tmp_path):
+    """With no destination yet, the private 0600 default stands."""
+    if os.name != "posix":
+        return
+    fd, tmp = tempfile.mkstemp(dir=str(tmp_path))
+    try:
+        preserve_mode(fd, os.path.join(str(tmp_path), "absent"))
+        assert stat.S_IMODE(os.stat(tmp).st_mode) == 0o600
+    finally:
+        os.close(fd)
+        os.unlink(tmp)
