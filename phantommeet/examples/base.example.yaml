@@ -136,6 +136,27 @@ infra:
       type: http
       url: http://127.0.0.1:8090/status
       host: server
+    # Recorder — a recorder can be running yet unable to record, so
+    # reachability is not enough: this fails when the local health API does
+    # not report HEALTHY (busyStatus is ignored: a check during a recording
+    # must not be a false alarm). The bridge surfaces the same recorder as
+    # `recorder.ready` in GET /status (HEALTHY + IDLE), which the persona
+    # checks before convening.
+    - name: recorder
+      type: command
+      cmd: >-
+        python3 -c "import json,urllib.request as u;
+        d=json.load(u.urlopen('http://127.0.0.1:2222/jibri/api/v1.0/health',timeout=5));
+        s=d.get('status',d);
+        assert s.get('health',{}).get('healthStatus')=='HEALTHY'"
+      host: server
+    # The recorder guardian (companion health watch, deployed separately) must
+    # be armed so an *alive but dumb* recorder is brought back between
+    # meetings. Docs only — PhantomMeet code does not depend on it.
+    - name: recorder-guardian-timer
+      type: command
+      cmd: systemctl is-active recorder-guardian.timer
+      host: server
     - name: whisper-venv
       type: file
       path: /opt/example-transcribe/venv/bin/python

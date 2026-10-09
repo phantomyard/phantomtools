@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **The invitation tool checks the recorder before inviting (v0).**
+  `tools/meeting-invite.sh` now asks the bridge (`GET /status` →
+  `recorder.ready`, the read-only capability PhantomBridge surfaces from the
+  recorder's local health API) whether the recorder is usable **before**
+  sending anything. While it is not, the invitation is withheld and the
+  responsible persona is notified via the configured `send_via`
+  (`phantombot-notify`) with the reason. `--force` overrides the gate and
+  convenes anyway, **without recording**. The bridge's admin token is read
+  **only** from the environment (`PHANTOMBRIDGE_ADMIN_TOKEN`) at run time —
+  never from the manifest; the bridge status URL is `invite.bridge_status_url`
+  (default `http://127.0.0.1:8090/status`). SPEC §3 (bridge capability table),
+  §7.2 (procedural line + override) and the new §11.6 (recorder deployment
+  probes) are updated, and §11.3's recording-cleanup obligation now names its
+  owner and a disk verification step. Tests: `tests/test_meeting_invite.py`
+  (ready / not-ready / `--force` / missing token / unreachable bridge /
+  dry-run) against a fake bridge and a fake phantombot.
+
 - **PhantomMeet no longer imposes an order on `phantomchat.json` relays.**
   `apply` used to move the org's private relay to the front (`insert(0, …)`)
   and `check-infra` required exactly that position — but phantombot resolves
