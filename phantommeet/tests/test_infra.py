@@ -311,11 +311,19 @@ def test_check_persona_state_meetings_current_includes_kb_appendix(
     from phantommeet.apply import MARKER_END, MARKER_START
 
     manifest = _renderable_manifest()
-    assert manifest.get("kb_appendix"), "fixture must carry a kb_appendix"
+    # Two blocks on purpose: the join separator between appendix blocks is
+    # only emitted with >= 2 of them. With a single block, mutating the
+    # separator in _render_kb_body would leave this test green.
+    assert len(manifest.get("kb_appendix", [])) >= 2, (
+        "fixture must exercise the appendix join separator"
+    )
     persona_dir = tmp_path / "maria"
     kb = persona_dir / "kb" / "procedures" / "Meetings.md"
     kb.parent.mkdir(parents=True)
     body = _render_managed_body_for_test(manifest, "maria")
+    assert "\n\n---\n\n" in body, (
+        "the two appendix blocks must be joined by the exact separator"
+    )
     kb.write_text(f"{MARKER_START}\n{body}{MARKER_END}\n", encoding="utf-8")
 
     results = check_persona_state("maria", persona_dir, manifest)
