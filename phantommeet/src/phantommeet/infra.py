@@ -56,7 +56,7 @@ from .apply import (
     _env,
     _persona_context,
     _personas_in_manifest,
-    _render_template,
+    _render_kb_body,
     parse_tool_mode,
     render_tool_content,
 )
@@ -384,8 +384,7 @@ def check_persona_state(
             live_body = kb_existing.split(MARKER_START, 1)[1].split(MARKER_END, 1)[0]
             try:
                 env = _env(lang)
-                kb_name = "protocol.en.md" if lang == "en" else "protocol.es.md"
-                expected_body = _render_template(env, kb_name, ctx).strip()
+                expected_body = _render_kb_body(env, manifest, ctx, lang).strip()
             except Exception as exc:  # noqa: BLE001
                 expected_body = None
                 results.append(

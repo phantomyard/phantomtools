@@ -26,10 +26,16 @@ storage:
   cleanup_after_confirm: true
 
 kb_appendix:
+  # Two blocks on purpose: with a single block the join separator emitted by
+  # _render_kb_body is never exercised, so a mutation of it would go unnoticed.
   - |-
     ## Custodia (flujo post-reunión)
 
     4. {% if destination_owner %}**{{ destination_owner }}** sube el MP4, la transcripción y el resumen a Google Drive → carpeta `{{ destination_folder }}/` ({{ destination_note }}).{% if destination_custodian %} Si {{ destination_owner }} no puede, lo hace **{{ destination_custodian }}** (custodia de la organización).{% endif %}{% else %}La persona responsable sube el MP4, la transcripción y el resumen a Google Drive (la carpeta destino la indica la solicitud).{% endif %}
+  - |-
+    ## Escalado (acuerdos sin cerrar)
+
+    Si la reunión no cierra con acuerdos, la persona responsable lo deja anotado en el acta y avisa en el chat de coordinación.
 
 defaults:
   title: reunion
