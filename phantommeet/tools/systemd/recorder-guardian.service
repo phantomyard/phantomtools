@@ -1,0 +1,16 @@
+[Unit]
+Description=PhantomMeet recorder guardian (companion health watch for the Jitsi/Jibri recorder)
+Documentation=file:/usr/local/lib/phantommeet/recorder-guardian.sh
+# Companion, never in front of the recorder: this unit declares no
+# Requires=/Wants= toward the recorder units and imposes no ordering on them,
+# so it can never gate, delay or take the recorder down.
+
+[Service]
+Type=oneshot
+# Least privilege (recommended): a dedicated user plus a sudoers/polkit
+# allowlist limited to exactly the four recorder units. See docs/SPEC.md §12.4.
+# The quotes are required: the value contains spaces.
+User=recorder-guardian
+Group=recorder-guardian
+Environment="GUARDIAN_ACTION=/usr/bin/sudo -n /usr/bin/systemctl restart jibri jibri-xorg jibri-icewm pulseaudio-jibri"
+ExecStart=/usr/local/lib/phantommeet/recorder-guardian.sh

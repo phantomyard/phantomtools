@@ -532,3 +532,206 @@ The generic checks in the reference manifest (`python3`, `bash`) cover
 PhantomMeet's own two runtime prerequisites; the org-specific checks cover
 that deployment's stack (Jitsi, relay, bridge, Whisper venv, summary key,
 finalize hook, phantombot).
+
+## 12. Recorder guardian (companion health watch)
+
+The **recorder** (§6 phase 4) is the Jibri service on the meeting host that
+produces the meeting's MP4. It has two failure modes:
+
+- **dead** — the process is not running. Already covered by systemd
+  (`Restart=always` + `StartLimitIntervalSec=0`; see §12.4). No guardian
+  needed.
+- **alive but dumb** — the process runs but cannot record (its subsystems
+  half-up, its health endpoint reporting a bad state, or not answering at
+  all). systemd sees a live process and does nothing.
+
+`tools/recorder-guardian.sh` covers the second case. It is a **companion**,
+never in front of the recorder:
+
+- It is run by a systemd **timer + oneshot** (every ~30 s) — it wraps nothing.
+  There is no `ExecStart` override, no `Requires=`, no ordering that could let
+  the guardian take the recorder down. If the guardian is broken or stopped,
+  the recorder is unaffected.
+- It owns **zero state**: no counter file, no database. "Two consecutive bad
+  readings" is decided **inside one run** (read → wait `GUARDIAN_RECHECK`,
+  default 10 s → read again; act only if both are bad).
+- Its loop brake is **independent of its own state**: it asks systemd when the
+  recorder's main process started (`systemctl show <unit> -p
+  ExecMainStartTimestamp --value`) and does not act if that is newer than
+  `GUARDIAN_GRACE` (default 180 s). A persistently broken recorder is
+  therefore restarted at most once per grace window, never in a boot loop.
+- It **never acts while a recording is in progress**: a payload whose
+  `status.busyStatus` is `BUSY` is never acted on.
+- The action is **narrow**: `systemctl restart jibri jibri-xorg jibri-icewm
+  pulseaudio-jibri`, nothing broader.
+- It is **silent when healthy** (no journal line every 30 s) and logs loudly
+  only on problems and actions.
+
+### 12.1 The recorder's self-reported health
+
+The guardian reads the recorder's **local** health endpoint
+(`http://127.0.0.1:2222/jibri/api/v1.0/health` by default) and classifies the
+answer:
+
+| Answer | Verdict | Behaviour |
+|---|---|---|
+| `status.busyStatus == "BUSY"` | `busy` | never act (a recording is in progress) |
+| `status.health.healthStatus` present and not `HEALTHY` | `act` | candidate to restart (needs the double-read) |
+| `status.health.healthStatus == "HEALTHY"` | `ok` | nothing to do |
+| parseable `status` object **without** a `health` key | `ok` | nothing to do |
+| no answer / unparseable body | `unknown` | treated like `act` (needs the double-read) |
+
+The "`status` without `health` → `ok`" rule is deliberate: a Jitsi upgrade
+can change the payload shape, and the guardian must never restart the recorder
+in a loop because the shape moved. A payload it cannot parse is treated as
+`act` only after the double-read, so a transient hiccup never causes a
+restart.
+
+Verified live payload shape:
+
+```json
+{"status":{"busyStatus":"IDLE","health":{"healthStatus":"HEALTHY","details":{}}}}
+```
+
+### 12.2 Two independent lanes
+
+Recording assurance has **two independent lanes**, and neither can do the
+other's job:
+
+- **Permanent lane — the guardian on the host.** It runs whether or not anyone
+  is watching, and it is the only lane that can bring a dumb recorder back. It
+  also covers reused links and meetings that overrun, because it watches the
+  recorder between meetings, not only at the moment a meeting starts.
+- **Persona lane — the persona asks before convening.** Before a persona
+  convenes or joins a meeting it checks the recorder's health (the same
+  information, read by the persona) and warns or refuses if the recorder is
+  unusable. This is a *pre-flight*, not a fix: it cannot restart anything, and
+  it only helps when a persona is the one convening.
+
+### 12.3 Limits (what the guardian does NOT do)
+
+- **The Jitsi Record button cannot be hooked.** Button presses reach the
+  recorder through Jitsi's own signalling; observing them would require
+  forking Jitsi. PhantomMeet does **not** do that and does not claim to. The
+  guardian watches the recorder's health, not the button.
+- **Reused links and meetings that overrun** are covered by the permanent lane
+  (§12.2) because it always runs; the guardian does not need to know that a
+  meeting is happening in order to keep the recorder healthy.
+- **The live `BUSY` path needs a real recording to test end to end.** The unit
+  tests exercise the classification against a fake health server; confirming
+  the `BUSY` behaviour against the real recorder requires a real in-progress
+  recording on a meeting host.
+
+### 12.4 Install recipe (Jitsi + Jibri host)
+
+**Step 0 — boot hardening (already deployed in the reference host).** Make
+sure a boot-ordering hiccup cannot leave the recorder dead. On the recorder
+units:
+
+- use `Wants=` (not `Requires=`) from the recorder units toward their
+  dependencies, so a slow or failed dependency does not take the recorder
+  down at boot;
+- `Restart=always` on the recorder service;
+- `StartLimitIntervalSec=0` in the `[Unit]` section, so systemd never gives up
+  restarting it.
+
+Example (recorder service):
+
+```ini
+[Unit]
+Wants=jibri-xorg.service jibri-icewm.service pulseaudio-jibri.service
+StartLimitIntervalSec=0
+
+[Service]
+Restart=always
+```
+
+**Step 1 — install the script.**
+
+```bash
+install -D -m 0755 tools/recorder-guardian.sh \
+    /usr/local/lib/phantommeet/recorder-guardian.sh
+```
+
+**Step 2 — create the dedicated user.**
+
+```bash
+useradd --system --no-create-home --shell /usr/sbin/nologin recorder-guardian
+```
+
+**Step 3 — allowlist exactly the four units.** Pick ONE variant.
+
+*Variant A — sudoers (matches the shipped unit).* `/etc/sudoers.d/recorder-guardian`:
+
+```
+Cmnd_Alias RECORDER_RESTART = /usr/bin/systemctl restart jibri jibri-xorg jibri-icewm pulseaudio-jibri
+recorder-guardian ALL=(root) NOPASSWD: RECORDER_RESTART
+```
+
+The shipped unit sets `GUARDIAN_ACTION=/usr/bin/sudo -n /usr/bin/systemctl
+restart jibri jibri-xorg jibri-icewm pulseaudio-jibri`, which is exactly the
+command the alias allows.
+
+*Variant B — polkit (no sudo).* `/etc/polkit-1/rules.d/49-recorder-guardian.rules`:
+
+```javascript
+polkit.addRule(function (action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (subject.user !== "recorder-guardian") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var units = ["jibri.service", "jibri-xorg.service",
+                 "jibri-icewm.service", "pulseaudio-jibri.service"];
+    if (units.indexOf(action.lookup("unit")) >= 0
+        && action.lookup("verb") === "restart") {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});
+```
+
+With polkit, drop the `sudo` prefix: set `GUARDIAN_ACTION=/usr/bin/systemctl
+restart jibri jibri-xorg jibri-icewm pulseaudio-jibri` (in the unit or a
+drop-in).
+
+**Step 4 — install the units.**
+
+```bash
+install -m 0644 tools/systemd/recorder-guardian.service /etc/systemd/system/
+install -m 0644 tools/systemd/recorder-guardian.timer   /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now recorder-guardian.timer
+```
+
+**Step 5 — verify.**
+
+```bash
+systemctl list-timers recorder-guardian.timer     # next run scheduled
+journalctl -u recorder-guardian.service -n 5      # silent when healthy
+GUARDIAN_OBSERVE=1 bash tools/recorder-guardian.sh # dry-run on demand
+```
+
+**Root fallback (no allowlist).** If you cannot create a dedicated user or an
+allowlist, run the oneshot as root via a drop-in
+`/etc/systemd/system/recorder-guardian.service.d/root.conf`:
+
+```ini
+[Service]
+User=root
+Group=root
+Environment="GUARDIAN_ACTION=/usr/bin/systemctl restart jibri jibri-xorg jibri-icewm pulseaudio-jibri"
+```
+
+**Environment knobs** (all optional, sane defaults):
+
+| Knob | Default | Meaning |
+|---|---|---|
+| `GUARDIAN_HEALTH_URL` | `http://127.0.0.1:2222/jibri/api/v1.0/health` | recorder health endpoint |
+| `GUARDIAN_RECHECK` | `10` | seconds between the two readings in a run |
+| `GUARDIAN_GRACE` | `180` | seconds after the recorder's main-process start during which it is left alone |
+| `GUARDIAN_ACTION` | restart the four units | action command; **empty → log only, never act** |
+| `GUARDIAN_OBSERVE` | `0` | `1` → never execute the action, only log the intent |
+| `GUARDIAN_UNIT` | `jibri` | unit whose main-process start time gates the action |
+
