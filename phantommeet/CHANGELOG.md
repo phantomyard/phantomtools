@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **Add the recorder guardian — a companion health watch for the Jitsi/Jibri
+  recorder.** A recorder can be *dead* (already covered by systemd
+  `Restart=always` + `StartLimitIntervalSec=0`) or *alive but dumb* (running
+  but unable to record). This adds `tools/recorder-guardian.sh`, run from a
+  systemd timer + oneshot, that reads the recorder's local health endpoint and
+  restarts the four recorder units when two consecutive in-run readings are
+  bad. It is a companion only — no `ExecStart` wrapper, no ordering — so it can
+  never take the recorder down; it owns **zero state** (the double-read is
+  inside one run); its loop brake asks systemd for the recorder's main-process
+  start time and holds off inside a grace window; it **never acts while a
+  recording is in progress** (`busyStatus == BUSY`); the action is narrow
+  (exactly `jibri jibri-xorg jibri-icewm pulseaudio-jibri`); and it stays
+  silent when healthy. Ships `tools/systemd/recorder-guardian.{service,timer}`
+  (dedicated user + a sudoers/polkit allowlist limited to those four units,
+  with a documented root fallback) and end-to-end tests running the real script
+  against a fake health server. SPEC §12 documents the design, the two
+  independent lanes (permanent guardian on the host; the persona asking before
+  convening), the limits (the Record button cannot be hooked; reused links and
+  overruns are covered by the permanent lane; the live BUSY test needs a real
+  recording) and the install recipe (including the already-deployed boot
+  hardening: `Wants=` instead of `Requires=`, `Restart=always`,
+  `StartLimitIntervalSec=0`).
+
 - **PhantomMeet no longer imposes an order on `phantomchat.json` relays.**
   `apply` used to move the org's private relay to the front (`insert(0, …)`)
   and `check-infra` required exactly that position — but phantombot resolves
