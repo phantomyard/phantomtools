@@ -64,6 +64,7 @@ manifest):
 | Status | `GET /status` (rooms, room nicks, personas, XMPP state) |
 | List artifacts | `GET /recordings` / DM command (e.g. `grabaciones`) |
 | Download artifact | `GET /recordings/:name` (path-traversal guarded) |
+| **Recorder readiness** | **`GET /status` → `recorder.ready`** — read-only verdict from the recorder's local health API (`HEALTHY` + `IDLE` = ready; short reason otherwise). Surfaced by the bridge, never blocking the status path; the convocation tool checks it **before inviting** (§7.2) |
 | Room → personas | room chat mirrored as encrypted DMs to authorized personas |
 | Personas → room | persona DM `[room] text` injected into the room as `[name] text` |
 
@@ -370,6 +371,16 @@ A bash script rendered from `templates/tools/meeting-invite.sh.j2`:
 - `--dry-run` prints everything without side effects. The room password is
   declared (`--password-vault` / `--password-file`) but **never read and never
   broadcast** — in dry-run and real run alike.
+- **checks the recorder before inviting** (v0): before sending anything it
+  asks the bridge (`GET /status` → `recorder.ready`, §3) whether the recorder
+  is usable. If it is not, the invitation is **not sent** and the responsible
+  persona is notified via the configured `send_via` (`phantombot-notify`) with
+  the reason. `--force` overrides the gate and convenes anyway, **without
+  recording**; `--dry-run` is a pure preview and skips the check. The bridge's
+  admin token is read **only** from the environment
+  (`PHANTOMBRIDGE_ADMIN_TOKEN`) at run time — never from the manifest; the
+  bridge status URL is `invite.bridge_status_url` (default
+  `http://127.0.0.1:8090/status`).
 
 Applying PhantomMeet must never break the existing installation:
 `--dry-run` reports every change before writing; all operations are
@@ -462,8 +473,15 @@ Internet ──► 443/4443  meeting host (Jitsi web/media)
 - **Relay patch maintenance** — the local whitelist/gift-wrap patch must be
   re-applied after every upstream relay update.
 - **Service health monitoring** — systemd units; bridge health via `GET /status`.
-- **Recording cleanup** — delete artifacts from the host after confirmed upload
-  to the organization storage (the responsible persona does this).
+- **Recording cleanup** — **owner: the responsible persona** (the custodian
+  named in `storage.custodian`; a scoped lead falls back to it — see the
+  post-meeting custody flow in `kb_appendix`). Delete the recording (and its
+  `.txt` / `.resumen.md`) from the host **only after** the destination is
+  confirmed — the uploaded artifact is present and non-empty in the
+  organization storage — and **verify the disk actually freed the space** (the
+  file is gone *and* free space went up: compare `df` on the recordings dir
+  before/after). Deleting without confirming the destination risks permanent
+  loss; keeping it risks a full disk (§11.4).
 - **Disk space & log rotation** — recordings and logs grow without bound if
   nobody watches them.
 - **TLS certificate renewal** — broken renewal = meeting links stop working.
@@ -530,5 +548,41 @@ check belongs to another machine (`host:` mismatch) — re-run with the right
 
 The generic checks in the reference manifest (`python3`, `bash`) cover
 PhantomMeet's own two runtime prerequisites; the org-specific checks cover
-that deployment's stack (Jitsi, relay, bridge, Whisper venv, summary key,
-finalize hook, phantombot).
+that deployment's stack (Jitsi, relay, bridge, recorder, Whisper venv,
+summary key, finalize hook, phantombot).
+
+### 11.6 Recorder probes (deployment verification)
+
+A recorder can be running while **unable to record**, so reachability alone
+is not enough. Two **read-only** `command` probes make the recorder visible in
+the same `pm check-infra` run — they need no PhantomMeet code, because the
+generic `command` probe already covers this (docs only; no code depends on the
+guardian):
+
+```yaml
+- name: recorder                  # local health API reachable + HEALTHY
+  type: command
+  cmd: >-
+    python3 -c "import json,urllib.request as u;
+    d=json.load(u.urlopen('http://127.0.0.1:2222/jibri/api/v1.0/health',timeout=5));
+    s=d.get('status',d);
+    assert s.get('health',{}).get('healthStatus')=='HEALTHY'"
+  host: server
+- name: recorder-guardian-timer    # the companion guardian must be armed
+  type: command
+  cmd: systemctl is-active recorder-guardian.timer
+  host: server
+```
+
+- The **recorder** probe fails when the recorder's local health API is
+  unreachable or reports anything other than `HEALTHY`. It deliberately
+  ignores `busyStatus`: the *readiness* rule at convocation time is `HEALTHY`
+  + `IDLE` (§3, §7.2), but a deployment check that happened during a
+  recording would be a false alarm.
+- The **timer** probe confirms `recorder-guardian.timer` is armed. The
+  guardian is a **companion** health watch deployed separately (it observes
+  the recorder and restarts it when it goes *alive but dumb*); it is **not**
+  required by PhantomMeet and no code depends on it, so a deployment that does
+  not run it can simply drop this probe.
+- Run both on the meeting host (`host: server`, or whatever `host:` the
+  deployment uses); on any other machine they are SKIPped (§11.5).

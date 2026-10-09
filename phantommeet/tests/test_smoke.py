@@ -381,6 +381,11 @@ def test_meeting_invite_never_broadcasts_password(
                 "junta directiva",
                 "--password-file",
                 str(pw_file),
+                # The recorder preflight (v0) is orthogonal to what this test
+                # checks (the broadcast never carries the password): no bridge
+                # token is configured here, so force the send. The gate itself
+                # is covered by tests/test_meeting_invite.py.
+                "--force",
             ],
             capture_output=True,
             text=True,

@@ -25,6 +25,12 @@
   "roomSuffix": "@conference.meet.example.com",
   "startRooms": [],
   "httpPort": 8090,
+  "recorder": {
+    "_comment": "Read-only recorder readiness, surfaced in GET /status as `recorder`. The bridge probes this LOCAL health API (Jibri default) on a background interval with a short timeout and never blocks /status. Rule: HEALTHY + IDLE = ready. Omit the block to keep the Jibri default.",
+    "healthUrl": "http://127.0.0.1:2222/jibri/api/v1.0/health",
+    "timeoutMs": 2000,
+    "refreshSecs": 15
+  },
   "xmpp": {
     "service": "xmpps://127.0.0.1:5223",
     "domain": "auth.meet.example.com",

@@ -26,7 +26,7 @@ versioned: the `config.json.bak` files contain secrets).
   - `POST /join {room, nick?, password?, timeout?}` — join a room
   - `POST /leave {room}` — leave a room
   - `POST /pause {side: jitsi|nostr|both, paused: bool}` — **per-side kill-switch**: pause/resume the Jitsi and/or Nostr side independently. nostr paused = agent DMs are silently ignored (bots get no replies → no token burn); jitsi paused = rooms are left and commands answer "paused". `config.paused` sets the initial state at startup.
-  - `GET /status` — rooms, nicks, agents, XMPP state, **paused state**
+  - `GET /status` — rooms, nicks, agents, XMPP state, **paused state**, and a read-only **recorder** verdict (see below)
   - `GET /recordings` / `GET /recordings/:name` — list/download recordings
     (both require the **admin token** — AUDIT M05 BLOCKING 1; the listing no
     longer hands out signed download URLs anonymously; path-traversal guarded).
@@ -74,6 +74,55 @@ versioned: the `config.json.bak` files contain secrets).
   still-recoverable delivered messages (break exactly-once). Rejected /
   non-admitted wraps never move it, and the watermark is monotonic and
   requires prior real progress to advance (AUDIT-10).
+
+## Recorder readiness (read-only) — v0
+
+A Jitsi/Jibri **recorder** can be *dead* (the process is gone — systemd
+covers it) or *alive but dumb* (running yet unable to record). In the second
+case meetings still work, so nobody notices until the **Record button just
+fails**. The bridge surfaces a read-only **recorder verdict** in `GET /status`
+so a persona can check it **before convening**: PhantomMeet's `meeting-invite`
+tool refuses to invite while the recorder is not ready.
+
+This is a **project capability, never per-site glue** — the rule and the
+health URL live in the bridge; the personas only read the boolean.
+
+- **Rule:** `HEALTHY` + `IDLE` = **ready**. Anything else — unhealthy, busy,
+  no answer, timeout, an unrecognized payload — is **not ready**, with a short
+  reason. (`BUSY` is reported distinctly: a recording is in progress.)
+- **Where:** `GET /status` → `recorder`:
+
+```json
+"recorder": {
+  "ready": true,
+  "reason": "recorder healthy and idle",
+  "busyStatus": "IDLE",
+  "healthStatus": "HEALTHY",
+  "checkedAt": "2026-10-09T14:00:00.000Z",
+  "ageSecs": 3
+}
+```
+
+- **How:** the bridge queries the recorder's **LOCAL** health API (Jibri:
+  `http://127.0.0.1:2222/jibri/api/v1.0/health`) on a **background interval**
+  with a short timeout. `GET /status` returns the **cached** verdict and
+  **never blocks or slows** on the probe.
+- **Payload shapes:** accepted either top-level (`{"busyStatus":…,
+  "health":{…}}`) or wrapped under `"status"` (the shape verified live on the
+  reference Jibri), so a payload-shape change cannot wedge the gate.
+- **Config** (optional; Jibri defaults shown):
+
+```json
+"recorder": {
+  "healthUrl": "http://127.0.0.1:2222/jibri/api/v1.0/health",
+  "timeoutMs": 2000,
+  "refreshSecs": 15
+}
+```
+
+Without Jitsi rooms (`mode: nostr`) there is no recorder to check, so the
+bridge reports `{"ready": false, "reason": "not a Jitsi deployment …"}`
+instead of probing.
 
 ## Installation
 
@@ -539,6 +588,20 @@ curl -s http://127.0.0.1:8090/status | jq .routing
 Test: `node test-org-routing.js` (15 tests: unit + bridge integration).
 
 ## Changelog
+
+- **Unreleased** — read-only **recorder readiness** in `GET /status`
+  (`recorder`). A Jitsi/Jibri recorder can be running yet unable to record, so
+  the Record button fails silently while meetings keep working. The bridge now
+  probes the recorder's **local** health API on a background interval (short
+  timeout; Jibri default `http://127.0.0.1:2222/jibri/api/v1.0/health`) and
+  surfaces `{ready, reason, busyStatus, healthStatus, checkedAt, ageSecs}` in
+  `/status` — `HEALTHY` + `IDLE` = ready; anything else is not ready with a
+  short reason. `GET /status` returns the cached verdict and **never blocks**
+  on the probe; without Jitsi rooms it reports "not a Jitsi deployment"
+  instead of probing. This is the project capability PhantomMeet's
+  `meeting-invite` tool reads before convening. New config block `recorder`
+  (optional). Tests: `test-recorder-health.js` (classifier, probe against a
+  fake health server, `/status` integration, non-blocking status).
 
 - **Unreleased** — startup relay-reachability diagnostic: the bridge warns when
   `nostr.relay` is missing from the canonical relay list its personas resolve
