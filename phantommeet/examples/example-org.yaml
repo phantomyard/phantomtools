@@ -135,6 +135,15 @@ infra:
     type: http
     url: http://127.0.0.1:8090/status
     host: server
+  - name: recorder
+    type: command
+    cmd: python3 -c "import json,urllib.request as u; d=json.load(u.urlopen('http://127.0.0.1:2222/jibri/api/v1.0/health',timeout=5));
+      s=d.get('status',d); assert s.get('health',{}).get('healthStatus')=='HEALTHY'"
+    host: server
+  - name: recorder-guardian-timer
+    type: command
+    cmd: systemctl is-active recorder-guardian.timer
+    host: server
   - name: whisper-venv
     type: file
     path: /opt/example-transcribe/venv/bin/python

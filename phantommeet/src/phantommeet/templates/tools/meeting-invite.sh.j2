@@ -13,7 +13,7 @@
 # Usage:
 #   meeting-invite.sh --title "..." --type <type> --datetime <ISO-8601> \
 #       --recipients "@a,@b" [--topic <topic>] \
-#       [--password-vault <name> | --password-file <path>] [--dry-run]
+#       [--password-vault <name> | --password-file <path>] [--force] [--dry-run]
 #
 # Flags:
 #   --title TEXT          Meeting title (required)
@@ -27,7 +27,17 @@
 #                         the vault; never read or broadcast here)
 #   --password-file PATH  Declare the room is password-locked (secret lives in
 #                         the file; never read or broadcast here)
+#   --force               Convene even when the recorder is not ready (the
+#                         meeting is not recorded; see the recorder preflight)
 #   --dry-run             Print everything without sending anything
+#
+# Recorder preflight: before sending any invitation this tool asks the bridge
+# (GET /status -> recorder.ready) whether the recorder is usable. If it is not,
+# the invitation is NOT sent and the responsible persona is notified via the
+# configured send_via (phantombot-notify), with the reason. --force overrides
+# this and convenes anyway, WITHOUT recording. --dry-run is a pure preview and
+# skips the check. The bridge's admin token is read ONLY from the environment
+# (PHANTOMBRIDGE_ADMIN_TOKEN) at run time, never from the manifest.
 #
 # Announcement card format: the manifest may define a custom card
 # (invite.card) using the tokens %TITLE%, %RECIPIENTS%, %DATETIME%,
@@ -49,6 +59,11 @@ set -euo pipefail
 PHANTOMBOT_BIN={{ invite.phantombot_bin | default('phantombot') | shquote }}
 PERSONA={{ name | shquote }}                      # the persona running this script
 MEET_BASE_URL={{ invite.meet_base_url | default('') | shquote }}
+# Bridge local HTTP API used for the recorder preflight (GET /status). The
+# admin token is NOT here: it is read from PHANTOMBRIDGE_ADMIN_TOKEN at run
+# time (never stored in the manifest). Override the URL per deployment with
+# invite.bridge_status_url.
+BRIDGE_STATUS_URL={{ invite.bridge_status_url | default('http://127.0.0.1:8090/status') | shquote }}
 ROOM_NAMING={{ rooms.naming | default('{YYYY-MM-DD}-{HH-MM}_{topic}') | shquote }}
 LANGUAGE={{ language | shquote }}
 # Personalized announcement card (optional). Empty string = built-in format.
@@ -58,7 +73,7 @@ CARD_TEMPLATE={{ invite.card | default('') | shquote }}
 # =========================================================================
 {% raw %}
 usage() {
-  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
   exit 1
 }
 
@@ -70,6 +85,7 @@ RECIPIENTS=""
 TOPIC=""
 PASSWORD_VAULT=""
 PASSWORD_FILE=""
+FORCE=0
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -81,6 +97,7 @@ while [[ $# -gt 0 ]]; do
     --topic) TOPIC="$2"; shift 2 ;;
     --password-vault) PASSWORD_VAULT="$2"; shift 2 ;;
     --password-file) PASSWORD_FILE="$2"; shift 2 ;;
+    --force) FORCE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     *) echo "unknown option: $1" >&2; usage ;;
   esac
@@ -131,6 +148,77 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     exit 1
   fi
 fi
+
+# --- recorder preflight (v0) ------------------------------------------------
+# Before inviting, ask the bridge whether the recorder is usable. The bridge
+# owns the readiness rule (HEALTHY + IDLE) and exposes it in GET /status; this
+# tool only reads `recorder.ready`. The admin token is read from the
+# environment ONLY (PHANTOMBRIDGE_ADMIN_TOKEN) — never from the manifest. No
+# token, an unreachable bridge, or a not-ready recorder all mean "do not
+# invite"; pass --force to convene anyway, without recording. Uses python3
+# (already a PhantomMeet prerequisite) for the HTTP GET + JSON parse, so no
+# extra dependency (curl/jq) is introduced.
+RECORDER_READY=0
+RECORDER_REASON="recorder not checked"
+
+recorder_preflight() {
+  local out
+  out="$(python3 - "$BRIDGE_STATUS_URL" <<'PY' 2>/dev/null
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+url = sys.argv[1]
+token = os.environ.get("PHANTOMBRIDGE_ADMIN_TOKEN", "").strip()
+if not token:
+    print("ERROR PHANTOMBRIDGE_ADMIN_TOKEN is not set (the bridge /status needs its admin token)")
+    raise SystemExit(0)
+req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+try:
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        raw = resp.read().decode("utf-8", "replace")
+except urllib.error.HTTPError as exc:
+    print("ERROR bridge status returned HTTP %s" % exc.code)
+    raise SystemExit(0)
+except Exception as exc:
+    print("ERROR bridge unreachable at %s: %s" % (url, exc))
+    raise SystemExit(0)
+try:
+    data = json.loads(raw)
+except Exception:
+    print("ERROR unrecognized bridge status payload")
+    raise SystemExit(0)
+rec = data.get("recorder") if isinstance(data, dict) else None
+if not isinstance(rec, dict):
+    print("ERROR bridge status has no recorder field (is the bridge up to date?)")
+    raise SystemExit(0)
+if rec.get("ready") is True:
+    print("READY")
+else:
+    print("NOTREADY " + str(rec.get("reason") or "recorder not ready"))
+PY
+)" || out=""
+  case "$out" in
+    READY) RECORDER_READY=1; RECORDER_REASON="recorder ready"; return 0 ;;
+    NOTREADY\ *) RECORDER_REASON="${out#NOTREADY }"; return 1 ;;
+    ERROR\ *) RECORDER_REASON="${out#ERROR }"; return 1 ;;
+    *) RECORDER_REASON="could not verify the recorder (python3 missing, or the bridge status was unreadable)"; return 1 ;;
+  esac
+}
+
+# Language-aware message sent to the responsible persona when the invitation
+# is withheld (same send_via as the invitation itself: phantombot notify).
+recorder_refusal_message() {
+  if [[ "$LANGUAGE" == "es" ]]; then
+    printf '⚠️ Reunión NO agendada: la grabadora no está disponible (%s). "%s" para %s a las %s no se ha invitado. Arregla la grabadora y vuelve a intentarlo, o usa --force para convocar sin grabación.' \
+      "$RECORDER_REASON" "$TITLE" "$RECIPIENTS" "$DATETIME"
+  else
+    printf '⚠️ Meeting NOT scheduled: the recorder is not usable (%s). "%s" for %s at %s was not invited. Fix the recorder and retry, or use --force to convene without recording.' \
+      "$RECORDER_REASON" "$TITLE" "$RECIPIENTS" "$DATETIME"
+  fi
+}
 
 # --- derive the room name from the naming convention ----------------------
 slug() {
@@ -220,6 +308,27 @@ ${INVITE_LINK}"
 ${INVITE_PASSWORD}"
 fi
 
+# --- recorder preflight: never invite while the recorder is unusable --------
+# If the recorder is not ready the invitation is withheld and the responsible
+# persona is notified; --force convenes anyway, without recording. --dry-run is
+# a pure preview (no network, no side effects) and therefore never gates.
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  recorder_preflight || {
+    if [[ "$FORCE" -eq 1 ]]; then
+      echo "warning: recorder not ready — ${RECORDER_REASON}; --force given: convening WITHOUT recording" >&2
+    else
+      echo "error: recorder not ready — ${RECORDER_REASON}" >&2
+      if "${PHANTOMBOT_BIN}" notify --message "$(recorder_refusal_message)" --persona "${PERSONA}"; then
+        echo "invitation NOT sent: recorder not ready (notified the responsible persona)"
+      else
+        echo "warning: could not notify the responsible persona about the recorder" >&2
+        echo "invitation NOT sent: recorder not ready"
+      fi
+      exit 1
+    fi
+  }
+fi
+
 # --- send the invitation as a notification only ---------------------------
 # No cross-persona scheduling and no persona switch happen here. Each
 # recipient's own runtime decides, from its own scheduled state, whether to
@@ -238,6 +347,13 @@ fi
 # read, and never broadcast), so it is safe to echo verbatim.
 echo "---"
 echo "room       : ${room_name}"
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "recorder   : not checked (--dry-run)"
+elif [[ "$RECORDER_READY" -eq 1 ]]; then
+  echo "recorder   : ready"
+else
+  echo "recorder   : not ready (${RECORDER_REASON})"
+fi
 echo "invite     :"
 echo "${invite_text}"
 exit 0

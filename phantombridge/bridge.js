@@ -2935,6 +2935,132 @@ async function persistRoomTimeout(room, timeout) {
 }
 
 // ---------------------------------------------------------------------------
+// Recorder readiness (read-only) — is the Jitsi/Jibri recorder usable?
+// ---------------------------------------------------------------------------
+// A recorder can be DEAD (the process is gone — systemd covers that) or ALIVE
+// BUT DUMB (running yet unable to record). In the second case meetings still
+// work, so nobody notices until the Record button fails. The bridge surfaces
+// the recorder's readiness in GET /status so a persona can check it BEFORE
+// convening: PhantomMeet's meeting-invite tool refuses to invite while the
+// recorder is not ready (SPEC §3 capability table, §7.2).
+//
+// This is a PROJECT capability, never per-site glue: the rule and the health
+// URL live here, in the bridge; the personas only read the boolean.
+//
+// Rule: HEALTHY + IDLE = ready. Anything else — unhealthy, busy, no answer,
+// timeout, unrecognized payload — is NOT ready, with a short reason.
+//
+// It NEVER blocks or slows /status: a background monitor refreshes a cached
+// verdict on its own interval (with a short timeout) and /status returns the
+// cache. The payload is accepted either top-level ({"busyStatus":...,
+// "health":{...}}) or wrapped under "status" (the shape verified live on the
+// reference Jibri) so a payload-shape change cannot wedge the gate.
+const RECORDER_HEALTH_URL = (CONFIG.recorder && CONFIG.recorder.healthUrl) ||
+  'http://127.0.0.1:2222/jibri/api/v1.0/health';
+const RECORDER_TIMEOUT_MS = num(CONFIG.recorder && CONFIG.recorder.timeoutMs, 2000, 100, 30000);
+const RECORDER_REFRESH_MS = num(CONFIG.recorder && CONFIG.recorder.refreshSecs, 15, 1, 3600) * 1000;
+
+// Cached verdict (read by /status). /status never awaits the probe.
+const RECORDER = {
+  ready: false,
+  reason: 'recorder not checked yet',
+  busyStatus: null,
+  healthStatus: null,
+  checkedAt: null,
+};
+
+// Pure classifier: a parsed health payload -> {ready, reason, busyStatus,
+// healthStatus}. Exported so the readiness rule is unit-testable on its own.
+function classifyRecorderHealth(payload) {
+  const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+  const body = (isObj(payload) && isObj(payload.status)) ? payload.status : payload;
+  if (!isObj(body)) {
+    return {ready: false, reason: 'unrecognized recorder health payload', busyStatus: null, healthStatus: null};
+  }
+  const busyStatus = typeof body.busyStatus === 'string' ? body.busyStatus.toUpperCase() : '';
+  const health = body.health;
+  const healthStatus = (isObj(health) && typeof health.healthStatus === 'string')
+    ? health.healthStatus.toUpperCase() : '';
+  if (busyStatus === 'BUSY') {
+    return {ready: false, reason: 'recorder busy (a recording is in progress)', busyStatus, healthStatus};
+  }
+  if (healthStatus !== 'HEALTHY') {
+    return {
+      ready: false,
+      reason: 'recorder not healthy' + (healthStatus ? ' (' + healthStatus + ')' : ' (no health status reported)'),
+      busyStatus, healthStatus,
+    };
+  }
+  if (busyStatus !== 'IDLE') {
+    return {ready: false, reason: 'recorder state is ' + (busyStatus || 'unknown') + ' (expected IDLE)', busyStatus, healthStatus};
+  }
+  return {ready: true, reason: 'recorder healthy and idle', busyStatus, healthStatus};
+}
+
+// Async probe with a short timeout. Never throws.
+async function probeRecorderHealth(url = RECORDER_HEALTH_URL, timeoutMs = RECORDER_TIMEOUT_MS) {
+  try {
+    const res = await fetch(url, {signal: AbortSignal.timeout(timeoutMs)});
+    if (!res.ok) {
+      return {ready: false, reason: 'recorder health API returned HTTP ' + res.status, busyStatus: null, healthStatus: null};
+    }
+    const text = await res.text();
+    let payload;
+    try { payload = JSON.parse(text); }
+    catch (_) { return {ready: false, reason: 'unrecognized recorder health payload', busyStatus: null, healthStatus: null}; }
+    return classifyRecorderHealth(payload);
+  } catch (e) {
+    return {ready: false, reason: 'recorder health API unreachable: ' + ((e && e.message) || String(e)), busyStatus: null, healthStatus: null};
+  }
+}
+
+let recorderProbeInFlight = false;
+async function refreshRecorderHealth() {
+  if (recorderProbeInFlight) return getRecorderState(); // never overlap probes
+  recorderProbeInFlight = true;
+  try {
+    const verdict = await probeRecorderHealth();
+    RECORDER.ready = verdict.ready;
+    RECORDER.reason = verdict.reason;
+    RECORDER.busyStatus = verdict.busyStatus;
+    RECORDER.healthStatus = verdict.healthStatus;
+    RECORDER.checkedAt = Date.now();
+  } finally {
+    recorderProbeInFlight = false;
+  }
+  return getRecorderState();
+}
+
+function getRecorderState() {
+  return {
+    ready: !!RECORDER.ready,
+    reason: RECORDER.reason,
+    busyStatus: RECORDER.busyStatus,
+    healthStatus: RECORDER.healthStatus,
+    checkedAt: RECORDER.checkedAt ? new Date(RECORDER.checkedAt).toISOString() : null,
+    ageSecs: RECORDER.checkedAt ? Math.round((Date.now() - RECORDER.checkedAt) / 1000) : null,
+  };
+}
+
+// The recorder belongs to the Jitsi/Jibri side: without Jitsi rooms the bridge
+// reports honestly that there is no recorder instead of probing 127.0.0.1:2222.
+function recorderStatusForApi() {
+  if (!JITSI_MODE) {
+    return {ready: false, reason: 'not a Jitsi deployment (mode ' + MODE + ')', busyStatus: null, healthStatus: null, checkedAt: null, ageSecs: null};
+  }
+  return getRecorderState();
+}
+
+// Background monitor (production only): one probe now, then every refresh
+// interval. unref() so it never keeps the process alive.
+function startRecorderMonitor() {
+  refreshRecorderHealth().catch(() => {});
+  const timer = setInterval(() => { refreshRecorderHealth().catch(() => {}); }, RECORDER_REFRESH_MS);
+  if (timer.unref) timer.unref();
+  return timer;
+}
+
+// ---------------------------------------------------------------------------
 // API HTTP local
 // ---------------------------------------------------------------------------
 // MEDIO-7 (audit 462e62b): the HTTP MUTATION endpoints (/join, /leave,
@@ -3218,6 +3344,8 @@ const server = http.createServer((req, res) => {
         evictedHashes: ANTILOOP.evictedHashes,
       },
       xmpp: JITSI_MODE ? (xmpp.status ? xmpp.status : 'connected?') : 'n/a',
+      // Read-only recorder readiness (HEALTHY + IDLE), cached by the monitor.
+      recorder: recorderStatusForApi(),
     }));
   } else {
     res.statusCode = 404;
@@ -3250,6 +3378,9 @@ if (require.main === module) {
   server.listen(CONFIG.httpPort || 8090, '127.0.0.1', () => {
     console.log('[http] local API on :' + (CONFIG.httpPort || 8090));
   });
+
+  // Read-only recorder readiness for /status (Jitsi/Jibri deployments only).
+  if (JITSI_MODE) startRecorderMonitor();
 
   // In pure nostr mode XMPP is not needed: the bridge is only a DM↔DM router.
   const start = async () => {
@@ -3338,6 +3469,15 @@ module.exports = {
   _setBridgeStateForTest: (bs) => { bridgeState = bs; if (bs && bs.delivery) deliverySize = Object.keys(bs.delivery).length; else deliverySize = 0; },
   server,   // HTTP API (for tests: server.listen(0) and fetch)
   getAdminToken, // MEDIO-7: admin token so the tests can authenticate the POSTs
+  // Recorder readiness (read-only): classifier + probe + cached state.
+  classifyRecorderHealth,
+  probeRecorderHealth,
+  refreshRecorderHealth,
+  getRecorderState,
+  startRecorderMonitor,
+  RECORDER_HEALTH_URL,
+  RECORDER_TIMEOUT_MS,
+  RECORDER_REFRESH_MS,
   // AUDIT kaieriksen M01: authorization gate by sender+room for agent-controlled
   // paths (join/leave/inject/recordings). Exposed for tests.
   agentCanOperateRoom,
