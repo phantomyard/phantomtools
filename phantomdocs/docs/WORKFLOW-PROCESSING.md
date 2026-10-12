@@ -1,5 +1,10 @@
 # Installed processing adapter
 
+Use the [read-only runtime inventory](WORKFLOW-RUNTIME-INVENTORY.md) to observe
+operator-declared installed file hashes before completing the processing profile.
+Matching observations do not replace deployment review or compatibility testing.
+
+
 ## Implemented scope
 
 `pd workflow prepare` runs the generic `ProcessingAdapter` against an already

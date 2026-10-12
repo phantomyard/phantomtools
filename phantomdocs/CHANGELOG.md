@@ -4,6 +4,13 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+- **Read-only runtime inventory** (`pd workflow inventory`): observes hashes and
+  file metadata for explicitly declared tools/probes/resources, with optional
+  in-memory configuration overlays. Reports missing, zero, mismatched or changing
+  pins and private-directory blockers without executing tools, scanning trees,
+  reading credential-named files or writing state. Matching observations still
+  require operator review and do not claim runtime compatibility/activation.
+
 - **Installed processing adapter** (`pd workflow prepare`): generic private
   staging, authorized intake membership/MIME/size checks, WAV/text/PDF validators
   and pinned media-probe support. Runs explicitly pinned transcription, summary

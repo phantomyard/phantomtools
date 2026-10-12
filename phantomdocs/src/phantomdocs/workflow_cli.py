@@ -415,3 +415,32 @@ def prepare_job(
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
         raise click.ClickException("cannot prepare workflow results") from exc
     click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+
+
+@workflow.command("inventory")
+@click.option(
+    "--installation", required=True, type=click.Path(exists=True, dir_okay=False)
+)
+@click.option(
+    "--tools-file", default=None, type=click.Path(exists=True, dir_okay=False)
+)
+@click.option(
+    "--processing-profile", default=None, type=click.Path(exists=True, dir_okay=False)
+)
+def inventory_runtime(installation, tools_file, processing_profile):
+    """Observe declared runtime file hashes without executing tools or writing state."""
+    from .workflow_inventory import runtime_inventory
+
+    try:
+        result = runtime_inventory(
+            read_json(installation),
+            tools=read_json(tools_file) if tools_file else None,
+            processing=read_json(processing_profile) if processing_profile else None,
+        )
+    except WorkflowError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise click.ClickException("cannot inspect runtime configuration") from exc
+    click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+    if result["blockers"]:
+        raise click.exceptions.Exit(2)

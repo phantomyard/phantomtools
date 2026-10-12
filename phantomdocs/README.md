@@ -52,6 +52,8 @@ receipts and trusted adapter execution; no AU daemon is activated automatically.
 results, archiver-supplied Drive IDs and verified reference indexing.
 The [installed processing adapter](docs/WORKFLOW-PROCESSING.md) adds explicit
 `pd workflow prepare` with private staging and pinned tool/resource checks.
+A [read-only runtime inventory](docs/WORKFLOW-RUNTIME-INVENTORY.md) observes
+actual declared file hashes for deployment review without activating tools.
 
 ## Usage
 
