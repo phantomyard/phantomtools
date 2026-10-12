@@ -50,6 +50,8 @@ The explicit [executor API](docs/WORKFLOW-EXECUTION.md) provides durable operati
 receipts and trusted adapter execution; no AU daemon is activated automatically.
 [Processing/archive handover](docs/WORKFLOW-HANDOVER.md) separates processed
 results, archiver-supplied Drive IDs and verified reference indexing.
+The [installed processing adapter](docs/WORKFLOW-PROCESSING.md) adds explicit
+`pd workflow prepare` with private staging and pinned tool/resource checks.
 
 ## Usage
 

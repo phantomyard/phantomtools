@@ -1,6 +1,129 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
+      "processing": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "work_root",
+          "timeout_seconds",
+          "max_input_bytes",
+          "max_output_bytes",
+          "inputs",
+          "outputs",
+          "resources"
+        ],
+        "properties": {
+          "work_root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timeout_seconds": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "max_input_bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_output_bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "inputs": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/$defs/id"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "media_types",
+                "extension"
+              ],
+              "properties": {
+                "media_types": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9.+-]+/[a-zA-Z0-9.+-]+$"
+                  }
+                },
+                "extension": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9]{1,8}$"
+                },
+                "probe": {
+                  "$ref": "#/$defs/tool"
+                },
+                "formats": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-zA-Z0-9_-]+$"
+                  }
+                }
+              }
+            }
+          },
+          "outputs": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/$defs/id"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "media_type",
+                "extension"
+              ],
+              "properties": {
+                "media_type": {
+                  "enum": [
+                    "text/plain",
+                    "text/markdown",
+                    "application/pdf"
+                  ]
+                },
+                "extension": {
+                  "enum": [
+                    "txt",
+                    "md",
+                    "pdf"
+                  ]
+                }
+              }
+            }
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            }
+          }
+        }
+      },
       "results-manifest": {
         "type": "object",
         "additionalProperties": false,
@@ -271,6 +394,7 @@
         "processor": {"type": "object", "additionalProperties": false,
           "required": ["source"], "properties": {"source": {"const": "phantombot-default"}}},
         "routes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/route"}},
+        "processing": {"$ref": "#/$defs/processing"},
         "tools": {"type": "object", "propertyNames": {"$ref": "#/$defs/id"},
           "additionalProperties": {"$ref": "#/$defs/tool"}}
       }

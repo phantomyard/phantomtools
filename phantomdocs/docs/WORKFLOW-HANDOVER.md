@@ -1,5 +1,10 @@
 # Processing, archive and reference-index handover
 
+The [installed processing adapter](WORKFLOW-PROCESSING.md) now provides explicit
+`pd workflow prepare`. Earlier non-executing commands retain their boundaries;
+AU runtime configuration and archival publication are not activated automatically.
+
+
 ## Responsibilities
 
 The processing pipeline, organizational archiver and PhantomDocs index exchange

@@ -4,6 +4,15 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+- **Installed processing adapter** (`pd workflow prepare`): generic private
+  staging, authorized intake membership/MIME/size checks, WAV/text/PDF validators
+  and pinned media-probe support. Runs explicitly pinned transcription, summary
+  and branding argv with output validation and durable backend receipts. Lost
+  journal responses reconcile without rerunning tools; uncertain files require
+  review. Processing profiles/resources are installation-pinned and an inactive
+  AU scaffold is included. Stops at awaiting-archive; no upload/index or live
+  configuration is enabled automatically.
+
 - **Separated processing/archive/index handover**: `WorkflowExecutor.prepare`
   exports authoritative processed-results manifests before indexing. Adds the
   additive meeting-processing protocol, `pd workflow results/archive-receipt/

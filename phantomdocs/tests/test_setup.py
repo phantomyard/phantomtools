@@ -303,6 +303,7 @@ def test_wrapper_injects_options_after_subcommand(tmp_path, org_file):
         "results",
         "archive-receipt",
         "index-archive",
+        "prepare",
     ):
         assert run("workflow", command, "--request-id", "request-001").returncode == 0
     calls = [ast.literal_eval(line) for line in log.read_text().strip().splitlines()]
@@ -314,6 +315,7 @@ def test_wrapper_injects_options_after_subcommand(tmp_path, org_file):
             "results",
             "archive-receipt",
             "index-archive",
+            "prepare",
         ),
         calls[7:],
     ):

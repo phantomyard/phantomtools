@@ -1,4 +1,4 @@
-"""Workflow planning and authenticated intake; never execute document tools."""
+"""Workflow planning, intake, explicit processing and archive handover."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from .workflow_requests import sign_request, verify_request
 from .workflows import (
     WorkflowError,
     dependency_graph,
+    digest,
     load_registry,
     observed_dependency_graph,
     plan,
@@ -26,14 +27,21 @@ from .workflows import (
 
 @click.group()
 def workflow():
-    """Plan workflows and record authenticated requests; never execute tools."""
+    """Plan, accept, prepare and index explicitly configured workflows."""
 
 
 @workflow.command("validate")
 @click.argument(
     "kind",
     type=click.Choice(
-        ["job", "registry", "installation", "results-manifest", "archive-receipt"]
+        [
+            "job",
+            "registry",
+            "installation",
+            "results-manifest",
+            "archive-receipt",
+            "processing",
+        ]
     ),
 )
 @click.argument("path", type=click.Path(exists=True, dir_okay=False))
@@ -328,4 +336,82 @@ def archive_receipt(request_id, mapping, ledger, org_yaml, actor):
         raise click.ClickException(str(exc)) from exc
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
         raise click.ClickException("cannot build archive receipt") from exc
+    click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+
+
+@workflow.command("prepare")
+@click.option("--request-id", required=True)
+@click.option("--ledger", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--installation", required=True, type=click.Path(exists=True, dir_okay=False)
+)
+@click.option("--registry", default=None, type=click.Path(exists=True, dir_okay=False))
+@click.option("--org-yaml", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--actor", default=None)
+@click.option(
+    "--phantombot-config", required=True, type=click.Path(exists=True, dir_okay=False)
+)
+@click.option(
+    "--phantombot-state", default=None, type=click.Path(exists=True, dir_okay=False)
+)
+@click.option(
+    "--drive-token-file", required=True, type=click.Path(exists=True, dir_okay=False)
+)
+def prepare_job(
+    request_id,
+    ledger,
+    installation,
+    registry,
+    org_yaml,
+    actor,
+    phantombot_config,
+    phantombot_state,
+    drive_token_file,
+):
+    """Run explicitly pinned processing; leave publication/indexing to the archiver."""
+    from .cli import _require_acl
+    from .workflow_drive_reader import DriveArchiveReader
+    from .workflow_executor import WorkflowExecutor
+    from .workflow_processing import ProcessingAdapter
+
+    try:
+        caller, org = _require_acl(org_yaml, actor)
+        data = read_json(installation)
+        validate_contract(data, "installation")
+
+        def build(job):
+            return plan(
+                job,
+                data,
+                org,
+                load_registry(registry),
+                resolve_processor(phantombot_config, phantombot_state),
+                caller,
+            )
+
+        with WorkflowLedger(ledger) as store:
+            planned = store.status(org["organization"]["id"], request_id, org, caller)[
+                "plan"
+            ]
+            store._authorize(planned, org, caller, True)
+            if caller != planned["processor"]["actor"]:
+                raise WorkflowError("only the pinned processor can prepare results")
+            if (
+                digest(data) != planned["pins"]["installation"]
+                or "processing" not in data
+            ):
+                raise WorkflowError(
+                    "preparation requires the pinned processing installation"
+                )
+            reader = DriveArchiveReader(
+                drive_token_file, max_bytes=data["processing"]["max_input_bytes"]
+            )
+            with ProcessingAdapter(data, reader) as adapter:
+                result = WorkflowExecutor(store, store.path, adapter).prepare(
+                    org["organization"]["id"], request_id, org, caller, build
+                )
+    except WorkflowError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
+        raise click.ClickException("cannot prepare workflow results") from exc
     click.echo(json.dumps(result, indent=2, ensure_ascii=False))

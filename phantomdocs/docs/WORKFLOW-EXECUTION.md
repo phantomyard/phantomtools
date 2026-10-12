@@ -1,5 +1,10 @@
 # Workflow execution and reference deduplication
 
+The [installed processing adapter](WORKFLOW-PROCESSING.md) now provides explicit
+`pd workflow prepare`. Earlier non-executing commands retain their boundaries;
+AU runtime configuration and archival publication are not activated automatically.
+
+
 The subsequent [processing/archive handover](WORKFLOW-HANDOVER.md) adds separate
 results manifests and archive receipt consumption. Earlier boundaries below
 remain applicable to their respective commands; no upload adapter is activated.
