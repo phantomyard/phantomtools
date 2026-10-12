@@ -1,5 +1,10 @@
 # Authenticated workflow intake and reviewed adapter interfaces
 
+The subsequent [processing/archive handover](WORKFLOW-HANDOVER.md) adds separate
+results manifests and archive receipt consumption. Earlier boundaries below
+remain applicable to their respective commands; no upload adapter is activated.
+
+
 ## Execution extension
 
 See [workflow execution](WORKFLOW-EXECUTION.md) for the subsequent executor API,

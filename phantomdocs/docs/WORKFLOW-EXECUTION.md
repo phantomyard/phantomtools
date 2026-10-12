@@ -1,5 +1,10 @@
 # Workflow execution and reference deduplication
 
+The subsequent [processing/archive handover](WORKFLOW-HANDOVER.md) adds separate
+results manifests and archive receipt consumption. Earlier boundaries below
+remain applicable to their respective commands; no upload adapter is activated.
+
+
 ## Implemented boundary
 
 The product now includes `WorkflowExecutor`, an explicit trusted adapter interface,

@@ -384,7 +384,7 @@ def test_cli_read_only_plan_and_exit_status(
 def test_contract_validator_accepts_packaged_registry():
     registry, _, _ = load_registry()
     validate_contract(registry, "registry")
-    assert len(registry["protocols"]) == 2
+    assert len(registry["protocols"]) == 3
     assert digest(registry) == digest(deepcopy(registry))
 
 

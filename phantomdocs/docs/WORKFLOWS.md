@@ -1,5 +1,10 @@
 # Document workflows: contracts and installed protocol registry
 
+The subsequent [processing/archive handover](WORKFLOW-HANDOVER.md) adds separate
+results manifests and archive receipt consumption. Earlier boundaries below
+remain applicable to their respective commands; no upload adapter is activated.
+
+
 ## Execution extension
 
 The subsequent [execution block](WORKFLOW-EXECUTION.md) adds a trusted-adapter

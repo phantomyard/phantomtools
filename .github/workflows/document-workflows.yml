@@ -26,4 +26,4 @@ jobs:
       - run: python -m pytest tests -q
       - name: Verify installed package assets outside the checkout
         working-directory: /tmp
-        run: python -c 'from phantomdocs.workflows import load_registry; assert len(load_registry()[1]) == 2'
+        run: python -c 'from phantomdocs.workflows import load_registry; assert len(load_registry()[1]) == 3'

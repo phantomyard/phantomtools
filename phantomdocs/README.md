@@ -48,6 +48,8 @@ bindings, default-persona resolution, declared dependency export and the staged
 implementation roadmap. Plans do not execute transformations or ingest files.
 The explicit [executor API](docs/WORKFLOW-EXECUTION.md) provides durable operation
 receipts and trusted adapter execution; no AU daemon is activated automatically.
+[Processing/archive handover](docs/WORKFLOW-HANDOVER.md) separates processed
+results, archiver-supplied Drive IDs and verified reference indexing.
 
 ## Usage
 

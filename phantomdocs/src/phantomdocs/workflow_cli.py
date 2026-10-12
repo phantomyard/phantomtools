@@ -30,7 +30,12 @@ def workflow():
 
 
 @workflow.command("validate")
-@click.argument("kind", type=click.Choice(["job", "registry", "installation"]))
+@click.argument(
+    "kind",
+    type=click.Choice(
+        ["job", "registry", "installation", "results-manifest", "archive-receipt"]
+    ),
+)
 @click.argument("path", type=click.Path(exists=True, dir_okay=False))
 def validate(kind, path):
     """Validate a local contract; does not authenticate its sender."""
@@ -218,3 +223,109 @@ def job_status(request_id, ledger, org_yaml, actor, graph):
             ensure_ascii=False,
         )
     )
+
+
+@workflow.command("results")
+@click.option("--request-id", required=True)
+@click.option("--ledger", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--org-yaml", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--actor", default=None)
+def results_manifest(request_id, ledger, org_yaml, actor):
+    """Export completed processing results for an independent archiver."""
+    from .cli import _require_acl
+    from .workflow_handover import export_results
+
+    try:
+        caller, org = _require_acl(org_yaml, actor)
+        with WorkflowLedger(ledger, readonly=True) as store:
+            result = export_results(
+                store, org["organization"]["id"], request_id, org, caller
+            )
+    except WorkflowError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
+        raise click.ClickException("cannot export processing results") from exc
+    click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+
+
+@workflow.command("index-archive")
+@click.option("--receipt", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--ledger", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--org-yaml", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--actor", default=None)
+@click.option("--root", required=True, type=click.Path(exists=True, file_okay=False))
+@click.option(
+    "--drive-token-file", required=True, type=click.Path(exists=True, dir_okay=False)
+)
+@click.option("--max-reference-bytes", required=True, type=click.IntRange(min=1))
+@click.option("--nsec-file", default=None, type=click.Path(exists=True, dir_okay=False))
+def index_archived(
+    receipt,
+    ledger,
+    org_yaml,
+    actor,
+    root,
+    drive_token_file,
+    max_reference_bytes,
+    nsec_file,
+):
+    """Verify an archiver receipt and index its existing Drive objects by reference."""
+    from .cli import _require_acl
+    from .workflow_drive_reader import DriveArchiveReader
+    from .workflow_handover import index_archive
+
+    try:
+        caller, org = _require_acl(org_yaml, actor)
+        reader = DriveArchiveReader(drive_token_file, max_bytes=max_reference_bytes)
+        with WorkflowLedger(ledger) as store:
+            result = index_archive(
+                store,
+                read_json(receipt),
+                org,
+                caller,
+                root=root,
+                org_yaml=org_yaml,
+                drive_reader=reader,
+                nsec_file=nsec_file,
+            )
+    except WorkflowError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        sqlite3.Error,
+        DocumentError,
+    ) as exc:
+        raise click.ClickException("cannot index archive receipt") from exc
+    click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+
+
+@workflow.command("archive-receipt")
+@click.option("--request-id", required=True)
+@click.option("--mapping", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--ledger", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--org-yaml", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--actor", default=None)
+def archive_receipt(request_id, mapping, ledger, org_yaml, actor):
+    """Bind archiver-supplied Drive IDs to completed results; no upload or rename."""
+    from .cli import _require_acl
+    from .workflow_handover import build_archive_receipt
+
+    try:
+        caller, org = _require_acl(org_yaml, actor)
+        with WorkflowLedger(ledger, readonly=True) as store:
+            result = build_archive_receipt(
+                store,
+                org["organization"]["id"],
+                request_id,
+                org,
+                caller,
+                read_json(mapping),
+            )
+    except WorkflowError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
+        raise click.ClickException("cannot build archive receipt") from exc
+    click.echo(json.dumps(result, indent=2, ensure_ascii=False))

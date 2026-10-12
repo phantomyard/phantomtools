@@ -546,7 +546,9 @@ class DocumentService:
                 backend=backend,
             )
 
-    def index_reference_once(self, *, ref, slug, category, folder, owners):
+    def index_reference_once(
+        self, *, ref, slug, category, folder, owners, expected_hash=None, reader=None
+    ):
         """Index a new external ref; existing refs skip byte reads and hashing.
 
         The deduplication check and insertion share the manifest write lock.
@@ -564,6 +566,11 @@ class DocumentService:
             or slug in (".", "..")
         ):
             raise DocumentError("invalid reference slug")
+        if expected_hash is not None:
+            from .identity import is_valid_hex64
+
+            if not is_valid_hex64(expected_hash):
+                raise DocumentError("invalid expected reference hash")
         with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
             parent = repo.node_by_path(folder) if folder else None
@@ -580,6 +587,10 @@ class DocumentService:
                 if (
                     normalize_category(node["category"]) != normalize_category(category)
                     or set(node.get("owners", [])) != set(owners)
+                    or (
+                        expected_hash is not None
+                        and node.get("contentHash") != expected_hash
+                    )
                     or node["parentMac"] != parent_mac
                     or not can_write(
                         self.org, self.actor_id, node["category"], node.get("owners")
@@ -601,8 +612,12 @@ class DocumentService:
                 raise DocumentError(
                     "reference slug already belongs to another document"
                 )
-            content, location = read_reference(ref, streaming=True)
+            content, location = (reader or read_reference)(ref, streaming=True)
             try:
+                if location_uri(location) != ref:
+                    raise DocumentError(
+                        "reference reader returned a different object location"
+                    )
                 return self._add_document_locked(
                     content=content,
                     ref_location=location,
@@ -611,13 +626,23 @@ class DocumentService:
                     folder=folder,
                     owners=list(owners),
                     backend=None,
+                    expected_content_hash=expected_hash,
                 )
             finally:
                 if isinstance(content, FileContent):
                     content.close()
 
     def _add_document_locked(
-        self, *, content, ref_location, slug, category, folder, owners, backend
+        self,
+        *,
+        content,
+        ref_location,
+        slug,
+        category,
+        folder,
+        owners,
+        backend,
+        expected_content_hash=None,
     ):
         """Existing add implementation; caller must hold the manifest lock."""
         repo = self._load_repo()
@@ -633,6 +658,8 @@ class DocumentService:
             parent_path = urn_path(parent["urn"]) + "/"
 
         ch = content_hash(content)
+        if expected_content_hash is not None and ch != expected_content_hash:
+            raise DocumentError("reference bytes do not match the artifact receipt")
         logical = f"{parent_path}{slug}"
         urn = f"urn:{repo.org}:doc:{logical}"
 

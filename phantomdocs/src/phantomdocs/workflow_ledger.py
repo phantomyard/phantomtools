@@ -148,6 +148,32 @@ class WorkflowLedger:
                     (row["organization"], row["request_id"]),
                 )
             ]
+        if self.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='workflow_archive_index'"
+        ).fetchone():
+            archived = list(
+                self.connection.execute(
+                    "SELECT role,state,updated_at FROM workflow_archive_index WHERE organization=? AND request_id=?",
+                    (row["organization"], row["request_id"]),
+                )
+            )
+            if archived:
+                complete = {
+                    entry["role"] for entry in archived if entry["state"] == "complete"
+                } == set(planned["final_roles"])
+                index_step = next(
+                    s["id"]
+                    for s in planned["steps"]
+                    if s["capability"] == "documents.index"
+                )
+                execution.append(
+                    {
+                        "operation": index_step,
+                        "state": "complete" if complete else "started",
+                        "receipt_hash": None,
+                        "updated_at": max(entry["updated_at"] for entry in archived),
+                    }
+                )
         return {
             "version": LEDGER_VERSION,
             "organization": row["organization"],

@@ -1,6 +1,170 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
+      "results-manifest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "organization",
+          "request_id",
+          "plan_hash",
+          "results_hash",
+          "kind",
+          "artifacts"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "organization": {
+            "$ref": "#/$defs/id"
+          },
+          "request_id": {
+            "$ref": "#/$defs/id"
+          },
+          "plan_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "results_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "kind": {
+            "const": "processed-document-results"
+          },
+          "artifacts": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "role",
+                "ref",
+                "media_type",
+                "sha256",
+                "size",
+                "derived_from"
+              ],
+              "properties": {
+                "role": {
+                  "$ref": "#/$defs/id"
+                },
+                "ref": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "media_type": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9.+-]+/[a-zA-Z0-9.+-]+$"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "derived_from": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "uniqueItems": true
+                }
+              }
+            }
+          }
+        }
+      },
+      "archive-receipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "organization",
+          "request_id",
+          "plan_hash",
+          "results_hash",
+          "kind",
+          "artifacts"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "organization": {
+            "$ref": "#/$defs/id"
+          },
+          "request_id": {
+            "$ref": "#/$defs/id"
+          },
+          "plan_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "results_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "kind": {
+            "const": "archived-document-results"
+          },
+          "artifacts": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "role",
+                "ref",
+                "archive_ref",
+                "sha256",
+                "size",
+                "slug"
+              ],
+              "properties": {
+                "role": {
+                  "$ref": "#/$defs/id"
+                },
+                "ref": {
+                  "type": "string",
+                  "pattern": "^gdrive://[A-Za-z0-9_-]+$"
+                },
+                "archive_ref": {
+                  "type": "string",
+                  "pattern": "^gdrive://[A-Za-z0-9_-]+$"
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "slug": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9.-]*$"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "md5": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{32}$"
+                }
+              }
+            }
+          }
+        }
+      },
     "signed-request": {
       "type": "object", "additionalProperties": false,
       "required": ["version", "crypto_version", "kind", "job", "issued_at", "expires_at", "signer_pubkey", "signature"],

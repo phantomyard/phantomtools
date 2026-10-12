@@ -296,10 +296,27 @@ def test_wrapper_injects_options_after_subcommand(tmp_path, org_file):
         "--org-yaml",
         "other.yaml",
     ]
-    for command in ("sign-request", "accept", "status"):
+    for command in (
+        "sign-request",
+        "accept",
+        "status",
+        "results",
+        "archive-receipt",
+        "index-archive",
+    ):
         assert run("workflow", command, "--request-id", "request-001").returncode == 0
     calls = [ast.literal_eval(line) for line in log.read_text().strip().splitlines()]
-    for command, call in zip(("sign-request", "accept", "status"), calls[7:]):
+    for command, call in zip(
+        (
+            "sign-request",
+            "accept",
+            "status",
+            "results",
+            "archive-receipt",
+            "index-archive",
+        ),
+        calls[7:],
+    ):
         assert call == [
             "workflow",
             command,

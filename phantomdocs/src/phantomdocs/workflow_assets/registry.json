@@ -20,6 +20,83 @@
         {"id": "brand-summary", "capability": "documents.brand", "needs": ["summarize"], "inputs": ["summary"], "outputs": ["published-summary"]},
         {"id": "index", "capability": "documents.index", "needs": ["brand-transcription", "brand-summary"], "inputs": ["published-transcription", "published-summary"], "outputs": []}
       ]
+    },
+    {
+      "id": "meeting-processing",
+      "version": "1.0.0",
+      "instructions": "meeting-processing.md",
+      "initial_roles": [
+        "recording"
+      ],
+      "final_roles": [
+        "branded-transcription",
+        "branded-summary"
+      ],
+      "steps": [
+        {
+          "id": "transcribe",
+          "capability": "documents.transcribe",
+          "needs": [],
+          "inputs": [
+            "recording"
+          ],
+          "outputs": [
+            "transcription"
+          ]
+        },
+        {
+          "id": "summarize",
+          "capability": "documents.summarize",
+          "needs": [
+            "transcribe"
+          ],
+          "inputs": [
+            "transcription"
+          ],
+          "outputs": [
+            "summary"
+          ]
+        },
+        {
+          "id": "brand-transcription",
+          "capability": "documents.brand",
+          "needs": [
+            "transcribe"
+          ],
+          "inputs": [
+            "transcription"
+          ],
+          "outputs": [
+            "branded-transcription"
+          ]
+        },
+        {
+          "id": "brand-summary",
+          "capability": "documents.brand",
+          "needs": [
+            "summarize"
+          ],
+          "inputs": [
+            "summary"
+          ],
+          "outputs": [
+            "branded-summary"
+          ]
+        },
+        {
+          "id": "index",
+          "capability": "documents.index",
+          "needs": [
+            "brand-transcription",
+            "brand-summary"
+          ],
+          "inputs": [
+            "branded-transcription",
+            "branded-summary"
+          ],
+          "outputs": []
+        }
+      ]
     }
   ]
 }

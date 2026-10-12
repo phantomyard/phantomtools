@@ -199,7 +199,16 @@ class WorkflowExecutor:
         )
         return receipt
 
-    def run(self, organization, request_id, org, caller, rebuild_plan):
+    def run(
+        self,
+        organization,
+        request_id,
+        org,
+        caller,
+        rebuild_plan,
+        *,
+        stop_before_index=False,
+    ):
         with execution_lock(self.path):
             # Serialize admission/replanning while binding this execution to a plan.
             db = self.ledger.connection
@@ -274,6 +283,16 @@ class WorkflowExecutor:
                 inputs = self._operation("$inputs", job["artifacts"], planned)
             artifacts = {a["role"]: a for a in inputs}
             for step in planned["steps"]:
+                if stop_before_index and step["capability"] == "documents.index":
+                    from .workflow_handover import export_results
+
+                    return {
+                        "state": "awaiting-archive",
+                        "results": export_results(
+                            self.ledger, organization, request_id, org, caller
+                        ),
+                        "execution_ready": False,
+                    }
                 values = [artifacts[role] for role in step["inputs"]]
                 result = self._operation(step["id"], values, planned)
                 if step["capability"] != "documents.index":
@@ -291,3 +310,9 @@ class WorkflowExecutor:
                 "artifacts": list(artifacts.values()),
                 "execution_ready": True,
             }
+
+    def prepare(self, organization, request_id, org, caller, rebuild_plan):
+        """Run processing only; export final results for a separate archiver."""
+        return self.run(
+            organization, request_id, org, caller, rebuild_plan, stop_before_index=True
+        )

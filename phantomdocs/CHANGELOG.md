@@ -4,6 +4,16 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+- **Separated processing/archive/index handover**: `WorkflowExecutor.prepare`
+  exports authoritative processed-results manifests before indexing. Adds the
+  additive meeting-processing protocol, `pd workflow results/archive-receipt/
+  index-archive`, strict archive receipts bound to completed results, actual Drive
+  parent/size checks and SHA-256 verification before node creation. Confirmed
+  references skip downloads/hashing on retries, including recovery after a lost
+  index response. The independent archiver retains naming/sequence/publication
+  authority; no upload, rename, move, deletion or Drive operation-ID API is added.
+  Archive observations feed the existing graph export; no UI is activated.
+
 - **Workflow executor and reconciliation boundary**: a trusted adapter API runs
   pinned protocols with durable started/completed receipts, host-local runner
   locking and crash reconciliation. Uncertain operations are never repeated
