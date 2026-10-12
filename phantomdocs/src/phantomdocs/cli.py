@@ -108,12 +108,16 @@ from .storage import (
     resolve_backend,
 )
 from .update import is_newer, latest_release
+from .workflow_cli import workflow
 
 
 @click.group()
 @click.version_option(__version__)
 def main() -> None:
     """PhantomDocs — agnostic document management for PhantomOrg personas."""
+
+
+main.add_command(workflow)
 
 
 def _manifest_path(root: str) -> str:

@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "organization": "aquaponics-united",
+  "intake": {"inbox": "pepa"},
+  "processor": {"source": "phantombot-default"},
+  "routes": [
+    {
+      "domain": "secretariat", "document_type": "minutes",
+      "protocol": "meeting-publication", "protocol_version": "1.0.0",
+      "folder": "reuniones", "archive_ref": "gdrive://1u0MWy4VtoNTwSzW5n4MsPFOkCYHgB0Mq",
+      "owner_domains": ["secretariat", "$requesting_domain"],
+      "branding_profile": "au"
+    },
+    {
+      "domain": "projects", "document_type": "almaponia",
+      "protocol": "meeting-publication", "protocol_version": "1.0.0",
+      "folder": "reuniones", "archive_ref": "gdrive://1VnnY_IqQaaFJ9gL6imuuskd6G1_C85yN",
+      "owner_domains": ["projects", "secretariat"],
+      "owners": ["project_lead", "chief_of_staff"],
+      "branding_profile": "au"
+    }
+  ],
+  "tools": {}
+}

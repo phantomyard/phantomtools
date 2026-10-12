@@ -1,0 +1,29 @@
+name: Document workflow contracts
+on:
+  push:
+    branches: [feat/document-workflows]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: phantomdocs
+    strategy:
+      matrix:
+        python: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install '.[dev]' ruff==0.16.2 bandit==1.9.4
+      - run: ruff check src tests
+      - run: ruff format --check src tests
+      - run: bandit -r src -q
+      - run: python -m pytest tests -q
+      - name: Verify installed package assets outside the checkout
+        working-directory: /tmp
+        run: python -c 'from phantomdocs.workflows import load_registry; assert len(load_registry()[1]) == 2'

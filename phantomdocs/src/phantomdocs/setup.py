@@ -216,11 +216,22 @@ done
 args=("${{before[@]}}")
 if [[ -n $cmd ]]; then
   args+=("$cmd")
-  if in_list "$cmd" "$ACTOR_CMDS" && ! has_opt --actor "${{after[@]}}"; then
-    args+=(--actor "$ACTOR")
-  fi
-  if in_list "$cmd" "$ORG_YAML_CMDS" && ! has_opt --org-yaml "${{after[@]}}"; then
-    args+=(--org-yaml "$ORG_YAML")
+  if [[ $cmd == workflow && ${{after[0]-}} == plan ]]; then
+    args+=(plan)
+    after=("${{after[@]:1}}")
+    if ! has_opt --actor "${{after[@]}}"; then
+      args+=(--actor "$ACTOR")
+    fi
+    if ! has_opt --org-yaml "${{after[@]}}"; then
+      args+=(--org-yaml "$ORG_YAML")
+    fi
+  else
+    if in_list "$cmd" "$ACTOR_CMDS" && ! has_opt --actor "${{after[@]}}"; then
+      args+=(--actor "$ACTOR")
+    fi
+    if in_list "$cmd" "$ORG_YAML_CMDS" && ! has_opt --org-yaml "${{after[@]}}"; then
+      args+=(--org-yaml "$ORG_YAML")
+    fi
   fi
 fi
 args+=("${{after[@]}}")

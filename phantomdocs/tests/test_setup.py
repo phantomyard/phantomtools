@@ -240,6 +240,14 @@ def test_wrapper_injects_options_after_subcommand(tmp_path, org_file):
     assert run("add", "foo.pdf", "--slug", "x").returncode == 0
     assert run("add", "--actor", "pepa", "bar.pdf").returncode == 0
     assert run("verify").returncode == 0
+    assert run("workflow", "plan", "--job", "request.json").returncode == 0
+    assert run("workflow", "validate", "job", "request.json").returncode == 0
+    assert (
+        run(
+            "workflow", "plan", "--actor", "pepa", "--org-yaml", "other.yaml"
+        ).returncode
+        == 0
+    )
 
     import ast
 
@@ -269,6 +277,25 @@ def test_wrapper_injects_options_after_subcommand(tmp_path, org_file):
     assert calls[2].count("--actor") == 1
     # verify: accepts --org-yaml but not --actor.
     assert calls[3] == ["verify", "--org-yaml", str(org_file)]
+    assert calls[4] == [
+        "workflow",
+        "plan",
+        "--actor",
+        "alma",
+        "--org-yaml",
+        str(org_file),
+        "--job",
+        "request.json",
+    ]
+    assert calls[5] == ["workflow", "validate", "job", "request.json"]
+    assert calls[6] == [
+        "workflow",
+        "plan",
+        "--actor",
+        "pepa",
+        "--org-yaml",
+        "other.yaml",
+    ]
 
 
 def test_wrapper_executes_against_real_pd(tmp_path, org_file):

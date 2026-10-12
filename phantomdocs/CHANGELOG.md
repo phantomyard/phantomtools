@@ -4,6 +4,18 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+- **Versioned document workflow planning** (`pd workflow validate/plan`):
+  additive read-only JSON contracts, installed protocol instructions, validated
+  dependency graphs, and capability-to-tool bindings for arbitrary document
+  media types. Plans resolve a configured Phantombot default persona, validate
+  its declared tools and PhantomOrg category/ownership authorization, and pin
+  policy, protocol, instructions, installation and request hashes. Missing tools
+  block a plan; no tools or document bytes are executed/read. Declared graph
+  export supports a future observatory adapter. Includes AU meeting policy
+  examples, shared package assets, and nested persona-wrapper support. This
+  stage does not implement an executor, job ledger, remote authentication,
+  inbox scanning, branding tools, Drive routing, or invitee-only access.
+
 **Hierarchical categories (#31), index by reference (#35), update package (#33), mutation signing (#30 v2).**
 
 - **Store files keep their permissions across an atomic replace**

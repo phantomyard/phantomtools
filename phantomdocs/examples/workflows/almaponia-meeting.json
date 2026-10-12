@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "organization": "aquaponics-united",
+  "request_id": "au-example-almaponia-meeting",
+  "requester": "alma",
+  "context": {"domain": "projects", "document_type": "almaponia", "requesting_domain": "projects"},
+  "artifacts": [
+    {"id": "recording", "role": "recording", "ref": "gdrive://REPLACE_WITH_EXISTING_RECORDING_ID", "media_type": "video/mp4"}
+  ]
+}

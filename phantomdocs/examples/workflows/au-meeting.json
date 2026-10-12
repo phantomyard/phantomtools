@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "organization": "aquaponics-united",
+  "request_id": "au-example-meeting",
+  "requester": "pepa",
+  "context": {"domain": "secretariat", "document_type": "minutes", "requesting_domain": "secretariat"},
+  "artifacts": [
+    {"id": "recording", "role": "recording", "ref": "gdrive://REPLACE_WITH_EXISTING_RECORDING_ID", "media_type": "audio/ogg"}
+  ]
+}
