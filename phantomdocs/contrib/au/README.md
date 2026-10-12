@@ -124,8 +124,14 @@ Dry-run writes neither markers, a lock, nor store content, and reads no bytes.
 
 Run these on the VPS as an administrator. They preserve the installed product
 and live org model. No store initialization, reset, or folder recreation occurs.
-The existing service is assumed to be phantomdocs-ingest.service, paired with
-the provided phantomdocs-ingest.timer; check its current ExecStart first.
+The operator verified `phantomdocs-ingest.service` currently starts the system
+Python (`/usr/bin/python3`), which cannot import PhantomDocs. The CLI venv can
+import PhantomDocs but lacks google-auth/requests. Use the venv for both imports
+and service execution; the launcher inherits `sys.executable`. Installing only
+Drive dependencies into the venv while leaving systemd on system Python fails.
+The drop-in below changes only ExecStart, retaining service identity/environment.
+Inspect existing unit overrides first. If the proposed drop-in or script backup
+already exists, review it rather than overwriting previous rollback evidence.
 
 ```bash
 set -euo pipefail
@@ -139,9 +145,13 @@ python3 -m venv /tmp/au-ingest-tests
 /tmp/au-ingest-tests/bin/python -m pytest phantomdocs/tests/test_au_ingest.py -q
 sudo /opt/phantomdocs/venv/bin/python -c \
   'from phantomdocs.manifest import load, node_by_path, node_by_slug; from phantomdocs.access import can_read, can_write'
-sudo /opt/phantomdocs/venv/bin/pip install google-auth requests
+sudo test ! -e /etc/systemd/system/phantomdocs-ingest.service.d/90-au-ingest-venv.conf
+sudo test ! -e /opt/phantomdocs/bin/ingest-bandejas.py.before-au-fix
 sudo systemctl stop phantomdocs-ingest.timer
 sudo systemctl stop phantomdocs-ingest.service
+sudo /opt/phantomdocs/venv/bin/pip install google-auth requests
+sudo -u pb-pepa /opt/phantomdocs/venv/bin/python -c \
+  'import phantomdocs, google.auth, requests; print("Ingest venv imports OK")'
 sudo cp -p /opt/phantomdocs/bin/ingest-bandejas.py \
   /opt/phantomdocs/bin/ingest-bandejas.py.before-au-fix
 sudo install -m 0755 phantomdocs/contrib/au/ingest_bandejas.py \
@@ -164,10 +174,20 @@ os.execv(sys.executable, [sys.executable, '/opt/phantomdocs/bin/au-ingest.py',
                         *args, *sys.argv[1:]])
 PY
 sudo chmod 0755 /opt/phantomdocs/bin/ingest-bandejas.py
+sudo install -d -m 0755 /etc/systemd/system/phantomdocs-ingest.service.d
+sudo tee /etc/systemd/system/phantomdocs-ingest.service.d/90-au-ingest-venv.conf >/dev/null <<'UNIT'
+[Service]
+ExecStart=
+ExecStart=/opt/phantomdocs/venv/bin/python /opt/phantomdocs/bin/ingest-bandejas.py
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl show phantomdocs-ingest.service -p ExecStart -p User -p Group
 sudo -u pb-pepa env PATH=/opt/phantomdocs/venv/bin:/usr/local/bin:/usr/bin:/bin \
   /opt/phantomdocs/venv/bin/python /opt/phantomdocs/bin/ingest-bandejas.py --dry-run
 ```
 
+Verify effective ExecStart uses `/opt/phantomdocs/venv/bin/python` and the
+existing ingestion identity remains `pb-pepa` before any service start.
 Review dry-run output: category-2 and approved owner roles must be explicit.
 Any ERROR stops deployment for review; HOLD means an incomplete or unclassified
 artifact, not a successful ingest. The replacement logs to stdout/stderr, captured
@@ -186,8 +206,15 @@ To restore the old glue if necessary (indexed refs remain):
 sudo systemctl stop phantomdocs-ingest.timer phantomdocs-ingest.service
 sudo cp -p /opt/phantomdocs/bin/ingest-bandejas.py.before-au-fix \
   /opt/phantomdocs/bin/ingest-bandejas.py
+sudo rm -- /etc/systemd/system/phantomdocs-ingest.service.d/90-au-ingest-venv.conf
+sudo systemctl daemon-reload
+sudo systemctl show phantomdocs-ingest.service -p ExecStart
 sudo systemctl start phantomdocs-ingest.timer
 ```
+
+Remove only the drop-in created by this procedure; do not delete other overrides.
+Dependencies installed in the venv may remain. Do not remove indexed documents
+or seen markers as part of launcher rollback.
 
 ## Exact recovery procedure: last ALMAPONIA meeting plus Avila
 
@@ -202,7 +229,7 @@ set -euo pipefail
 export PATH=/opt/phantomdocs/venv/bin:$PATH
 INGEST=/opt/phantomdocs/bin/ingest-bandejas.py
 PY=/opt/phantomdocs/venv/bin/python
-RECOVERY=/var/lib/phantomdocs-ingest/seen/recovery-2026-10-12.json
+RECOVERY=/var/lib/phantomdocs-ingest/seen/recovery-2026-10-13.json
 "$PY" "$INGEST" --source almaponia --source secretariat --inventory
 "$PY" "$INGEST" --source almaponia --source secretariat --prepare-catalog "$RECOVERY"
 "$PY" -m json.tool "$RECOVERY"
@@ -227,13 +254,18 @@ Check from each persona's own authenticated account; no --actor impersonation:
 
 ```bash
 exit
-sudo -u pb-alma -H env PATH=/opt/phantomdocs/venv/bin:/usr/local/bin:/usr/bin:/bin \
-  /home/pb-alma/.local/share/phantombot/personas/alma/tools/documents.sh search almaponia
 sudo -u pb-pepa -H env PATH=/opt/phantomdocs/venv/bin:/usr/local/bin:/usr/bin:/bin \
   /home/pb-pepa/.local/share/phantombot/personas/pepa/tools/documents.sh search avila
 sudo -u pb-pepa -H env PATH=/opt/phantomdocs/venv/bin:/usr/local/bin:/usr/bin:/bin \
   /home/pb-pepa/.local/share/phantombot/personas/pepa/tools/documents.sh status
 ```
+
+Run Alma's existing documents wrapper on her actual host and authenticated
+account, searching for a distinctive selected title. Do not assume `pb-alma` or
+an Alma wrapper already exists on the VPS, or impersonate Alma from Pepa's account.
+If her tool cannot access the authoritative store yet, functional visibility
+verification remains pending; this recovery does not migrate Alma or create a
+second writer.
 
 Search by a distinctive original title if branded names do not contain
 `almaponia`. `pd search` searches manifest metadata, not transcription bodies.
