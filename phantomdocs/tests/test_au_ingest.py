@@ -496,3 +496,150 @@ def test_timer_and_recovery_lock_serialize(tmp_path):
         if process.is_alive():
             process.terminate()
             process.join()
+
+
+def test_exact_nine_file_catalog_dry_run_recovery_and_retry(
+    org, sandbox, monkeypatch, tmp_path, capsys
+):
+    """Three branded GO artifacts plus six Avila formats, with no live Drive."""
+    import json
+
+    project = files()
+    for index, item in enumerate(project):
+        item.update(
+            id=f"rehearsal-go-{index}",
+            name=f"AU-SYNTHETIC-00{index}_GO_rehearsal_EVID.pdf",
+        )
+    key = "2026-10-09-10-30_coordinacion_nodo_avila"
+    avila = files(source="secretariat", key=key)
+    avila.extend(
+        {
+            "id": f"pdf-{index}",
+            "name": key + suffix,
+            "source": "secretariat",
+            "mimeType": "application/pdf",
+        }
+        for index, suffix in enumerate(
+            [".transcripcion.pdf", ".resumen.pdf", ".acta.pdf"]
+        )
+    )
+    for index, item in enumerate(avila):
+        item["id"] = f"rehearsal-avila-{index}"
+    selected = project + avila
+    catalog = {
+        item["id"]: {
+            "name": item["name"],
+            "source": item["source"],
+            "meeting": "synthetic-go" if item in project else key,
+            "class": ["transcription", "summary", "minutes"][index % 3],
+            "project": item in project,
+        }
+        for index, item in enumerate(selected)
+    }
+    catalog_file = tmp_path / "recovery.json"
+    catalog_file.write_text(json.dumps(catalog), encoding="utf-8")
+    unselected = {
+        "id": "unselected-file",
+        "name": "unselected-sensitive.xlsx",
+        "source": "almaponia",
+        "mimeType": "application/octet-stream",
+    }
+    listed, locks = [], []
+
+    def list_files(folder):
+        listed.append(folder)
+        source = "almaponia" if folder == au.GO_ARCHIVE else "secretariat"
+        assert folder in {au.GO_ARCHIVE, "inbox-pepa"}
+        return [
+            {key: value for key, value in item.items() if key != "source"}
+            for item in selected + [unselected]
+            if item["source"] == source
+        ]
+
+    monkeypatch.setattr(
+        au, "Drive", lambda *args: SimpleNamespace(list_files=list_files)
+    )
+    monkeypatch.setattr(
+        au, "ingest_lock", lambda state: locks.append(state) or nullcontext()
+    )
+    execute = au.execute
+    monkeypatch.setattr(
+        au, "execute", lambda **kw: execute(**kw, run=sandbox.options["run"])
+    )
+    args = [
+        "--org-yaml",
+        str(sandbox.model),
+        "--root",
+        str(sandbox.root),
+        "--docs",
+        "documents.sh",
+        "--service-account",
+        "unused",
+        "--subject",
+        "unused",
+        "--source",
+        "almaponia",
+        "--source",
+        "secretariat",
+        "--state",
+        str(sandbox.state),
+        "--catalog",
+        str(catalog_file),
+    ]
+    before = (sandbox.root / "manifest.yaml").read_bytes()
+    capsys.readouterr()
+    assert au.main(args + ["--dry-run"]) == 0
+    planned = [
+        json.loads(line)["command"] for line in capsys.readouterr().out.splitlines()
+    ]
+    assert len(planned) == 9
+    assert {command[command.index("--ref") + 1] for command in planned} == {
+        "gdrive://" + file_id for file_id in catalog
+    }
+    assert not sandbox.reads and not sandbox.adds and not locks
+    assert not list(sandbox.state.iterdir())
+    assert (sandbox.root / "manifest.yaml").read_bytes() == before
+
+    assert au.main(args) == 0
+    assert capsys.readouterr().out.count("OK indexed ref:") == 9
+    assert len(sandbox.reads) == len(sandbox.adds) == 9
+    manifest = load_manifest(str(sandbox.root / "manifest.yaml"))
+    refs = au.references(manifest)
+    assert set(refs) == set(catalog)
+    assert "unselected-file" not in refs
+    for file_id, nodes in refs.items():
+        assert len(nodes) == 1 and nodes[0]["category"] == "category-2"
+        assert nodes[0]["owners"] == (
+            ["chief_of_staff", "project_lead"]
+            if catalog[file_id]["project"]
+            else ["chief_of_staff"]
+        )
+    assert not list((sandbox.root / "blobs").iterdir())
+    assert len(list(sandbox.state.iterdir())) == 9
+    after = (sandbox.root / "manifest.yaml").read_bytes()
+    monkeypatch.setattr(
+        "phantomdocs.documents.content_hash",
+        lambda *args: pytest.fail("retry must not hash document bytes"),
+    )
+    assert au.main(args) == 0
+    repeated = capsys.readouterr().out
+    assert (
+        repeated.count("SKIP indexed ref:") == 9 and "OK indexed ref:" not in repeated
+    )
+    assert len(sandbox.reads) == len(sandbox.adds) == 9
+    assert (sandbox.root / "manifest.yaml").read_bytes() == after
+    assert listed == [au.GO_ARCHIVE, "inbox-pepa"] * 3
+    assert len(locks) == 2
+    monkeypatch.setattr("phantomdocs.cli._os_actor", lambda: "alma")
+    found = sandbox.runner.invoke(
+        pd,
+        [
+            "search",
+            "rehearsal",
+            "--org-yaml",
+            str(sandbox.model),
+            "--root",
+            str(sandbox.root),
+        ],
+    )
+    assert found.exit_code == 0 and found.output.count("doc ") == 3
