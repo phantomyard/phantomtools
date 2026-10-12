@@ -4,6 +4,13 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+- **Workflow review fixes**: CI now covers main pushes and pull requests;
+  reference deduplication accepts logical folder slugs as well as paths; runtime
+  inventory excludes prefixed credential/service-account/token filenames; generated
+  workflow wrappers derive actor/org options from Click metadata. Documents
+  inactive AU bindings, approved Drive intake prerequisites, strict MIME/redirect
+  behavior, protocol compatibility and preflight ledger locking.
+
 - **Declared PhantomView installation map** (`pd workflow installation-map`):
   exports protocol/artifact/tool dependencies in the collector's v1 manifest,
   including the independent archiver before indexing processed results. Preserves

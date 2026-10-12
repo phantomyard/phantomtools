@@ -129,3 +129,29 @@ def test_cli_reference_skip_uses_real_service_without_copying(tmp_path, monkeypa
     second = runner.invoke(main, args)
     assert second.exit_code == 0, second.output
     assert "unchanged" in second.output and len(calls) == 1
+
+
+def test_nested_folder_slug_matches_path_and_retry_skips_reader(tmp_path):
+    root, _, service = _svc(tmp_path)
+    service.create_folder(name="projects", parent=None, category="1", owners=["cfo"])
+    service.create_folder(
+        name="minutes", parent="projects", category="1", owners=["cfo"]
+    )
+    calls = []
+
+    def read(ref, **kwargs):
+        calls.append(ref)
+        return b"minutes", {"backend": "gdrive", "ref": "file-one"}
+
+    args = {
+        "ref": "gdrive://file-one",
+        "slug": "meeting",
+        "category": "1",
+        "owners": ["cfo"],
+        "reader": read,
+    }
+    service.index_reference_once(**args, folder="minutes")
+    assert service.index_reference_once(**args, folder="projects/minutes")["unchanged"]
+    assert service.index_reference_once(**args, folder="minutes")["unchanged"]
+    assert calls == ["gdrive://file-one"]
+    assert len([n for n in _repo(root).data["nodes"] if n["kind"] == "doc"]) == 1

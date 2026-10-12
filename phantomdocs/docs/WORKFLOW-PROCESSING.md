@@ -21,6 +21,12 @@ including document metadata/rendering and credentials, still needs deployment QA
 The package's AU installation example leaves bindings empty. The profile scaffold
 has explicit placeholder paths and zero hashes, so it cannot activate by itself.
 
+`examples/workflows/au-tool-bindings.json` is an interface sketch, not executable
+configuration: its missing `sha256`/`script_sha256` pins are rejected by the runner.
+The additive `au-tool-bindings.inventory-20261012.json` supplies operator-reported
+processing pins, but still lacks the indexer pin and complete runtime resources.
+Neither file is sufficient to run `prepare` without completing deployment review.
+
 ## Configuration and runtime checks
 
 Add an explicit `processing` object to the trusted installation before accepting
@@ -68,6 +74,29 @@ A requester cannot use this adapter to read arbitrary server file paths or anoth
 Drive folder just because their category permits reading the job. Shared intake
 membership is necessary; deployment intake provenance/request binding remains
 responsible for proving which authorized requester supplied each source.
+
+For AU, the operator selected a prior upload to an approved Drive intake rather
+than a local Jibri adapter. The candidate still selects the declared Pepa inbox
+(`documents.inboxes.pepa`). A recording on the Jibri filesystem is not a valid
+input to this adapter. Before submitting its signed job, the deployment must
+publish it as a binary Drive file directly in the selected intake, retain its
+actual Drive ID and bind that ID to the authenticated meeting request. This
+package does not upload recordings or infer a different intake folder. Confirm
+the intake selection and upload/request provenance in the deployment trial.
+
+MIME tolerance is explicit installation policy: list approved alternatives such
+as `video/quicktime` in `inputs.recording.media_types` and retain a pinned probe
+and allowed container list. The signed artifact MIME must match actual Drive
+metadata exactly; extension-based guesses and blanket `application/octet-stream`
+fallback are not accepted. Actual bytes must also pass the declared validator.
+Adding a permitted MIME/profile changes the installation pin and requires a
+fresh accepted plan or an explicit replan before execution starts.
+
+The Drive reader intentionally refuses all HTTP redirects, including `alt=media`.
+Deployment trials must include the intended large recording sizes. If Drive
+requires a redirect, the download fails closed; no credentials are forwarded.
+Do not disable the redirect handler as a workaround. Any future redirect support
+requires a reviewed destination/authentication policy and regression tests.
 
 Downloads use the bounded read-only Drive bridge. Private source snapshots retain
 original refs in their receipts; local paths are internal working copies, never

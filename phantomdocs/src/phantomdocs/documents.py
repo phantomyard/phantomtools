@@ -573,7 +573,11 @@ class DocumentService:
                 raise DocumentError("invalid expected reference hash")
         with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
-            parent = repo.node_by_path(folder) if folder else None
+            parent = (
+                repo.node_by_path(folder) or repo.node_by_slug(folder)
+                if folder
+                else None
+            )
             if folder and (parent is None or parent.get("kind") != "folder"):
                 raise DocumentError("reference destination folder not found")
             parent_mac = parent["mac"] if parent else repo.root_mac

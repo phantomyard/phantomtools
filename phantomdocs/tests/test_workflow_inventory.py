@@ -76,13 +76,32 @@ def test_overlay_is_observed_without_rewriting_installation(tmp_path):
     )
 
 
-def test_credential_resource_is_not_read_or_echoed(tmp_path):
+@pytest.mark.parametrize(
+    "filename",
+    [
+        ".env",
+        "google-service-account.json",
+        "au_service_account.json",
+        "oauth-token.json",
+        ".secret",
+        "au-credentials.json",
+    ],
+)
+def test_credential_resource_is_not_read_or_echoed(tmp_path, filename, monkeypatch):
     installation, _, _ = config(tmp_path)
-    secret = tmp_path / ".env"
+    secret = tmp_path / filename
     secret.write_text("NOT_A_REAL_SECRET=synthetic")
     installation["processing"]["resources"] = [
         {"path": str(secret), "sha256": "0" * 64}
     ]
+    original_open = type(secret).open
+
+    def guarded_open(path, *args, **kwargs):
+        if path == secret:
+            pytest.fail("credential file must be excluded before reading")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(secret), "open", guarded_open)
     result = runtime_inventory(installation)
     row = result["observations"][-1]
     assert (
@@ -91,6 +110,16 @@ def test_credential_resource_is_not_read_or_echoed(tmp_path):
     assert str(secret) not in json.dumps(
         result
     ) and "NOT_A_REAL_SECRET" not in json.dumps(result)
+
+
+def test_model_tokenizer_resource_is_not_mistaken_for_access_token(tmp_path):
+    installation, _, _ = config(tmp_path)
+    model_file = tmp_path / "tokenizer.json"
+    model_file.write_text('{"model": "synthetic"}')
+    installation["processing"]["resources"] = [
+        {"path": str(model_file), "sha256": file_hash(model_file)}
+    ]
+    assert runtime_inventory(installation)["observations"][-1]["status"] == "match"
 
 
 def test_cli_inventory_returns_two_for_unconfigured_runtime(tmp_path):

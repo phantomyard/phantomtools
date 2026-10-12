@@ -1,7 +1,11 @@
 name: Document workflow contracts
 on:
   push:
-    branches: [feat/document-workflows]
+    branches: [main, feat/document-workflows]
+    paths: ['phantomdocs/**', '.github/workflows/document-workflows.yml']
+  pull_request:
+    branches: [main]
+    paths: ['phantomdocs/**', '.github/workflows/document-workflows.yml']
   workflow_dispatch:
 permissions:
   contents: read

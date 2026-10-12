@@ -211,10 +211,20 @@ def _make_wrapper(tmp_path, org_file):
     return persona / "tools" / "documents.sh"
 
 
-def test_wrapper_injects_options_after_subcommand(tmp_path, org_file):
+def test_wrapper_injects_options_after_subcommand(tmp_path, org_file, monkeypatch):
     """The generated wrapper must run (not fail on group-level options) and
     inject --actor/--org-yaml *after* the subcommand, only for commands that
     accept them, honouring an explicit operator override."""
+    import click
+
+    from phantomdocs.workflow_cli import workflow
+
+    @click.command("future-org-command")
+    @click.option("--org-yaml")
+    def future_command(org_yaml):
+        pass
+
+    monkeypatch.setitem(workflow.commands, "future-org-command", future_command)
     wrapper = _make_wrapper(tmp_path, org_file)
 
     bindir = tmp_path / "bin"
@@ -296,6 +306,9 @@ def test_wrapper_injects_options_after_subcommand(tmp_path, org_file):
         "--org-yaml",
         "other.yaml",
     ]
+    assert run("workflow", "future-org-command").returncode == 0
+    calls = [ast.literal_eval(line) for line in log.read_text().strip().splitlines()]
+    assert calls[-1] == ["workflow", "future-org-command", "--org-yaml", str(org_file)]
     for command in (
         "sign-request",
         "accept",
@@ -317,7 +330,7 @@ def test_wrapper_injects_options_after_subcommand(tmp_path, org_file):
             "index-archive",
             "prepare",
         ),
-        calls[7:],
+        calls[8:],
     ):
         assert call == [
             "workflow",

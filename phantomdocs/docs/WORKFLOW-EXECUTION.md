@@ -159,6 +159,27 @@ integration remains to be implemented.
 
 ## Verification and next integration step
 
+The executor holds a SQLite `BEGIN IMMEDIATE` transaction while rebuilding the
+current plan and running adapter preflight, which may hash large resources.
+This protects pin validation/reservation against concurrent replanning, but can
+delay other ledger writers. Use the documented single authoritative runner host;
+measure preflight latency in deployment trials. Moving expensive checks outside
+the transaction requires a separately tested race-safe reservation design.
+
+The two meeting protocols are versioned compatibility contracts:
+`meeting-publication` retains the earlier `published-*` roles for explicit custom
+adapters; `meeting-processing` produces `branded-*` roles and stops for independent
+organizational archiving before reference indexing. New AU configurations select
+`meeting-processing`. The former is not an installed AU uploader. It is retained
+so existing pinned jobs/custom integrations are not silently reinterpreted.
+
+Generated workflow wrapper option lists now come from Click command metadata.
+Existing deployed wrappers still contain the code generated at setup time;
+upgrading the package alone does not regenerate them. Review persona setup paths
+and rerun the existing `pd setup` deployment procedure to generate a new wrapper.
+Internal ledger/service helper calls remain package-internal interfaces; they are
+not supported external adapter APIs. Host-local locks do not support dual writers.
+
 Tests cover fake Drive meeting publication, original preservation, branding before
 index, restart retries without repeated operations, backend/journal crash windows,
 uncertain result refusal, stale pins, processor authorization, lock exclusion,

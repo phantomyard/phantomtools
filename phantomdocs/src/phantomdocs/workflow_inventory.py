@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import stat
 from copy import deepcopy
 from pathlib import Path
@@ -18,18 +19,25 @@ from .workflows import WorkflowError, digest, validate_contract
 
 
 def _credential_path(path):
-    name = path.name.lower()
-    return name.startswith(".env") or name in {
-        "token",
-        "token.json",
-        "tokens.json",
-        "credentials.json",
-        "service-account.json",
-        "nsec",
-        "nsec.txt",
-        "id_rsa",
-        "id_ed25519",
-    }
+    name = path.name.casefold().replace("_", "-")
+    return (
+        name.startswith(".env")
+        or "service-account" in name
+        or "credential" in name
+        or re.search(r"(?:^|[.\-])(tokens?|secrets?|nsec)(?:[.\-]|$)", name)
+        or name
+        in {
+            "token",
+            "token.json",
+            "tokens.json",
+            "credentials.json",
+            "service-account.json",
+            "nsec",
+            "nsec.txt",
+            "id_rsa",
+            "id_ed25519",
+        }
+    )
 
 
 def runtime_inventory(installation, *, tools=None, processing=None):
