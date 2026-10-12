@@ -46,6 +46,8 @@ Versioned processing contracts and read-only planning are available through
 [Document workflows](docs/WORKFLOWS.md) for installed protocols, capability
 bindings, default-persona resolution, declared dependency export and the staged
 implementation roadmap. Plans do not execute transformations or ingest files.
+The explicit [executor API](docs/WORKFLOW-EXECUTION.md) provides durable operation
+receipts and trusted adapter execution; no AU daemon is activated automatically.
 
 ## Usage
 

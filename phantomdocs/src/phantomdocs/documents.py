@@ -536,143 +536,225 @@ class DocumentService:
         """Ingest a document: compute the MAC chain, store the blob, register
         the node (or version an existing node)."""
         with manifest_lock(_manifest_path(self.root)):
+            return self._add_document_locked(
+                content=content,
+                ref_location=ref_location,
+                slug=slug,
+                category=category,
+                folder=folder,
+                owners=owners,
+                backend=backend,
+            )
+
+    def index_reference_once(self, *, ref, slug, category, folder, owners):
+        """Index a new external ref; existing refs skip byte reads and hashing.
+
+        The deduplication check and insertion share the manifest write lock.
+        Classification/ownership/folder conflicts fail instead of reclassifying.
+        """
+        from .storage import location_uri, read_reference
+        from .workflows import reference_is_safe
+
+        if not reference_is_safe(ref) or not category or not owners:
+            raise DocumentError("explicit safe reference, category and owners required")
+        if (
+            not isinstance(slug, str)
+            or not slug
+            or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789.-" for c in slug)
+            or slug in (".", "..")
+        ):
+            raise DocumentError("invalid reference slug")
+        with manifest_lock(_manifest_path(self.root)):
             repo = self._load_repo()
-            seq, prev_head = self._next_head(repo)
-            ts = _now_iso()
-            parent_mac = repo.root_mac
-            parent_path = ""
-            if folder:
-                parent = repo.node_by_path(folder) or repo.node_by_slug(folder)
-                if parent is None or parent.get("kind") != "folder":
-                    raise DocumentError(f"folder not found: {folder}")
-                parent_mac = parent["mac"]
-                parent_path = urn_path(parent["urn"]) + "/"
-
-            ch = content_hash(content)
-            logical = f"{parent_path}{slug}"
-            urn = f"urn:{repo.org}:doc:{logical}"
-
-            existing = repo.node_by_urn(urn)
-            previous = existing["mac"] if existing is not None else None
-            # Tree-position stability: every version of a URN must share one
-            # parentMac. When versioning, the tree position is owned by the
-            # existing document, not by the CLI --folder argument, so the
-            # parent is derived from the existing node and a --folder naming a
-            # different parent is rejected (a move is a separate operation).
-            if existing is not None:
-                if parent_mac != existing["parentMac"]:
-                    raise DocumentError(
-                        f"denied: cannot move {urn} via add; --folder names a "
-                        "different parent than the existing version (move is a "
-                        "separate operation)"
+            parent = repo.node_by_path(folder) if folder else None
+            if folder and (parent is None or parent.get("kind") != "folder"):
+                raise DocumentError("reference destination folder not found")
+            parent_mac = parent["mac"] if parent else repo.root_mac
+            hits = [
+                n
+                for n in repo.data["nodes"]
+                if n.get("kind") == "doc"
+                and any(location_uri(loc) == ref for loc in n.get("locations", []))
+            ]
+            for node in hits:
+                if (
+                    normalize_category(node["category"]) != normalize_category(category)
+                    or set(node.get("owners", [])) != set(owners)
+                    or node["parentMac"] != parent_mac
+                    or not can_write(
+                        self.org, self.actor_id, node["category"], node.get("owners")
                     )
-                parent_mac = existing["parentMac"]
-            # Version identity binds the predecessor (issue #44): the first
-            # version chains off the tree parent; later versions chain off the
-            # previous version, so the history is cryptographically chained and
-            # a rollback to older content gets a distinct identity.
-            mac = doc_version_mac_from_hash(parent_mac, previous, slug, ch)
-
-            # Category: a new node uses --category (default 1); versioning an
-            # existing node always preserves the existing node's category. A
-            # reclassification must be a separate, explicitly-authorized
-            # operation, never a side effect of `add`.
-            if existing is not None:
-                effective_category = existing["category"]
-                if category is not None and normalize_category(
-                    category
-                ) != normalize_category(effective_category):
+                ):
                     raise DocumentError(
-                        f"denied: cannot reclassify {urn} from "
-                        f"{normalize_category(effective_category)} to "
-                        f"{normalize_category(category)} via add "
-                        "(reclassification is a separate operation)"
+                        "existing reference has conflicting policy or destination"
                     )
-            else:
-                effective_category = (
-                    "category-1" if category is None else normalize_category(category)
-                )
-
-            # Write ACL: base category access; when versioning an existing
-            # node, the actor must be one of its declared owners.
-            effective_owners = (
-                list(existing.get("owners", []) or []) if existing else list(owners)
-            )
-            if not can_write(
-                self.org, self.actor_id, effective_category, effective_owners
-            ):
+            if hits:
+                if len({n["urn"] for n in hits}) != 1:
+                    raise DocumentError(
+                        "reference already has multiple document identities"
+                    )
+                return {"unchanged": True, "urn": hits[-1]["urn"]}
+            if not can_write(self.org, self.actor_id, category, owners):
+                raise DocumentError("denied: cannot index reference")
+            logical = (urn_path(parent["urn"]) + "/" if parent else "") + slug
+            if repo.node_by_urn(f"urn:{repo.org}:doc:{logical}"):
                 raise DocumentError(
-                    f"denied: {self.actor_id} cannot write "
-                    f"{normalize_category(effective_category)} "
-                    f"{'(owner required)' if effective_owners else ''}"
+                    "reference slug already belongs to another document"
                 )
+            content, location = read_reference(ref, streaming=True)
+            try:
+                return self._add_document_locked(
+                    content=content,
+                    ref_location=location,
+                    slug=slug,
+                    category=category,
+                    folder=folder,
+                    owners=list(owners),
+                    backend=None,
+                )
+            finally:
+                if isinstance(content, FileContent):
+                    content.close()
 
-            # A no-op is still an operation on an existing document.  Check
-            # the existing document's ACL first so a non-owner cannot use an
-            # identical re-add to obtain a successful write-like result.
-            if existing is not None and existing.get("contentHash") == ch:
-                return {"unchanged": True, "urn": urn}
+    def _add_document_locked(
+        self, *, content, ref_location, slug, category, folder, owners, backend
+    ):
+        """Existing add implementation; caller must hold the manifest lock."""
+        repo = self._load_repo()
+        seq, prev_head = self._next_head(repo)
+        ts = _now_iso()
+        parent_mac = repo.root_mac
+        parent_path = ""
+        if folder:
+            parent = repo.node_by_path(folder) or repo.node_by_slug(folder)
+            if parent is None or parent.get("kind") != "folder":
+                raise DocumentError(f"folder not found: {folder}")
+            parent_mac = parent["mac"]
+            parent_path = urn_path(parent["urn"]) + "/"
 
-            if ref_location is not None:
-                locations = [ref_location]
+        ch = content_hash(content)
+        logical = f"{parent_path}{slug}"
+        urn = f"urn:{repo.org}:doc:{logical}"
+
+        existing = repo.node_by_urn(urn)
+        previous = existing["mac"] if existing is not None else None
+        # Tree-position stability: every version of a URN must share one
+        # parentMac. When versioning, the tree position is owned by the
+        # existing document, not by the CLI --folder argument, so the
+        # parent is derived from the existing node and a --folder naming a
+        # different parent is rejected (a move is a separate operation).
+        if existing is not None:
+            if parent_mac != existing["parentMac"]:
+                raise DocumentError(
+                    f"denied: cannot move {urn} via add; --folder names a "
+                    "different parent than the existing version (move is a "
+                    "separate operation)"
+                )
+            parent_mac = existing["parentMac"]
+        # Version identity binds the predecessor (issue #44): the first
+        # version chains off the tree parent; later versions chain off the
+        # previous version, so the history is cryptographically chained and
+        # a rollback to older content gets a distinct identity.
+        mac = doc_version_mac_from_hash(parent_mac, previous, slug, ch)
+
+        # Category: a new node uses --category (default 1); versioning an
+        # existing node always preserves the existing node's category. A
+        # reclassification must be a separate, explicitly-authorized
+        # operation, never a side effect of `add`.
+        if existing is not None:
+            effective_category = existing["category"]
+            if category is not None and normalize_category(
+                category
+            ) != normalize_category(effective_category):
+                raise DocumentError(
+                    f"denied: cannot reclassify {urn} from "
+                    f"{normalize_category(effective_category)} to "
+                    f"{normalize_category(category)} via add "
+                    "(reclassification is a separate operation)"
+                )
+        else:
+            effective_category = (
+                "category-1" if category is None else normalize_category(category)
+            )
+
+        # Write ACL: base category access; when versioning an existing
+        # node, the actor must be one of its declared owners.
+        effective_owners = (
+            list(existing.get("owners", []) or []) if existing else list(owners)
+        )
+        if not can_write(self.org, self.actor_id, effective_category, effective_owners):
+            raise DocumentError(
+                f"denied: {self.actor_id} cannot write "
+                f"{normalize_category(effective_category)} "
+                f"{'(owner required)' if effective_owners else ''}"
+            )
+
+        # A no-op is still an operation on an existing document.  Check
+        # the existing document's ACL first so a non-owner cannot use an
+        # identical re-add to obtain a successful write-like result.
+        if existing is not None and existing.get("contentHash") == ch:
+            return {"unchanged": True, "urn": urn}
+
+        if ref_location is not None:
+            locations = [ref_location]
+        else:
+            store = resolve_backend(backend) if backend else LocalBackend(self.root)
+            location = store.put(ch, content)
+            scheme = (
+                backend.split("://")[0] if backend and "://" in backend else "local"
+            )
+            if scheme == "gdrive":
+                locations = [{"backend": "gdrive", "ref": location}]
             else:
-                store = resolve_backend(backend) if backend else LocalBackend(self.root)
-                location = store.put(ch, content)
-                scheme = (
-                    backend.split("://")[0] if backend and "://" in backend else "local"
-                )
-                if scheme == "gdrive":
-                    locations = [{"backend": "gdrive", "ref": location}]
-                else:
-                    locations = [{"backend": scheme, "path": location}]
+                locations = [{"backend": scheme, "path": location}]
 
-            node = {
-                "urn": urn,
-                "mac": mac,
-                "parentMac": parent_mac,
-                "kind": "doc",
-                "slug": slug,
-                "category": effective_category,
-                "contentHash": ch,
-                "size": len(content),
-                "owners": effective_owners,
-                "locations": locations,
-                "meta": {"title": slug},
-                "relations": {},
-                "previous": previous,
-                "actor": self.actor_id,
-                "action": "add" if previous is None else "version",
-                "seq": seq,
-                "prevHead": prev_head,
-                "cryptoVersion": CRYPTO_VERSION,
-                "policyHash": self.policy_hash,
-                "ts": ts,
-            }
-            node.update(
-                self._sign_fields(
-                    mac=mac,
-                    action="add" if previous is None else "version",
-                    category=effective_category,
-                    owners=effective_owners,
-                    locations=locations,
-                    urn=urn,
-                    seq=seq,
-                    prev_head=prev_head,
-                    ts=ts,
-                )
-            )
-            repo.add_node(node)
-            self._commit_transaction(
-                repo,
-                seq=seq,
-                action="add" if previous is None else "version",
-                urn=urn,
+        node = {
+            "urn": urn,
+            "mac": mac,
+            "parentMac": parent_mac,
+            "kind": "doc",
+            "slug": slug,
+            "category": effective_category,
+            "contentHash": ch,
+            "size": len(content),
+            "owners": effective_owners,
+            "locations": locations,
+            "meta": {"title": slug},
+            "relations": {},
+            "previous": previous,
+            "actor": self.actor_id,
+            "action": "add" if previous is None else "version",
+            "seq": seq,
+            "prevHead": prev_head,
+            "cryptoVersion": CRYPTO_VERSION,
+            "policyHash": self.policy_hash,
+            "ts": ts,
+        }
+        node.update(
+            self._sign_fields(
                 mac=mac,
-                ch=ch,
-                sig=node.get("sig"),
-                sig_pubkey=node.get("sigPubkey"),
-                head_mac=mac,
+                action="add" if previous is None else "version",
+                category=effective_category,
+                owners=effective_owners,
+                locations=locations,
+                urn=urn,
+                seq=seq,
+                prev_head=prev_head,
+                ts=ts,
             )
+        )
+        repo.add_node(node)
+        self._commit_transaction(
+            repo,
+            seq=seq,
+            action="add" if previous is None else "version",
+            urn=urn,
+            mac=mac,
+            ch=ch,
+            sig=node.get("sig"),
+            sig_pubkey=node.get("sigPubkey"),
+            head_mac=mac,
+        )
 
         return {
             "verb": "added" if previous is None else "versioned",

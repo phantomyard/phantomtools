@@ -1,5 +1,11 @@
 # Authenticated workflow intake and reviewed adapter interfaces
 
+## Execution extension
+
+See [workflow execution](WORKFLOW-EXECUTION.md) for the subsequent executor API,
+started/completed journal, reference deduplication and observed graph export.
+The admission commands below retain their original non-executing behavior.
+
 ## Scope and trust boundary
 
 `pd workflow sign-request`, `accept` and `status` add authenticated admission to

@@ -24,6 +24,7 @@ LEDGER_VERSION = 1
 class WorkflowLedger:
     def __init__(self, path, *, readonly=False):
         path = Path(path).absolute()
+        self.path = path
         if path.is_symlink() or path.parent.resolve() != path.parent:
             raise WorkflowError("ledger paths must not be symlinked")
         if os.name == "posix" and stat.S_IMODE(path.parent.stat().st_mode) & 0o022:
@@ -136,6 +137,17 @@ class WorkflowLedger:
                 (row["organization"], row["request_id"]),
             )
         ]
+        execution = []
+        if self.connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='workflow_execution'"
+        ).fetchone():
+            execution = [
+                dict(row)
+                for row in self.connection.execute(
+                    "SELECT operation,state,receipt_hash,updated_at FROM workflow_execution WHERE organization=? AND request_id=? ORDER BY operation",
+                    (row["organization"], row["request_id"]),
+                )
+            ]
         return {
             "version": LEDGER_VERSION,
             "organization": row["organization"],
@@ -148,6 +160,7 @@ class WorkflowLedger:
             "plan": planned,
             "events": events,
             "execution_ready": False,
+            "execution": execution,
         }
 
     def status(self, organization, request_id, org, caller):
@@ -182,6 +195,20 @@ class WorkflowLedger:
                     )
                     self.connection.execute("COMMIT")
                     return result
+            if existing and replan:
+                table = self.connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='workflow_execution'"
+                ).fetchone()
+                if (
+                    table
+                    and self.connection.execute(
+                        "SELECT 1 FROM workflow_execution WHERE organization=? AND request_id=? LIMIT 1",
+                        (organization, request_id),
+                    ).fetchone()
+                ):
+                    raise WorkflowError(
+                        "execution has started; replanning is forbidden"
+                    )
             planned = make_plan(job)
             self._authorize(planned, org, caller, True)
             if (

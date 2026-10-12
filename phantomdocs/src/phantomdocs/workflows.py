@@ -417,3 +417,22 @@ def dependency_graph(planned):
             "observation": "declared-only",
         }
     )
+
+
+def observed_dependency_graph(record):
+    """Category-authorized status supplies observed receipts, not live liveness."""
+    graph = dependency_graph(record["plan"])
+    observations = {entry["operation"]: entry for entry in record.get("execution", [])}
+    prefix = f"{record['organization']}:{record['request_id']}:"
+    for component in graph["components"]:
+        observation = observations.get(component["id"][len(prefix) :])
+        if observation:
+            component["runtime"] = (
+                "complete"
+                if observation["state"] == "complete"
+                else "started-unconfirmed"
+            )
+            component["observed_at"] = observation["updated_at"]
+            component["receipt_hash"] = observation["receipt_hash"]
+    graph["observation"] = "ledger-receipts"
+    return graph

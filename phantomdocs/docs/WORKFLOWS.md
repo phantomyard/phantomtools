@@ -1,5 +1,11 @@
 # Document workflows: contracts and installed protocol registry
 
+## Execution extension
+
+The subsequent [execution block](WORKFLOW-EXECUTION.md) adds a trusted-adapter
+executor API, durable receipts, local command runner and reference deduplication.
+The planning/admission CLI still does not execute transformations automatically.
+
 ## Implemented scope
 
 The product provides generic, read-only `pd workflow validate` and

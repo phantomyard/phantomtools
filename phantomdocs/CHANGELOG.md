@@ -4,6 +4,18 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+- **Workflow executor and reconciliation boundary**: a trusted adapter API runs
+  pinned protocols with durable started/completed receipts, host-local runner
+  locking and crash reconciliation. Uncertain operations are never repeated
+  without a confirmed backend receipt. Replanning is blocked once execution
+  begins. Adds a hash-pinned, timeout-bound local argv runner with source/output
+  checks, and authorized observed dependency export through workflow status.
+  No AU adapter, Drive publisher or PhantomView UI is activated automatically.
+- **Reference deduplication before reads** (`pd add --skip-existing-ref`):
+  atomically checks existing refs before download/hash and requires explicit
+  category/owners. Conflicting classification, destination or document identity
+  fails closed. Existing add/version behavior is retained without this option.
+
 - **Authenticated workflow intake and durable retry records**:
   `pd workflow sign-request/accept/status` bind request intent and explicit UTC
   validity to the requester's existing declared Nostr key. A private SQLite

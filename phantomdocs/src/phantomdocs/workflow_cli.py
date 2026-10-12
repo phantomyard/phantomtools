@@ -15,6 +15,7 @@ from .workflows import (
     WorkflowError,
     dependency_graph,
     load_registry,
+    observed_dependency_graph,
     plan,
     read_json,
     resolve_processor,
@@ -193,7 +194,12 @@ def accept_job(
 @click.option("--ledger", required=True, type=click.Path(exists=True, dir_okay=False))
 @click.option("--org-yaml", required=True, type=click.Path(exists=True, dir_okay=False))
 @click.option("--actor", default=None)
-def job_status(request_id, ledger, org_yaml, actor):
+@click.option(
+    "--graph",
+    is_flag=True,
+    help="Export declared dependencies with ledger observations.",
+)
+def job_status(request_id, ledger, org_yaml, actor, graph):
     """Read an authorized ledger record without updating its state or plans."""
     from .cli import _require_acl
 
@@ -205,4 +211,10 @@ def job_status(request_id, ledger, org_yaml, actor):
         raise click.ClickException(str(exc)) from exc
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error) as exc:
         raise click.ClickException("cannot read workflow record") from exc
-    click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+    click.echo(
+        json.dumps(
+            observed_dependency_graph(result) if graph else result,
+            indent=2,
+            ensure_ascii=False,
+        )
+    )

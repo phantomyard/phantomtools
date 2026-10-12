@@ -90,6 +90,8 @@
         "id": {"$ref": "#/$defs/id"}, "version": {"$ref": "#/$defs/id"},
         "entrypoint": {"type": "string", "minLength": 1, "maxLength": 4096},
         "script": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "script_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "arguments": {"type": "array", "items": {"type": "string"}},
         "variants": {"type": "object", "propertyNames": {"$ref": "#/$defs/id"},
           "additionalProperties": {"type": "array", "items": {"type": "string"}}}
