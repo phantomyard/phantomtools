@@ -8,9 +8,11 @@ to supply actors, categories, owners and document context; it is never modified.
 Phantombot's selected instance supplies the initial default processor, independently
 of the requester and the department/project responsible for the document.
 
-1. Phantomeet supplies the recording and meeting order. Its declared requester,
-   department, project and title must be mapped explicitly into the authorized
-   job. Do not fall back to a department to make missing context pass validation.
+1. Phantomeet supplies the recording and meeting order. Its requester and
+   department/project context must be mapped explicitly into the authorized job.
+   The title and other order metadata remain available to the external archiver;
+   the job schema does not invent title or sequence fields. Do not fall back to a
+   department to make missing context pass validation.
 2. Processing uses `WorkflowExecutor.prepare` with an installed trusted adapter.
    It validates inputs, performs the declared transformations and preserves the
    originals. Completed journal receipts are reused on retry. `prepare` stops
