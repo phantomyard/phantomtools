@@ -1,6 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
+    "signed-request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "crypto_version", "kind", "job", "issued_at", "expires_at", "signer_pubkey", "signature"],
+      "properties": {
+        "version": {"const": 1}, "crypto_version": {"const": 1},
+        "kind": {"const": "signed-document-job"}, "job": {"$ref": "#/$defs/job"},
+        "issued_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+        "expires_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+        "signer_pubkey": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+      }
+    },
     "id": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"},
     "ids": {"type": "array", "items": {"$ref": "#/$defs/id"}, "uniqueItems": true},
     "context": {
@@ -76,7 +88,11 @@
       "required": ["id", "version", "entrypoint"],
       "properties": {
         "id": {"$ref": "#/$defs/id"}, "version": {"$ref": "#/$defs/id"},
-        "entrypoint": {"type": "string", "minLength": 1, "maxLength": 4096}
+        "entrypoint": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "script": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "arguments": {"type": "array", "items": {"type": "string"}},
+        "variants": {"type": "object", "propertyNames": {"$ref": "#/$defs/id"},
+          "additionalProperties": {"type": "array", "items": {"type": "string"}}}
       }
     },
     "installation": {

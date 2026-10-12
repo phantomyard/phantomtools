@@ -4,6 +4,17 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+- **Authenticated workflow intake and durable retry records**:
+  `pd workflow sign-request/accept/status` bind request intent and explicit UTC
+  validity to the requester's existing declared Nostr key. A private SQLite
+  ledger commits accepted plans and events atomically, rejects conflicting
+  request ids, preserves processor/policy pins on identical retries, and only
+  refreshes plans through an explicit authorized `--replan` without changing
+  classification or owners. Status is read-only and category-filtered. Adds
+  pure argument-list construction and reviewed AU transformation descriptors;
+  no upload/cleanup orchestrator, tool execution, inbox scan or live deployment
+  is enabled. Uses existing BIP-340 signing/key-lifecycle primitives.
+
 - **Versioned document workflow planning** (`pd workflow validate/plan`):
   additive read-only JSON contracts, installed protocol instructions, validated
   dependency graphs, and capability-to-tool bindings for arbitrary document
@@ -13,8 +24,9 @@ All notable changes to PhantomDocs are documented in this file.
   block a plan; no tools or document bytes are executed/read. Declared graph
   export supports a future observatory adapter. Includes AU meeting policy
   examples, shared package assets, and nested persona-wrapper support. This
-  stage does not implement an executor, job ledger, remote authentication,
-  inbox scanning, branding tools, Drive routing, or invitee-only access.
+  planning layer does not execute tools, scan inboxes, apply branding, route
+  Drive files, or implement invitee-only access. Signed admission is described
+  separately above.
 
 **Hierarchical categories (#31), index by reference (#35), update package (#33), mutation signing (#30 v2).**
 

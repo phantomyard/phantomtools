@@ -2,8 +2,9 @@
 
 ## Implemented scope
 
-This first stage provides generic, read-only `pd workflow validate` and
-`pd workflow plan` commands. The product consumes PhantomOrg and Phantombot
+The product provides generic, read-only `pd workflow validate` and
+`pd workflow plan` commands, plus signed request admission and a private ledger
+through `sign-request`, `accept` and `status`. The product consumes PhantomOrg and Phantombot
 configuration without editing either. It does not depend on an AU organization,
 a particular persona, a department name or a Drive folder embedded in code.
 
@@ -11,12 +12,14 @@ It validates document jobs, resolves installed protocol versions, checks a
 declared dependency graph, resolves the default processor and its authorization,
 and exports a pinned plan or declared graph. The package ships JSON Schema
 definitions and versioned Markdown protocol instructions. A generated persona
-wrapper understands `documents.sh workflow plan` and injects local actor/org
+wrapper understands `documents.sh workflow plan/sign-request/accept/status` and injects local actor/org
 options after the nested command.
 
-It does **not** scan an inbox, authenticate remote requesters, execute tools,
-read/hash document bytes, apply branding, create jobs in a queue, upload/move
-Drive objects, change the store, or migrate personas. Plans always contain
+It does **not** scan an inbox, provide a network transport, execute tools,
+read/hash document bytes, apply branding, run a processing queue, upload/move
+Drive objects, change the document store, or migrate personas. Signed requests
+authenticate intent using existing declared keys; accepted plans are durable
+intake records, not processing-completion records. Plans always contain
 `execution_ready: false`; a tool's presence does not prove its version or actual
 runtime behavior. This deliberately establishes the common contract before
 connecting operational adapters.
@@ -34,7 +37,8 @@ or replace that patch automatically.
 | Installation configuration | One shared intake selector, protocol bindings, existing archive destinations, logical folders, branding profile identifier and installed tool bindings |
 | Phantombot configuration/state | Initial processor selection via `default_persona` |
 | Job contract | Request id, requester claim, explicit target/requesting context and existing input references |
-| Future intake/executor/ledger | Authenticated sender, byte validation, actual transformations, retry state and completion evidence |
+| Signed intake and private ledger | Declared requester signature, validity, atomic admission, conflicts, pinned plans and explicit replanning |
+| Future executor | Byte validation, actual transformations, stage retries and completion evidence |
 | PhantomView adapter | Read-only visualization of declared dependencies and separately observed execution |
 
 Do not copy executable commands into persona identities or allow jobs to supply
@@ -73,8 +77,8 @@ are rejected. Job artifact ids and references must be unique.
 }
 ```
 
-`requester` is a claim, not authentication. A future intake adapter must bind it
-to the authenticated sender and authorize the context. Neither `--actor` nor an
+`requester` in an unsigned job is a claim. Signed intake binds that claim to
+the requester's current declared key and checks authorization before admission. Neither `--actor` nor an
 unsigned JSON file establishes remote identity. Planning also checks the
 requester's existing category/owner authorization, but cannot prove who submitted
 the file. The CLI's local planner actor must be able to read the classification.
@@ -142,7 +146,8 @@ The resolved actor must have category read/write authorization for the selected
 owners and the protocol's root logical tools (for example `documents`), without
 matching tool exclusions. Being default does not create permissions. A change
 of default produces a new plan; an existing plan retains its recorded processor.
-The future ledger must pin it and require an explicit authorized reassignment.
+The ledger pins it; changing it requires an explicit authorized `accept --replan`.
+Replanning cannot change classification or owners.
 
 Every route selects an exact declared domain/type and protocol id/version.
 Category comes only from the type override or domain default and must be a
@@ -175,9 +180,10 @@ project document types are not bound to these routes. Category-2 grants read to
 all category-2 actors; event invitations remain in the delivery layer. No
 invitee-only gate or correction to project-category inheritance is claimed.
 
-The examples intentionally leave tool bindings empty: the actual transcription,
-summary and branding implementations/interfaces have not been inventoried.
-Therefore example plans return blocked. Recording IDs are explicit placeholders,
+The installation example intentionally leaves tool bindings empty, so its plans
+return blocked. The separately reviewed `au-tool-bindings.json` descriptors
+record the supplied interfaces without activating them. See
+[authenticated intake and adapter review](WORKFLOW-INTAKE.md). Recording IDs are explicit placeholders,
 not live objects, and planning never downloads them. No non-meeting AU routing
 or new categories are configured. Another installation declares its own actors,
 domains, intake, routes, branding and bindings with the same generic contract.
@@ -195,7 +201,7 @@ python3 -m venv .venv
 ```
 
 For an operator planning against their installed AU model, set the real,
-readable Phantombot config/state paths; no such live paths were invented:
+readable Phantombot config/state paths for the selected instance/home:
 
 ```bash
 pd workflow plan \
@@ -228,12 +234,11 @@ installation manifest or a deployed dashboard integration.
 
 Next steps, in order:
 
-1. Inventory the installed Phantombot default config/state and AU's real media,
-   transcription, summary and branding tools; bind their versioned interfaces.
-2. Implement authenticated intake and an additive durable job ledger. Persist
-   the request payload hash and pins; the same request id with different intent
-   is a conflict, while exact retries resume. Track received, validated,
-   processing, complete-artifacts, indexed, needs-review and failed states.
+1. Verify installed tool versions and assets against the reviewed AU interfaces.
+   Signed intake and durable plan admission are implemented; the same request
+   id with different intent is a conflict and identical retries retain pins.
+2. Extend the intake ledger with executor leases and actual stage states before
+   claiming processing, complete-artifacts, indexed, needs-review or failed.
 3. Add validated adapters that preserve originals, record derived-from links,
    publish a complete artifact manifest and deduplicate producer results by
    request/role/revision as well as index refs by Drive id. Do not pass a stale

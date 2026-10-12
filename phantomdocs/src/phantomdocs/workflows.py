@@ -326,6 +326,8 @@ def plan(job, installation, org, registry_data, processor, caller):
                 available = Path(entrypoint).is_file() and os.access(
                     entrypoint, os.X_OK
                 )
+            if binding.get("script"):
+                available = available and Path(binding["script"]).is_file()
         if not available:
             missing.add(step["capability"])
         steps.append(

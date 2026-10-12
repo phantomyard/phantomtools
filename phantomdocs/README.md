@@ -42,7 +42,7 @@ nodes: []
 See `examples/example-org.yaml` and `docs/SPEC.md`.
 
 Versioned processing contracts and read-only planning are available through
-`pd workflow validate` and `pd workflow plan`. See
+`pd workflow validate/plan` and signed admission via `sign-request/accept/status`. See
 [Document workflows](docs/WORKFLOWS.md) for installed protocols, capability
 bindings, default-persona resolution, declared dependency export and the staged
 implementation roadmap. Plans do not execute transformations or ingest files.

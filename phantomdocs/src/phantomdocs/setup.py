@@ -216,8 +216,8 @@ done
 args=("${{before[@]}}")
 if [[ -n $cmd ]]; then
   args+=("$cmd")
-  if [[ $cmd == workflow && ${{after[0]-}} == plan ]]; then
-    args+=(plan)
+  if [[ $cmd == workflow ]] && in_list "${{after[0]-}}" 'plan sign-request accept status'; then
+    args+=("${{after[0]}}")
     after=("${{after[@]:1}}")
     if ! has_opt --actor "${{after[@]}}"; then
       args+=(--actor "$ACTOR")
