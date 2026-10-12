@@ -202,7 +202,7 @@ set -euo pipefail
 export PATH=/opt/phantomdocs/venv/bin:$PATH
 INGEST=/opt/phantomdocs/bin/ingest-bandejas.py
 PY=/opt/phantomdocs/venv/bin/python
-RECOVERY=/var/lib/phantomdocs-ingest/recovery-2026-10-12.json
+RECOVERY=/var/lib/phantomdocs-ingest/seen/recovery-2026-10-12.json
 "$PY" "$INGEST" --source almaponia --source secretariat --inventory
 "$PY" "$INGEST" --source almaponia --source secretariat --prepare-catalog "$RECOVERY"
 "$PY" -m json.tool "$RECOVERY"
