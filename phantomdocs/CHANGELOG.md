@@ -10,6 +10,8 @@ All notable changes to PhantomDocs are documented in this file.
   workflow wrappers derive actor/org options from Click metadata. Documents
   inactive AU bindings, approved Drive intake prerequisites, strict MIME/redirect
   behavior, protocol compatibility and preflight ledger locking.
+  Corrects the AU meeting example to Jibri's `video/mp4` and documents the required
+  canonical raw-intake upload change for ALMAPONIA before workflow activation.
 
 - **Declared PhantomView installation map** (`pd workflow installation-map`):
   exports protocol/artifact/tool dependencies in the collector's v1 manifest,

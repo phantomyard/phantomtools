@@ -84,6 +84,35 @@ actual Drive ID and bind that ID to the authenticated meeting request. This
 package does not upload recordings or infer a different intake folder. Confirm
 the intake selection and upload/request provenance in the deployment trial.
 
+### AU canonical intake versus current department upload
+
+The agreed shared-intake architecture uses one canonical raw-recording intake
+for both AU and ALMAPONIA requests: `documents.inboxes.pepa`, Drive folder
+`1aaOqIdZeLCNbRmz2P9sAS1k3Oy3QfGp-`. Requester, project context, owners and archive
+destination still come from the authorized job and organization policy; the
+intake folder does not determine them. Both example jobs declare Jibri's binary
+`video/mp4`, matching the inactive recording processing profile.
+
+The operator reports that the current VPS uploader selects `DEPT_INBOX_MAP`:
+secretariat recordings reach Pepa, while ALMAPONIA recordings reach Alma's inbox
+`17Owx101Wcqvi_yvKMHKP7jgg3bflrbrt`. The latter does not satisfy this candidate's
+source boundary. A job referencing that existing Alma-inbox recording must fail
+before download; retaining that rejection is intentional.
+
+Before activating the new workflow, the deployment must direct new raw recordings
+for both request contexts to the canonical intake and retain the actual returned
+Drive ID for the signed job. Review the raw-recording upload call separately from
+departmental delivery: blindly replacing the whole `DEPT_INBOX_MAP` may also
+change delivery of processed material. This product change does not patch the
+local uploader, move existing recordings, add Drive parents or widen allowed
+source folders. Verify both secretariat and ALMAPONIA source metadata in a trial.
+
+Route-specific intake is a different product contract, not an alternate value in
+the current AU example: installation v1 has one intake and rejects undeclared
+route fields. It is not added because it contradicts the chosen shared-intake
+design. Previously archived documents remain recoverable through the separate
+read-only AU recovery utility; they do not need to pass through processing intake.
+
 MIME tolerance is explicit installation policy: list approved alternatives such
 as `video/quicktime` in `inputs.recording.media_types` and retain a pinned probe
 and allowed container list. The signed artifact MIME must match actual Drive
