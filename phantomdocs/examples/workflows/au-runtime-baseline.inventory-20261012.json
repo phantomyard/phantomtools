@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "source_repository": "salvaalba-dev/aquaponics-deploy",
+  "source_commit": "6a8da867e3b28c5bcc7db84555a6531fc3d52f82",
+  "source_path": "inventario/au-pipeline-inventario-20261012.txt",
+  "observed_at": "2026-10-12T21:00:52Z",
+  "execution_ready": false,
+  "requires_operator_review": true,
+  "resources": [
+    {
+      "path": "/usr/bin/ffmpeg",
+      "sha256": "ed16af623947494a72e284b6eb8ff225f2da22b38b5d5069c2fd4b4ba3384e41"
+    },
+    {
+      "path": "/opt/whisper-transcribe/prompt-resumen-v3.txt",
+      "sha256": "b79cb88390b93bf65dbef906bd83cd2088d630426d3513cb00fe18a905993d0f"
+    },
+    {
+      "path": "/opt/post-meeting/au-brand/html_to_pdf.js",
+      "sha256": "7c2de3344b5faa1696b19533d1c1d9895e2aa6906e037017bcc5140c69fdeb66"
+    },
+    {
+      "path": "/opt/post-meeting/au-brand/Logo_AU_horizontal.png",
+      "sha256": "548af9ee88ed66f64a71033e23161261d64c9a5f786eb4f1cab564facaf97590"
+    },
+    {
+      "path": "/opt/post-meeting/au-brand/Anagrama_AU.png",
+      "sha256": "e3b83e83a504fd5d76b5192e8d53c993d1e762144cc39a3fa9e2dd6ba734cffc"
+    },
+    {
+      "path": "/opt/post-meeting/au-brand/Marca_agua_AU.png",
+      "sha256": "1221071727a03836098c1fbfaae0cb0f9ac15f1b20a30e303cd489f013bdfbc6"
+    }
+  ],
+  "probe": {
+    "entrypoint": "/usr/bin/ffprobe",
+    "sha256": "272f6ebc634a63d9c8b4ca68e964119d980f25154e5aa2c35e5487da48e9a58f"
+  },
+  "reported_whisper_revision": "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf",
+  "blockers": [
+    "Operator-selected private work root is not declared.",
+    "PhantomDocs executable pin is not supplied.",
+    "Node and Chrome executable paths and hashes are not supplied.",
+    "Whisper model selection, complete snapshot files and processor read access require verification.",
+    "Current script interfaces and real output quality require isolated compatibility trials.",
+    "External summary disclosure and credentials require deployment review."
+  ]
+}

@@ -114,6 +114,7 @@ bounded by a 1 MiB read buffer; large model files can take time to inventory.
 
 Supply a sanitized report through the deployment repository if requested. Review
 its absolute paths/modes before sharing; no report is published automatically.
-Actual PhantomView UI integration also requires its accessible repository/interface:
-it is absent from this checkout. Existing authorized graph exports are the product
-boundary; no PhantomView-specific manifest, URL or code location is guessed here.
+The operator inventory is summarized in [AU-RUNTIME-BASELINE.md](AU-RUNTIME-BASELINE.md).
+The reviewed private PhantomView collector interface now has a declared dependency
+export documented in [WORKFLOW-PHANTOMVIEW.md](WORKFLOW-PHANTOMVIEW.md). Authorized
+job observations remain separate; the exporter does not change the private UI.

@@ -4,6 +4,14 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+- **Declared PhantomView installation map** (`pd workflow installation-map`):
+  exports protocol/artifact/tool dependencies in the collector's v1 manifest,
+  including the independent archiver before indexing processed results. Preserves
+  an explicit base manifest, rejects conflicts and collector limit violations,
+  and exports no job observations or document references. Adds inactive AU
+  candidate byte pins from the operator's 2026-10-12 inventory and records runtime
+  gaps; no deployment configuration or private UI is changed.
+
 - **Read-only runtime inventory** (`pd workflow inventory`): observes hashes and
   file metadata for explicitly declared tools/probes/resources, with optional
   in-memory configuration overlays. Reports missing, zero, mismatched or changing

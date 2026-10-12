@@ -444,3 +444,28 @@ def inventory_runtime(installation, tools_file, processing_profile):
     click.echo(json.dumps(result, indent=2, ensure_ascii=False))
     if result["blockers"]:
         raise click.exceptions.Exit(2)
+
+
+@workflow.command("installation-map")
+@click.option(
+    "--installation", required=True, type=click.Path(exists=True, dir_okay=False)
+)
+@click.option("--registry", default=None, type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--base-manifest", default=None, type=click.Path(exists=True, dir_okay=False)
+)
+def export_installation_map(installation, registry, base_manifest):
+    """Export declared dependencies for PhantomView; no document status or probes."""
+    from .workflow_phantomview import installation_map
+
+    try:
+        result = installation_map(
+            read_json(installation),
+            load_registry(registry),
+            read_json(base_manifest) if base_manifest else None,
+        )
+    except WorkflowError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise click.ClickException("cannot export installation dependencies") from exc
+    click.echo(json.dumps(result, indent=2, ensure_ascii=False))
