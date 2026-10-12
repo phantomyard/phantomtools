@@ -24,7 +24,7 @@ def _credential_path(path):
         name.startswith(".env")
         or "service-account" in name
         or "credential" in name
-        or re.search(r"(?:^|[.\-])(tokens?|secrets?|nsec)(?:[.\-]|$)", name)
+        or re.search(r"(?:^|[.\-])(tokens?|secrets?|nsec)(?:[.\-]|$)", name) is not None
         or name
         in {
             "token",
@@ -34,8 +34,8 @@ def _credential_path(path):
             "service-account.json",
             "nsec",
             "nsec.txt",
-            "id_rsa",
-            "id_ed25519",
+            "id-rsa",
+            "id-ed25519",
         }
     )
 

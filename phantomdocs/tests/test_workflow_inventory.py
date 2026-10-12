@@ -85,6 +85,8 @@ def test_overlay_is_observed_without_rewriting_installation(tmp_path):
         "oauth-token.json",
         ".secret",
         "au-credentials.json",
+        "id_rsa",
+        "id_ed25519",
     ],
 )
 def test_credential_resource_is_not_read_or_echoed(tmp_path, filename, monkeypatch):
