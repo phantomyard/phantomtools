@@ -315,7 +315,10 @@ def ingest_lock(state):
     state.mkdir(parents=True, exist_ok=True)
     with (state / "ingest.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        yield
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def execute(
