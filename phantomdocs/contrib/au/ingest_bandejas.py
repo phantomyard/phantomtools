@@ -26,7 +26,13 @@ GO_ARCHIVE = "1VnnY_IqQaaFJ9gL6imuuskd6G1_C85yN"
 AU_ARCHIVE = "1u0MWy4VtoNTwSzW5n4MsPFOkCYHgB0Mq"
 ID = re.compile(r"^[A-Za-z0-9_-]+$")
 STAMP = re.compile(r"_\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}$")
-CLASSES = {"transcripcion": "transcription", "resumen": "summary", "acta": "minutes"}
+CLASSES = {
+    "transcripcion": "transcription",
+    "resumen": "summary",
+    "acta": "minutes",
+    "grabacion": "recording",
+    "recording": "recording",
+}
 SOURCES = {
     "direction": ("paco", "direction"),
     "secretariat": ("pepa", "secretariat"),
@@ -43,11 +49,12 @@ def artifact(name):
 
     Remove the final extension; then remove one timestamp and one recognized
     dot-class suffix in either order. Preserve all other dots/title/date text.
-    A bare .txt is a transcription. Keys use NFC + casefold, not slugification.
+    A bare .txt is a transcription; a bare .mp4 is an original recording.
+    Keys use NFC + casefold, not slugification.
     Branded _EVID names need an explicit catalog, not a guessed classification.
     """
     stem, sep, ext = name.rpartition(".")
-    if not sep or ext.lower() not in {"txt", "md", "pdf"}:
+    if not sep or ext.lower() not in {"txt", "md", "pdf", "mp4"}:
         return None
     kind = None
     timestamp_removed = False
@@ -65,7 +72,9 @@ def artifact(name):
         break
     if stem.upper().endswith("_EVID"):
         return None
-    kind = kind or ("transcription" if ext.lower() == "txt" else None)
+    kind = kind or {"txt": "transcription", "mp4": "recording"}.get(ext.lower())
+    if (kind == "recording") != (ext.lower() == "mp4"):
+        return None
     if not kind or not stem:
         return None
     return unicodedata.normalize("NFC", stem).casefold(), kind
@@ -288,7 +297,7 @@ def prepare_catalog(inventory, destination):
             parsed[0] if parsed else ""
         )
         kind = input(
-            f"Class transcription/summary/minutes [{parsed[1] if parsed else ''}]: "
+            f"Class recording/transcription/summary/minutes [{parsed[1] if parsed else ''}]: "
         ) or (parsed[1] if parsed else "")
         if not meeting or kind not in CLASSES.values():
             raise ValueError("an explicit meeting key and supported class are required")

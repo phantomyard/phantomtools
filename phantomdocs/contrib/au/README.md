@@ -17,17 +17,18 @@ Drive results, and returned exit 0 even after failed adds.
 
 For recognized legacy artifacts, the new key:
 
-1. Removes the final extension, case-insensitively: txt, md, or pdf.
+1. Removes the final extension, case-insensitively: txt, md, pdf, or mp4.
 2. Removes at most one terminal `_YYYY-MM-DD-HH-MM-SS` timestamp and at most
-   one terminal dot-class (`.transcripcion`, `.resumen`, `.acta`), in either
+   one terminal dot-class (`.transcripcion`, `.resumen`, `.acta`, `.grabacion`, `.recording`), in either
    order. Both `X_TIMESTAMP.resumen.md` and `X.resumen_TIMESTAMP.md` become X.
 3. Applies Unicode NFC and casefold. It preserves other dots, title words,
    meeting dates, and punctuation; it does not use lossy slugification.
 
-Class names map to transcription, summary, and minutes. An unclassified `.txt`
-is a transcription. Unknown classes/extensions are held. The group identity
+Class names map to recording, transcription, summary, and minutes. An unclassified
+`.txt` is a transcription; an unclassified `.mp4` is an original recording.
+A recording class requires MP4; other classes cannot turn MP4 into text/minutes. Unknown classes/extensions are held. The group identity
 includes the source and project flag, preventing unrelated inboxes from merging.
-An eligible group must contain transcription AND summary; minutes are optional.
+An eligible group must contain transcription AND summary; minutes and recording are optional. A recording alone never makes a group eligible.
 A `.transcripcion.pdf` counts as transcription. Already indexed files still
 participate in completeness, allowing partially completed batches to resume.
 
@@ -40,11 +41,12 @@ id, so duplicate names/case differences do not create versions of another file.
 
 ## Approved classification and access
 
-The operator explicitly approved the following policy in this task:
+The operator explicitly approved the following policy in this task, including
+category-2 indexing of original MP4 recordings on 2026-10-13:
 
 | Material | Declared type | Category | Write owners |
 | --- | --- | --- | --- |
-| Ordinary AU meeting transcription/summary/minutes | secretariat/minutes | category-2 | chief_of_staff plus requesting domain's declared owners |
+| Ordinary AU meeting recording/transcription/summary/minutes | secretariat/minutes | category-2 | chief_of_staff plus requesting domain's declared owners |
 | Ordinary ALMAPONIA/GO meeting artifacts | projects/almaponia | category-2 | project_lead, chief_of_staff |
 
 The sanitized model was read in the signed-in browser at
@@ -216,9 +218,9 @@ Remove only the drop-in created by this procedure; do not delete other overrides
 Dependencies installed in the venv may remain. Do not remove indexed documents
 or seen markers as part of launcher rollback.
 
-## Exact recovery procedure: last ALMAPONIA meeting plus Avila
+## Exact recovery procedure: both ALMAPONIA meetings plus Avila
 
-The supplied facts contain folder ids, but not the three archived Drive file
+The supplied facts contain folder ids, but not the archived Drive file
 ids or their exact branded names. The metadata-only selection step discovers
 those IDs rather than fabricating them. As the administrator, open a shell as
 the actual ingestion account so wrapper identity checks and credentials match:
@@ -238,16 +240,25 @@ RECOVERY=/var/lib/phantomdocs-ingest/seen/recovery-2026-10-13.json
 "$PY" "$INGEST" --source almaponia --source secretariat --catalog "$RECOVERY"
 ```
 
-At selection, choose exactly the three files of the last ALMAPONIA meeting and
-the Avila set (`2026-10-09-10-30_coordinacion_nodo_avila`) in Secretaria's inbox.
-For the three branded project artifacts, enter the SAME meeting key for all
-three (for example `last-almaponia-2026-10-12-recovery`, just a local grouping
-label), and their actual transcription/summary/minutes classes. Do not infer
-classes solely from .pdf/.md or select sensitive project documents. Avila legacy
-keys/classes are offered as defaults. Every selected group still needs both a
-transcription and summary: recovery does not bypass completeness. The generated
-catalog is created exclusively, so use a new filename to replace a mistaken
-selection; review it before executing add. Only catalog-selected ids are ingested.
+At selection, preserve BOTH project meeting bundles in 01_REUNIONES_GO:
+`AU-20260930-002/003/004` (original MP4, literal TXT, summary MD) and
+`11-08-2026-09-00_almaponia_coordinacion.*` (original MP4, literal TXT, summary MD).
+The six Avila files include original MP4, literal TXT/transcription PDF, summary
+MD/PDF and minutes PDF. Recovery therefore selects TWELVE distinct Drive IDs,
+not the earlier nine-file assumption. Use metadata-discovered IDs/current names.
+
+Assign a DIFFERENT explicit meeting key to each project triplet, shared within
+that triplet. Classify each original MP4 as `recording`, never `minutes`. Both
+project triplets use project=true; Avila uses project=false and its established
+`2026-10-09-10-30_coordinacion_nodo_avila` key. Keep both dates/bundles distinct;
+no date interpretation or merging is necessary. Original names are preserved.
+
+Every selected group still needs transcription and summary. Do not select other
+archive presentations, images or sensitive project documents. The generated
+catalog is created exclusively; review a fresh filename if selection was wrong.
+Only catalog-selected IDs are ingested. All twelve artifacts use the approved
+category-2 and existing meeting-owner policy. That permits all category-2 readers;
+per-event delivery remains separate and the org model is never changed.
 The last command must print SKIP indexed ref, with no new adds or downloads.
 
 Check from each persona's own authenticated account; no --actor impersonation:

@@ -117,6 +117,12 @@ def org():
         ("X_2026-10-09-10-30-00.resumen.md", "summary"),
         ("X.resumen_2026-10-09-10-30-00.md", "summary"),
         ("X_2026-10-09-10-30-00.txt", "transcription"),
+        ("X.mp4", "recording"),
+        ("X.grabacion.mp4", "recording"),
+        ("X.recording.MP4", "recording"),
+        ("X_2026-10-09-10-30-00.mp4", "recording"),
+        ("X_2026-10-09-10-30-00.grabacion.mp4", "recording"),
+        ("X.grabacion_2026-10-09-10-30-00.mp4", "recording"),
     ],
 )
 def test_one_meeting_key(name, kind):
@@ -131,6 +137,9 @@ def test_no_lossy_grouping_or_substring_classification():
     assert au.artifact("resumen-of-budget.pdf") is None
     assert au.artifact("AU-2026-10-09-001_GO_title_EVID.txt") is None
     assert au.artifact("unknown.xlsx") is None
+    assert au.artifact("X.grabacion.txt") is None
+    assert au.artifact("X.resumen.mp4") is None
+    assert au.artifact("AU-20260930-002_GO_title_EVID.mp4") is None
     assert au.artifact("résumé.txt")[0] != au.artifact("resume.txt")[0]
     assert au.slug_for("X.txt", "Aa") != au.slug_for("X.txt", "aa")
 
@@ -154,6 +163,9 @@ def test_complete_and_incomplete_groups(org):
     pdf = files()
     pdf[0]["name"] = "X.transcripcion.pdf"
     assert len(au.plan(org, pdf, {}, "pepa")) == 3
+    recording = {**files()[0], "id": "original-mp4", "name": "X.mp4"}
+    assert len(au.plan(org, files() + [recording], {}, "pepa")) == 4
+    assert au.plan(org, [recording], {}, "pepa") == []
 
 
 def test_classification_and_department_custody(org):
@@ -643,3 +655,158 @@ def test_exact_nine_file_catalog_dry_run_recovery_and_retry(
         ],
     )
     assert found.exit_code == 0 and found.output.count("doc ") == 3
+
+
+def test_two_project_meetings_and_avila_keep_twelve_refs_including_originals(
+    org, sandbox, monkeypatch, tmp_path, capsys
+):
+    """Preserve separate meetings and MP4 originals under approved category-2."""
+    import json
+
+    selected, catalog = [], {}
+    groups = [
+        (
+            "almaponia",
+            "synthetic-branded-go",
+            ["original.mp4", "literal.txt", "summary.md"],
+        ),
+        (
+            "almaponia",
+            "11-08-2026-09-00_almaponia_coordinacion",
+            [".mp4", ".txt", ".resumen.md"],
+        ),
+        (
+            "secretariat",
+            "2026-10-09-10-30_coordinacion_nodo_avila",
+            [
+                ".txt",
+                ".resumen.md",
+                ".transcripcion.pdf",
+                ".resumen.pdf",
+                ".acta.pdf",
+                "_2026-10-09-09-01-52.mp4",
+            ],
+        ),
+    ]
+    classes = [
+        ["recording", "transcription", "summary"],
+        ["recording", "transcription", "summary"],
+        [
+            "transcription",
+            "summary",
+            "transcription",
+            "summary",
+            "minutes",
+            "recording",
+        ],
+    ]
+    for group_index, (source, key, suffixes) in enumerate(groups):
+        for index, (suffix, kind) in enumerate(zip(suffixes, classes[group_index])):
+            name = key + suffix
+            if group_index == 0:
+                name = f"AU-SYNTHETIC-00{index}_GO_EVID.{suffix.rsplit('.', 1)[1]}"
+            file_id = f"fake-group-{group_index}-{index}"
+            selected.append(
+                {
+                    "source": source,
+                    "id": file_id,
+                    "name": name,
+                    "mimeType": "video/mp4"
+                    if kind == "recording"
+                    else "application/octet-stream",
+                }
+            )
+            catalog[file_id] = {
+                "source": source,
+                "name": name,
+                "meeting": key,
+                "class": kind,
+                "project": source == "almaponia",
+            }
+    path = tmp_path / "twelve.json"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+
+    def list_files(folder):
+        source = "almaponia" if folder == au.GO_ARCHIVE else "secretariat"
+        assert folder in {au.GO_ARCHIVE, "inbox-pepa"}
+        return [
+            {k: v for k, v in item.items() if k != "source"}
+            for item in selected
+            if item["source"] == source
+        ]
+
+    monkeypatch.setattr(
+        au, "Drive", lambda *args: SimpleNamespace(list_files=list_files)
+    )
+    monkeypatch.setattr(au, "ingest_lock", lambda state: nullcontext())
+    execute = au.execute
+    monkeypatch.setattr(
+        au, "execute", lambda **kw: execute(**kw, run=sandbox.options["run"])
+    )
+    args = [
+        "--org-yaml",
+        str(sandbox.model),
+        "--root",
+        str(sandbox.root),
+        "--docs",
+        "documents.sh",
+        "--service-account",
+        "unused",
+        "--subject",
+        "unused",
+        "--source",
+        "almaponia",
+        "--source",
+        "secretariat",
+        "--state",
+        str(sandbox.state),
+        "--catalog",
+        str(path),
+    ]
+    before = (sandbox.root / "manifest.yaml").read_bytes()
+    capsys.readouterr()
+    assert au.main(args + ["--dry-run"]) == 0
+    assert len(capsys.readouterr().out.splitlines()) == 12
+    assert not sandbox.reads and not sandbox.adds and not list(sandbox.state.iterdir())
+    assert (sandbox.root / "manifest.yaml").read_bytes() == before
+    assert len({(item["source"], item["meeting"]) for item in catalog.values()}) == 3
+    assert au.main(args) == 0
+    assert capsys.readouterr().out.count("OK indexed ref:") == 12
+    assert len(sandbox.reads) == len(sandbox.adds) == 12
+    manifest = load_manifest(str(sandbox.root / "manifest.yaml"))
+    refs = au.references(manifest)
+    assert set(refs) == set(catalog)
+    for file_id, nodes in refs.items():
+        assert len(nodes) == 1 and nodes[0]["category"] == "category-2"
+        assert nodes[0]["owners"] == (
+            ["chief_of_staff", "project_lead"]
+            if catalog[file_id]["project"]
+            else ["chief_of_staff"]
+        )
+    assert sum(item["class"] == "recording" for item in catalog.values()) == 3
+    assert not list((sandbox.root / "blobs").iterdir())
+    after = (sandbox.root / "manifest.yaml").read_bytes()
+    monkeypatch.setattr(
+        "phantomdocs.documents.content_hash",
+        lambda *args: pytest.fail(
+            "retry must not hash any document or original recording"
+        ),
+    )
+    assert au.main(args) == 0
+    assert capsys.readouterr().out.count("SKIP indexed ref:") == 12
+    assert len(sandbox.reads) == len(sandbox.adds) == 12
+    assert (sandbox.root / "manifest.yaml").read_bytes() == after
+    monkeypatch.setattr("phantomdocs.cli._os_actor", lambda: "alma")
+    for title, count in [("au-synthetic", 3), ("11-08-2026", 3), ("avila", 6)]:
+        found = sandbox.runner.invoke(
+            pd,
+            [
+                "search",
+                title,
+                "--org-yaml",
+                str(sandbox.model),
+                "--root",
+                str(sandbox.root),
+            ],
+        )
+        assert found.exit_code == 0 and found.output.count("doc ") == count
