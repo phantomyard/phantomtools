@@ -419,3 +419,75 @@ def test_cli_sign_accept_and_status_without_media_execution(
     args[args.index(str(ledger))] = str(other)
     assert runner.invoke(main, args).exit_code == 1
     assert not other.exists()
+
+
+@pytest.mark.parametrize("tamper", ["plan_json", "plan_hash"])
+def test_stored_plan_tampering_is_detected_on_the_public_read_path(
+    tmp_path, model, installation, signed_system, tamper
+):
+    """The durable plan is sealed inside ``plan_json`` and mirrored in the
+    ``jobs.plan_hash`` column; editing either half is caught on read.
+
+    Pins the security boundary in ``WorkflowLedger._plan`` rather than only
+    exercising well-formed records: a mutation that disables either half of the
+    comparison must fail here.
+    """
+    _, signed = signed_system
+    path = tmp_path / "jobs.sqlite"
+    with WorkflowLedger(path) as store:
+        store.accept(
+            signed,
+            model,
+            "coordinator",
+            lambda j: make_plan(j, installation, model),
+            now=NOW,
+        )
+        if tamper == "plan_hash":
+            # Only the mirrored column diverges from the hash sealed in plan_json.
+            store.connection.execute(
+                "UPDATE jobs SET plan_hash=? WHERE organization=? AND request_id=?",
+                ("0" * 64, "example-org", "request-001"),
+            )
+        else:
+            # Only the sealed body changes; the embedded plan_hash stays put.
+            stored = store.connection.execute(
+                "SELECT plan_json FROM jobs WHERE organization=? AND request_id=?",
+                ("example-org", "request-001"),
+            ).fetchone()
+            planned = json.loads(stored["plan_json"])
+            planned["processor"]["actor"] = "forged"
+            store.connection.execute(
+                "UPDATE jobs SET plan_json=? WHERE organization=? AND request_id=?",
+                (json.dumps(planned), "example-org", "request-001"),
+            )
+    with (
+        WorkflowLedger(path, readonly=True) as store,
+        pytest.raises(WorkflowError, match="stored workflow plan hash mismatch"),
+    ):
+        store.status("example-org", "request-001", model, "coordinator")
+
+
+def test_relative_entrypoint_resolves_via_path_but_never_executes(
+    tmp_path, job, installation, model, monkeypatch
+):
+    """A relative tool entrypoint is looked up on PATH for availability only;
+    planning must never run it."""
+    marker = tmp_path / "ran"
+    script = tmp_path / "luga-indexer"
+    script.write_text(f"#!/bin/sh\ntouch '{marker}'\n", encoding="utf-8")
+    script.chmod(0o755)
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join([str(tmp_path), os.environ.get("PATH", "")])
+    )
+    installation["tools"]["documents.index"]["entrypoint"] = "luga-indexer"
+    result = make_plan(job, installation, model)
+    index = next(s for s in result["steps"] if s["id"] == "index")
+    assert index["availability"] == "present"
+    assert not marker.exists()
+
+    # The same relative entrypoint off PATH is missing and blocks execution.
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    blocked = make_plan(job, installation, model)
+    assert blocked["status"] == "blocked"
+    assert "documents.index" in blocked["missing_capabilities"]
+    assert not marker.exists()
