@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the PhantomMeet recorder guardian every 30 s
+
+[Timer]
+# The guardian owns no state and is silent when healthy, so a ~30 s cadence is
+# cheap. The 180 s grace inside the script (not this cadence) is what stops a
+# persistently broken recorder from being restarted in a loop.
+OnBootSec=60s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Persistent=false
+Unit=recorder-guardian.service
+
+[Install]
+WantedBy=timers.target
