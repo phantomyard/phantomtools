@@ -234,3 +234,82 @@ def test_missing_python3_exits_nonzero_and_does_not_act(tmp_path: Path) -> None:
     )
     assert proc.returncode != 0
     assert _actions(actions) == 0
+
+
+def _make_sequence_handler(payloads: list[str]) -> tuple[type, list[int]]:
+    """Build a handler that answers each GET with the next payload (the last
+    one repeats) and records how many requests it served."""
+    bodies = [payload.encode("utf-8") for payload in payloads]
+    hits: list[int] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            index = len(hits)
+            hits.append(1)
+            body = bodies[min(index, len(bodies) - 1)]
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: object) -> None:
+            return
+
+    return Handler, hits
+
+
+@contextmanager
+def fake_sequence_server(payloads: list[str]) -> Iterator[tuple[str, list[int]]]:
+    """Start a fake health server whose answer CHANGES between the two in-run
+    readings, and expose the request counter so a test can pin the number of
+    readings (a script that reuses the first reading must fail)."""
+    handler, hits = _make_sequence_handler(payloads)
+    server = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        yield f"http://127.0.0.1:{port}/jibri/api/v1.0/health", hits
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_bad_first_then_healthy_is_a_hiccup_and_does_not_act(tmp_path: Path) -> None:
+    """One bad reading is a transient hiccup, not a failure: when the SECOND
+    reading is HEALTHY the live recorder is never restarted."""
+    actions = tmp_path / "actions.log"
+    stub = _systemctl_stub(tmp_path / "bin", recent=False)
+    with fake_sequence_server([UNHEALTHY, HEALTHY]) as (url, hits):
+        proc = _run(url, actions, systemctl_dir=stub)
+    assert proc.returncode == 0
+    assert _actions(actions) == 0
+    # Both readings really happened inside the run (the guardian re-read).
+    assert len(hits) == 2
+    assert proc.stdout == ""
+    assert proc.stderr == ""
+
+
+def test_bad_first_then_busy_is_a_hiccup_and_does_not_act(tmp_path: Path) -> None:
+    """A bad first reading followed by a BUSY second reading (a recording started
+    between the two) is also a hiccup, not a failure."""
+    actions = tmp_path / "actions.log"
+    stub = _systemctl_stub(tmp_path / "bin", recent=False)
+    with fake_sequence_server([UNHEALTHY, BUSY_UNHEALTHY]) as (url, hits):
+        proc = _run(url, actions, systemctl_dir=stub)
+    assert proc.returncode == 0
+    assert _actions(actions) == 0
+    assert len(hits) == 2
+
+
+def test_two_bad_readings_read_the_endpoint_exactly_twice(tmp_path: Path) -> None:
+    """The acting path performs exactly two readings against the endpoint."""
+    actions = tmp_path / "actions.log"
+    stub = _systemctl_stub(tmp_path / "bin", recent=False)
+    with fake_sequence_server([UNHEALTHY, UNHEALTHY]) as (url, hits):
+        proc = _run(url, actions, systemctl_dir=stub)
+    assert proc.returncode == 0
+    assert _actions(actions) == 1
+    assert len(hits) == 2

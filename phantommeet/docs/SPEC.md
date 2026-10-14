@@ -630,7 +630,7 @@ answer:
 | Answer | Verdict | Behaviour |
 |---|---|---|
 | `status.busyStatus == "BUSY"` | `busy` | never act (a recording is in progress) |
-| `status.health.healthStatus` present and not `HEALTHY` | `act` | candidate to restart (needs the double-read) |
+| `status.health.healthStatus` present, non-empty and not `HEALTHY` | `act` | candidate to restart (needs the double-read) |
 | `status.health.healthStatus == "HEALTHY"` | `ok` | nothing to do |
 | parseable `status` object **without** a `health` key | `ok` | nothing to do |
 | no answer / unparseable body | `unknown` | treated like `act` (needs the double-read) |
