@@ -38,26 +38,39 @@ class ServiceConsumer:
 
 
 @dataclass(frozen=True)
+class ServiceApprover:
+    kind: str
+    id: str
+
+
+@dataclass(frozen=True)
 class Service:
     id: str
     kind: str
     owner_actor: str | None
     consumers: tuple[ServiceConsumer, ...]
     approval: str
-    approvers: tuple[str, ...]
+    approvers: tuple[str | ServiceApprover, ...]
+
+    def approval_principals(self) -> tuple[ServiceApprover, ...]:
+        return tuple(
+            ServiceApprover("actor", a) if isinstance(a, str) else a
+            for a in self.approvers
+        )
 
 
 @dataclass(frozen=True)
 class ServicePolicy:
     services: tuple[Service, ...]
+    version: int = 1
 
     @classmethod
     def from_dict(cls, raw: object) -> ServicePolicy:
         policy = _mapping(
             raw, {"version", "default_access", "services"}, set(), "service_policy"
         )
-        if type(policy["version"]) is not int or policy["version"] != 1:
-            raise ServicePolicyError("service_policy.version: expected 1")
+        if type(policy["version"]) is not int or policy["version"] not in (1, 2):
+            raise ServicePolicyError("service_policy.version: expected 1 or 2")
         if policy["default_access"] != "deny":
             raise ServicePolicyError("service_policy.default_access: expected deny")
         services = []
@@ -106,9 +119,23 @@ class ServicePolicy:
             approval = service["approval"]
             if approval not in ("none", "per-request"):
                 raise ServicePolicyError(f"service {sid}: invalid approval mode")
-            approvers = tuple(
-                _id(a, "approver") for a in _list(service["approvers"], "approvers")
-            )
+            approvers: tuple[str | ServiceApprover, ...]
+            if policy["version"] == 1:
+                approvers = tuple(
+                    _id(a, "approver") for a in _list(service["approvers"], "approvers")
+                )
+            else:
+                typed = []
+                for entry in _list(service["approvers"], "approvers"):
+                    who = _mapping(entry, {"kind", "id"}, set(), "approver")
+                    if who["kind"] not in ("actor", "human"):
+                        raise ServicePolicyError(
+                            "approver.kind: expected actor or human"
+                        )
+                    typed.append(
+                        ServiceApprover(who["kind"], _id(who["id"], "approver.id"))
+                    )
+                approvers = tuple(typed)
             if len(set(approvers)) != len(approvers):
                 raise ServicePolicyError(f"service {sid}: duplicate approvers")
             if (approval == "per-request") != bool(approvers):
@@ -118,13 +145,27 @@ class ServicePolicy:
             services.append(
                 Service(sid, kind, owner, tuple(consumers), approval, approvers)
             )
-        return cls(tuple(services))
+        return cls(tuple(services), policy["version"])
 
-    def reference_errors(self, actor_ids: set[str]) -> list[str]:
+    def reference_errors(
+        self, actor_ids: set[str], human_ids: set[str] | None = None
+    ) -> list[str]:
         services = {s.id: s for s in self.services}
         errors = []
         for service in self.services:
-            actor_refs = set(service.approvers)
+            actor_refs = set()
+            for approver in service.approval_principals():
+                if approver.kind == "actor":
+                    actor_refs.add(approver.id)
+                elif approver.kind == "human" and self.version == 2:
+                    if approver.id not in (human_ids or set()):
+                        errors.append(
+                            f"service {service.id}: unknown human {approver.id}"
+                        )
+                else:
+                    errors.append(
+                        f"service {service.id}: unsupported approver kind or policy version"
+                    )
             if service.owner_actor:
                 actor_refs.add(service.owner_actor)
             for consumer in service.consumers:

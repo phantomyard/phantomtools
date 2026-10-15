@@ -47,7 +47,9 @@ def validate_org(org_yaml_path: str | Path) -> tuple[OrgSpec, ValidationResult]:
     result.errors.extend(check_references(spec))
     if spec.service_policy is not None:
         result.errors.extend(
-            spec.service_policy.reference_errors({a.id for a in spec.actors})
+            spec.service_policy.reference_errors(
+                {a.id for a in spec.actors}, {h.id for h in spec.humans}
+            )
         )
     result.warnings.extend(suggest_role_level_exceptions(spec))
 

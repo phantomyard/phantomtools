@@ -475,7 +475,10 @@
       "properties": {
         "version": {
           "type": "integer",
-          "const": 1
+          "enum": [
+            1,
+            2
+          ]
         },
         "default_access": {
           "const": "deny"
@@ -544,9 +547,34 @@
                 "type": "array",
                 "uniqueItems": true,
                 "items": {
-                  "type": "string",
-                  "pattern": "^[a-z0-9][a-z0-9_-]*$",
-                  "maxLength": 64
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]*$",
+                      "maxLength": 64
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "enum": [
+                            "actor",
+                            "human"
+                          ]
+                        },
+                        "id": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+                          "maxLength": 64
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             },
@@ -611,7 +639,68 @@
             ]
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "version": {
+                "const": 1
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "services": {
+                "items": {
+                  "properties": {
+                    "approvers": {
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+                        "maxLength": 64
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "services": {
+                "items": {
+                  "properties": {
+                    "approvers": {
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "kind",
+                          "id"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "enum": [
+                              "actor",
+                              "human"
+                            ]
+                          },
+                          "id": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9][a-z0-9_-]*$",
+                            "maxLength": 64
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

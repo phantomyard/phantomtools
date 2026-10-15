@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add explicit actor/human approver identities in service policy format 2.
+  Validate each namespace independently and preserve format 1 actor-only output.
+  Declaring approval authority never grants access to private sessions.
+
 - Add offline `po service-plan` review of pinned installation bindings and an
   operator inventory. Detect UID/domain conflicts, private-owner mismatches,
   unmapped units and missing approval enforcement; preserve explicit consumers

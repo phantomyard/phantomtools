@@ -66,6 +66,38 @@ processes and clients, preserve shared dependencies, deny undeclared connections
 and produce a verified plan before applying changes with operator approval.
 No deployment adapter or network isolation is provided by this feature.
 
+## Human approvers (version 2)
+
+Version 1 keeps actor-only string approvers and its existing JSON format. Use
+version 2 to distinguish actor and human approvers explicitly:
+
+```yaml
+service_policy:
+  version: 2
+  default_access: deny
+  services:
+    - id: browser
+      kind: private
+      owner_actor: dana
+      consumers: [{kind: actor, id: dana}]
+      approval: per-request
+      approvers:
+        - {kind: actor, id: marco}
+        - {kind: human, id: president}
+```
+
+The human ID must already exist in `humans`; actor IDs must exist in `actors`.
+This is an illustrative fragment, not an organization's approved policy. A
+human's name must never be silently reinterpreted as an actor, and neither
+approver gains access to the private browser. Human consumers are not introduced.
+Version 2 rejects string approvers and emits `format_version: 2`, tagged approvers
+and a human-ID registry. Version 1 rejects tagged approvers. Consumers that do
+not support format 2 must reject it rather than drop its human identities.
+
+The IDs declare approval authority, not authenticated decisions. Per-request
+protocol, identity verification, expiry, audit and bypass prevention remain runtime
+requirements. No credentials or human contact identifiers are exported here.
+
 ## Offline installation review
 
 `po service-plan` reviews installation declarations and an operator-supplied

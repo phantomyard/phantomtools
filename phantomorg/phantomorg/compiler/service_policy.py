@@ -18,11 +18,13 @@ def compile_service_policy(spec: OrgSpec) -> str:
     policy = spec.service_policy
     if policy is None:
         raise ServicePolicyError("organization declares no service_policy")
-    errors = policy.reference_errors({a.id for a in spec.actors})
+    errors = policy.reference_errors(
+        {a.id for a in spec.actors}, {h.id for h in spec.humans}
+    )
     if errors:
         raise ServicePolicyError("; ".join(errors))
     payload = {
-        "format_version": 1,
+        "format_version": policy.version,
         "organization_id": spec.organization.id,
         "default_access": "deny",
         "actors": sorted(a.id for a in spec.actors),
@@ -36,11 +38,22 @@ def compile_service_policy(spec: OrgSpec) -> str:
                     for c in sorted(s.consumers, key=lambda c: (c.kind, c.id))
                 ],
                 "approval": s.approval,
-                "approvers": sorted(s.approvers),
+                "approvers": (
+                    sorted(a.id for a in s.approval_principals())
+                    if policy.version == 1
+                    else [
+                        {"kind": a.kind, "id": a.id}
+                        for a in sorted(
+                            s.approval_principals(), key=lambda a: (a.kind, a.id)
+                        )
+                    ]
+                ),
             }
             for s in sorted(policy.services, key=lambda s: s.id)
         ],
     }
+    if policy.version == 2:
+        payload["humans"] = sorted(h.id for h in spec.humans)
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     payload["policy_sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return json.dumps(payload, sort_keys=True, indent=2) + "\n"
