@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add offline `po service-plan` review of pinned installation bindings and an
+  operator inventory. Detect UID/domain conflicts, private-owner mismatches,
+  unmapped units and missing approval enforcement; preserve explicit consumers
+  and report outside-scope units. Plans never claim deployment readiness or
+  apply host changes.
+
 - Add optional, strictly validated portable service intent and explicit
   `po service-policy` JSON export. Private sessions cannot be shared with
   supervisors or approvers; shared consumers and per-request approvers are
