@@ -1,0 +1,27 @@
+{
+  "documents.transcribe": {
+    "id": "local-whisper", "version": "snapshot-e9977af",
+    "entrypoint": "/opt/whisper-transcribe/venv/bin/python",
+    "script": "/opt/whisper-transcribe/transcribe.py",
+    "arguments": ["{input}", "--model", "turbo", "--out", "{output}"]
+  },
+  "documents.summarize": {
+    "id": "deepseek-summary", "version": "snapshot-e9977af",
+    "entrypoint": "/opt/whisper-transcribe/venv/bin/python",
+    "script": "/opt/whisper-transcribe/summarize.py",
+    "arguments": ["{input}", "--out", "{output}"]
+  },
+  "documents.brand": {
+    "id": "au-document-pdf", "version": "snapshot-e9977af",
+    "entrypoint": "/opt/whisper-transcribe/venv/bin/python",
+    "script": "/opt/post-meeting/acta_a_pdf.py",
+    "variants": {
+      "transcription": ["{input}", "{output}", "--clase", "transcripcion"],
+      "summary": ["{input}", "{output}", "--clase", "resumen"]
+    }
+  },
+  "documents.index": {
+    "id": "phantomdocs-reference-index", "version": "operator-verify",
+    "entrypoint": "/opt/phantomdocs/venv/bin/pd"
+  }
+}

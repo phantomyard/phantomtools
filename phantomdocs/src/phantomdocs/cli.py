@@ -108,12 +108,16 @@ from .storage import (
     resolve_backend,
 )
 from .update import is_newer, latest_release
+from .workflow_cli import workflow
 
 
 @click.group()
 @click.version_option(__version__)
 def main() -> None:
     """PhantomDocs — agnostic document management for PhantomOrg personas."""
+
+
+main.add_command(workflow)
 
 
 def _manifest_path(root: str) -> str:
@@ -384,8 +388,24 @@ def mkdir(name, parent, category, owners, org_yaml, actor, nsec_file, root):
     help="File containing the actor's nsec (issue #30 v2 signing).",
 )
 @click.option("--root", default=".", show_default=True, help="Local backend root.")
+@click.option(
+    "--skip-existing-ref",
+    is_flag=True,
+    help="Skip an indexed reference before byte reads; require explicit category/owners.",
+)
 def add(
-    path, ref, slug, category, folder, owners, org_yaml, actor, nsec_file, backend, root
+    path,
+    ref,
+    slug,
+    category,
+    folder,
+    owners,
+    org_yaml,
+    actor,
+    nsec_file,
+    backend,
+    root,
+    skip_existing_ref,
 ):
     """Ingest a document: compute MAC chain, store blob, register node.
 
@@ -404,22 +424,36 @@ def add(
     actor_id, _org = _require_acl(org_yaml, actor)
     content = None
     try:
-        if ref:
+        if skip_existing_ref:
+            if not ref or backend or category is None or not owners:
+                raise DocumentError(
+                    "--skip-existing-ref requires --ref, --category and --owners, without --backend"
+                )
+            service = DocumentService(root, org_yaml, actor_id, nsec_file)
+            result = service.index_reference_once(
+                ref=ref,
+                slug=slug,
+                category=category,
+                folder=folder,
+                owners=list(owners),
+            )
+        elif ref:
             content, ref_location = read_reference(ref, streaming=True)
         else:
             with open(path, "rb") as f:
                 content = FileContent.from_stream(f)
             ref_location = None
-        service = DocumentService(root, org_yaml, actor_id, nsec_file)
-        result = service.add_document(
-            content=content,
-            ref_location=ref_location,
-            slug=slug,
-            category=category,
-            folder=folder,
-            owners=list(owners),
-            backend=backend,
-        )
+        if not skip_existing_ref:
+            service = DocumentService(root, org_yaml, actor_id, nsec_file)
+            result = service.add_document(
+                content=content,
+                ref_location=ref_location,
+                slug=slug,
+                category=category,
+                folder=folder,
+                owners=list(owners),
+                backend=backend,
+            )
     except (DocumentError, StorageError, OSError) as exc:
         raise click.ClickException(f"add failed: {exc}") from exc
     finally:

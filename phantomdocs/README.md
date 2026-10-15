@@ -41,6 +41,20 @@ nodes: []
 
 See `examples/example-org.yaml` and `docs/SPEC.md`.
 
+Versioned processing contracts and read-only planning are available through
+`pd workflow validate/plan` and signed admission via `sign-request/accept/status`. See
+[Document workflows](docs/WORKFLOWS.md) for installed protocols, capability
+bindings, default-persona resolution, declared dependency export and the staged
+implementation roadmap. Plans do not execute transformations or ingest files.
+The explicit [executor API](docs/WORKFLOW-EXECUTION.md) provides durable operation
+receipts and trusted adapter execution; no AU daemon is activated automatically.
+[Processing/archive handover](docs/WORKFLOW-HANDOVER.md) separates processed
+results, archiver-supplied Drive IDs and verified reference indexing.
+The [installed processing adapter](docs/WORKFLOW-PROCESSING.md) adds explicit
+`pd workflow prepare` with private staging and pinned tool/resource checks.
+A [read-only runtime inventory](docs/WORKFLOW-RUNTIME-INVENTORY.md) observes
+actual declared file hashes for deployment review without activating tools.
+
 ## Usage
 
 ```bash

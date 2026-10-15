@@ -1,0 +1,61 @@
+{
+  "work_root": "/operator/selected/private/processing",
+  "timeout_seconds": 3600,
+  "max_input_bytes": 1073741824,
+  "max_output_bytes": 67108864,
+  "inputs": {
+    "recording": {
+      "media_types": [
+        "video/mp4"
+      ],
+      "extension": "mp4",
+      "formats": [
+        "mov",
+        "mp4",
+        "m4a",
+        "3gp",
+        "3g2",
+        "mj2"
+      ],
+      "probe": {
+        "id": "ffprobe",
+        "version": "operator-verify",
+        "entrypoint": "/operator/verified/ffprobe",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "arguments": [
+          "-v",
+          "error",
+          "-show_format",
+          "-show_streams",
+          "-of",
+          "json",
+          "{input}"
+        ]
+      }
+    }
+  },
+  "outputs": {
+    "transcription": {
+      "media_type": "text/plain",
+      "extension": "txt"
+    },
+    "summary": {
+      "media_type": "text/markdown",
+      "extension": "md"
+    },
+    "branded-transcription": {
+      "media_type": "application/pdf",
+      "extension": "pdf"
+    },
+    "branded-summary": {
+      "media_type": "application/pdf",
+      "extension": "pdf"
+    }
+  },
+  "resources": [
+    {
+      "path": "/operator/verified/model-or-branding-resource",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+}

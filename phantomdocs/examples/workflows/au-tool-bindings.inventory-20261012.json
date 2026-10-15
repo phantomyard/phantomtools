@@ -1,0 +1,57 @@
+{
+  "documents.transcribe": {
+    "id": "local-whisper",
+    "version": "inventory-20261012",
+    "entrypoint": "/opt/whisper-transcribe/venv/bin/python",
+    "script": "/opt/whisper-transcribe/transcribe.py",
+    "arguments": [
+      "{input}",
+      "--model",
+      "turbo",
+      "--out",
+      "{output}"
+    ],
+    "sha256": "e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f",
+    "script_sha256": "487f674595357342ab66ba07ed3caae270abd0c07aee95e146ca23c4c0d76e1b"
+  },
+  "documents.summarize": {
+    "id": "deepseek-summary",
+    "version": "inventory-20261012",
+    "entrypoint": "/opt/whisper-transcribe/venv/bin/python",
+    "script": "/opt/whisper-transcribe/summarize.py",
+    "arguments": [
+      "{input}",
+      "--out",
+      "{output}"
+    ],
+    "sha256": "e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f",
+    "script_sha256": "c9b063784d0a0c1ef8fdfb4f7a54e71483feb97caadc950b778a837c78212773"
+  },
+  "documents.brand": {
+    "id": "au-document-pdf",
+    "version": "inventory-20261012",
+    "entrypoint": "/opt/whisper-transcribe/venv/bin/python",
+    "script": "/opt/post-meeting/acta_a_pdf.py",
+    "variants": {
+      "transcription": [
+        "{input}",
+        "{output}",
+        "--clase",
+        "transcripcion"
+      ],
+      "summary": [
+        "{input}",
+        "{output}",
+        "--clase",
+        "resumen"
+      ]
+    },
+    "sha256": "e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f",
+    "script_sha256": "ec4c8ecef8b65b98450cda3077512986c9694b5939a17341977c035eff766068"
+  },
+  "documents.index": {
+    "id": "phantomdocs-reference-index",
+    "version": "operator-verify",
+    "entrypoint": "/opt/phantomdocs/venv/bin/pd"
+  }
+}

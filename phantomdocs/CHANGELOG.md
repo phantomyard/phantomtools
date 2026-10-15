@@ -4,6 +4,85 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+- **Workflow review fixes**: CI now covers main pushes and pull requests;
+  reference deduplication accepts logical folder slugs as well as paths; runtime
+  inventory excludes prefixed credential/service-account/token filenames; generated
+  workflow wrappers derive actor/org options from Click metadata. Documents
+  inactive AU bindings, approved Drive intake prerequisites, strict MIME/redirect
+  behavior, protocol compatibility and preflight ledger locking.
+  Corrects the AU meeting example to Jibri's `video/mp4` and documents the required
+  canonical raw-intake upload change for ALMAPONIA before workflow activation.
+
+- **Declared PhantomView installation map** (`pd workflow installation-map`):
+  exports protocol/artifact/tool dependencies in the collector's v1 manifest,
+  including the independent archiver before indexing processed results. Preserves
+  an explicit base manifest, rejects conflicts and collector limit violations,
+  and exports no job observations or document references. Adds inactive AU
+  candidate byte pins from the operator's 2026-10-12 inventory and records runtime
+  gaps; no deployment configuration or private UI is changed.
+
+- **Read-only runtime inventory** (`pd workflow inventory`): observes hashes and
+  file metadata for explicitly declared tools/probes/resources, with optional
+  in-memory configuration overlays. Reports missing, zero, mismatched or changing
+  pins and private-directory blockers without executing tools, scanning trees,
+  reading credential-named files or writing state. Matching observations still
+  require operator review and do not claim runtime compatibility/activation.
+
+- **Installed processing adapter** (`pd workflow prepare`): generic private
+  staging, authorized intake membership/MIME/size checks, WAV/text/PDF validators
+  and pinned media-probe support. Runs explicitly pinned transcription, summary
+  and branding argv with output validation and durable backend receipts. Lost
+  journal responses reconcile without rerunning tools; uncertain files require
+  review. Processing profiles/resources are installation-pinned and an inactive
+  AU scaffold is included. Stops at awaiting-archive; no upload/index or live
+  configuration is enabled automatically.
+
+- **Separated processing/archive/index handover**: `WorkflowExecutor.prepare`
+  exports authoritative processed-results manifests before indexing. Adds the
+  additive meeting-processing protocol, `pd workflow results/archive-receipt/
+  index-archive`, strict archive receipts bound to completed results, actual Drive
+  parent/size checks and SHA-256 verification before node creation. Confirmed
+  references skip downloads/hashing on retries, including recovery after a lost
+  index response. The independent archiver retains naming/sequence/publication
+  authority; no upload, rename, move, deletion or Drive operation-ID API is added.
+  Archive observations feed the existing graph export; no UI is activated.
+
+- **Workflow executor and reconciliation boundary**: a trusted adapter API runs
+  pinned protocols with durable started/completed receipts, host-local runner
+  locking and crash reconciliation. Uncertain operations are never repeated
+  without a confirmed backend receipt. Replanning is blocked once execution
+  begins. Adds a hash-pinned, timeout-bound local argv runner with source/output
+  checks, and authorized observed dependency export through workflow status.
+  No AU adapter, Drive publisher or PhantomView UI is activated automatically.
+- **Reference deduplication before reads** (`pd add --skip-existing-ref`):
+  atomically checks existing refs before download/hash and requires explicit
+  category/owners. Conflicting classification, destination or document identity
+  fails closed. Existing add/version behavior is retained without this option.
+
+- **Authenticated workflow intake and durable retry records**:
+  `pd workflow sign-request/accept/status` bind request intent and explicit UTC
+  validity to the requester's existing declared Nostr key. A private SQLite
+  ledger commits accepted plans and events atomically, rejects conflicting
+  request ids, preserves processor/policy pins on identical retries, and only
+  refreshes plans through an explicit authorized `--replan` without changing
+  classification or owners. Status is read-only and category-filtered. Adds
+  pure argument-list construction and reviewed AU transformation descriptors;
+  no upload/cleanup orchestrator, tool execution, inbox scan or live deployment
+  is enabled. Uses existing BIP-340 signing/key-lifecycle primitives.
+
+- **Versioned document workflow planning** (`pd workflow validate/plan`):
+  additive read-only JSON contracts, installed protocol instructions, validated
+  dependency graphs, and capability-to-tool bindings for arbitrary document
+  media types. Plans resolve a configured Phantombot default persona, validate
+  its declared tools and PhantomOrg category/ownership authorization, and pin
+  policy, protocol, instructions, installation and request hashes. Missing tools
+  block a plan; no tools or document bytes are executed/read. Declared graph
+  export supports a future observatory adapter. Includes AU meeting policy
+  examples, shared package assets, and nested persona-wrapper support. This
+  planning layer does not execute tools, scan inboxes, apply branding, route
+  Drive files, or implement invitee-only access. Signed admission is described
+  separately above.
+
 **Hierarchical categories (#31), index by reference (#35), update package (#33), mutation signing (#30 v2).**
 
 - **Store files keep their permissions across an atomic replace**
