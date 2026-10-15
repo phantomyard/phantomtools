@@ -155,8 +155,11 @@ def _utc_now() -> str:
 
 
 def _load_toml(path: Path) -> dict:
-    """Load a TOML file (tomllib, py3.11+)."""
-    import tomllib  # stdlib since 3.11
+    """Load TOML on every supported Python version."""
+    try:
+        import tomllib
+    except ImportError:  # Python < 3.11
+        import tomli as tomllib  # type: ignore[import-not-found,no-redef]
 
     with path.open("rb") as f:
         return tomllib.load(f)

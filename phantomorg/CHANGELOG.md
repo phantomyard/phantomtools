@@ -7,6 +7,10 @@
   supervisors or approvers; shared consumers and per-request approvers are
   explicit. This does not apply OS isolation or issue runtime approval grants.
 
+- Fix Telegram TOML loading on Python 3.10 using the existing tomli dependency,
+  and make the atomic-write crash test's module patch portable across Python
+  versions. Both issues were exposed by the new compatibility CI matrix.
+
 - **The org's private relay is generated last, matching the served list.**
   ``phantomchat_gen`` wrote the private relay first (``[relay] + public_relays``)
   while the runtime *replaces* a persona's relay list with the one it serves
