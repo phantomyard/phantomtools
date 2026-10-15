@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add optional, strictly validated portable service intent and explicit
+  `po service-policy` JSON export. Private sessions cannot be shared with
+  supervisors or approvers; shared consumers and per-request approvers are
+  explicit. This does not apply OS isolation or issue runtime approval grants.
+
 - **The org's private relay is generated last, matching the served list.**
   ``phantomchat_gen`` wrote the private relay first (``[relay] + public_relays``)
   while the runtime *replaces* a persona's relay list with the one it serves

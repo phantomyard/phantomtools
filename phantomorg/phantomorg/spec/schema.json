@@ -143,7 +143,7 @@
           },
           "description": {
             "type": "string",
-            "description": "Qué gestiona este rol / cuándo contactarlo. Se usa en la norma de comunicación compilada (kb/normas/comunicacion-agentes.md)."
+            "description": "Qu\u00c3\u00a9 gestiona este rol / cu\u00c3\u00a1ndo contactarlo. Se usa en la norma de comunicaci\u00c3\u00b3n compilada (kb/normas/comunicacion-agentes.md)."
           }
         }
       }
@@ -463,6 +463,155 @@
     "documents": {
       "type": "object",
       "description": "Opaque PhantomDocs namespace block (owned by phantomdocs, tolerated by PhantomOrg)"
+    },
+    "service_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "default_access",
+        "services"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "default_access": {
+          "const": "deny"
+        },
+        "services": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "kind",
+              "consumers",
+              "approval",
+              "approvers"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]*$",
+                "maxLength": 64
+              },
+              "kind": {
+                "enum": [
+                  "private",
+                  "shared"
+                ]
+              },
+              "owner_actor": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]*$",
+                "maxLength": 64
+              },
+              "consumers": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "actor",
+                        "service"
+                      ]
+                    },
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9_-]*$",
+                      "maxLength": 64
+                    }
+                  }
+                }
+              },
+              "approval": {
+                "enum": [
+                  "none",
+                  "per-request"
+                ]
+              },
+              "approvers": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9_-]*$",
+                  "maxLength": 64
+                }
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "kind": {
+                      "const": "private"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "owner_actor"
+                  ],
+                  "properties": {
+                    "consumers": {
+                      "minItems": 1,
+                      "maxItems": 1,
+                      "items": {
+                        "properties": {
+                          "kind": {
+                            "const": "actor"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "else": {
+                  "not": {
+                    "required": [
+                      "owner_actor"
+                    ]
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "approval": {
+                      "const": "per-request"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "approvers": {
+                      "minItems": 1
+                    }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "approvers": {
+                      "maxItems": 0
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
     }
   }
 }

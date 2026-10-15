@@ -21,7 +21,9 @@ except ImportError:  # Python < 3.11
 
 from .compiler import CompileError
 from .compiler import build as compiler_build
+from .compiler.build import write_plain_if_changed
 from .compiler.phantomchat import verify_phantomchat
+from .compiler.service_policy import compile_service_policy
 from .compiler.telegram import TelegramError, verify_telegram
 from .deploy.norms import (
     NORMS_STATE_FILENAME,
@@ -51,6 +53,7 @@ from .deploy.target import (
 from .deploy.target import deploy as deploy_target
 from .importer import audit_persona_dir, render_org_yaml_fragment, resolve_against_org
 from .spec.loader import OrgSpecError
+from .spec.service_policy import ServicePolicyError
 from .updater import run_update as run_updater
 from .validator import validate_compiled_output, validate_org
 from .wizard.mutations import DuplicateIdError, RemovalBlockedError
@@ -605,6 +608,34 @@ def build_cmd(org_path, out_dir, only_actor, scope_rule):
     budget_result = validate_compiled_output(spec, Path(out_dir))
     for w in budget_result.warnings:
         click.secho(f"⚠ {w}", fg="yellow")
+
+
+@main.command("service-policy")
+@click.option(
+    "--org",
+    "org_path",
+    required=True,
+    type=_ExpandUserPath(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--out",
+    "out_path",
+    required=True,
+    type=_ExpandUserPath(dir_okay=False, path_type=Path),
+)
+def service_policy_cmd(org_path, out_path):
+    """Export validated service intent; does not deploy or grant runtime access."""
+    try:
+        spec, result = validate_org(org_path)
+        if not result.ok:
+            raise ServicePolicyError("; ".join(result.errors))
+        if org_path.resolve() == out_path.resolve():
+            raise ServicePolicyError("output must not replace the organization model")
+        content = compile_service_policy(spec)
+        write_plain_if_changed(out_path, content)
+    except (OrgSpecError, ServicePolicyError, CompileError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Service policy exported to {out_path}; enforcement is not applied.")
 
 
 @main.command("telegram-check")

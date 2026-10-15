@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .service_policy import ServicePolicy
+
 
 @dataclass
 class Organization:
@@ -309,6 +311,7 @@ class OrgSpec:
     policies: Policies
     escalation_matrix: list[EscalationEntry]
     communication: Communication
+    service_policy: ServicePolicy | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> OrgSpec:
@@ -324,6 +327,9 @@ class OrgSpec:
                 EscalationEntry.from_dict(x) for x in d["escalation_matrix"]
             ],
             communication=Communication.from_dict(d["communication"]),
+            service_policy=ServicePolicy.from_dict(d["service_policy"])
+            if "service_policy" in d
+            else None,
         )
 
     # -- resolution helpers, used by validator and compiler -----------
