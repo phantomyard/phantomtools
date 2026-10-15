@@ -28,5 +28,9 @@ jobs:
       - run: ruff check phantomorg tests
       - run: ruff format --check phantomorg tests
       - run: bandit -r phantomorg -q
-      - run: mypy phantomorg
+      # Match the existing CI's typing target; Python 3.10 runtime fallback
+      # imports for tomllib are exercised by the complete test suite below.
+      - name: Type check (Python 3.12)
+        if: matrix.python == '3.12'
+        run: mypy phantomorg
       - run: python -m pytest -q
