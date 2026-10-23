@@ -103,12 +103,25 @@ def policy(org, source, project, actor):
     if len(types) != 1:
         raise ValueError(f"missing or ambiguous declared type: {type_id}")
     category = normalize_category(types[0].get("category", domain["category"]))
-    if (
-        category != "category-2"
-        or category not in org["policies"]["security_categories"]
-    ):
+    categories = org["policies"]["security_categories"]
+    if category not in categories:
+        raise ValueError("meeting classification must be a declared category")
+    if project and category == "category-4-almaponia":
+        # Project access must be explicit on the authoritative document type,
+        # never inferred from a filename or inherited from a broad domain.
+        spec = categories[category]
+        if (
+            "category" not in types[0]
+            or not isinstance(spec, dict)
+            or spec.get("scope") != "project"
+            or spec.get("owner") != "project_lead"
+        ):
+            raise ValueError(
+                "project meeting classification requires explicit scoped policy"
+            )
+    elif category != "category-2":
         raise ValueError(
-            "approved meeting classification must remain declared category-2"
+            "unsupported meeting classification; operator policy review required"
         )
     custodian = declared["secretariat"]["owners"]
     if custodian != ["chief_of_staff"]:

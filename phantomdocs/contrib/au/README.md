@@ -41,13 +41,39 @@ id, so duplicate names/case differences do not create versions of another file.
 
 ## Approved classification and access
 
-The operator explicitly approved the following policy in this task, including
+### Explicit project-scoped meeting classification
+
+The category-2 route described below remains the default. An operator may
+instead explicitly declare `category-4-almaponia` on the `projects/almaponia`
+document type in the authoritative organization policy. The category must be
+declared with `scope: project` and `owner: project_lead`; inheriting it from the
+projects domain is refused. No category is selected from a filename.
+
+This opt-in uses the existing PhantomOrg read/write resolver. The custodian must
+be able to write, and Alma must be able to read, the selected category. Write
+owners remain `chief_of_staff` and `project_lead`. General AU meetings continue
+to require category 2. The importer does not grant categories to any human or
+persona, modify policy, or implement counterpart sessions.
+
+Changing the type policy does not reclassify existing references. A conflicting
+existing classification still stops ingestion and requires a separate audited
+native reclassification preserving IDs and history, never a second registration.
+Supporting materials still use the general-document process. This capability
+does not approve draft minutes or activate publication.
+
+Before deployment, test the actual counterpart/session ACL as well as native
+registration and search. A reader restricted to the project category must not
+gain category-2 organizational access or access to another project. The scoped
+route does not change the existing category hierarchy or its inheritance rules.
+
+The original category-2 route used the following approved policy, including
 category-2 indexing of original MP4 recordings on 2026-10-13:
 
 | Material | Declared type | Category | Write owners |
 | --- | --- | --- | --- |
 | Ordinary AU meeting recording/transcription/summary/minutes | secretariat/minutes | category-2 | chief_of_staff plus requesting domain's declared owners |
 | Ordinary ALMAPONIA/GO meeting artifacts | projects/almaponia | category-2 | project_lead, chief_of_staff |
+| Explicitly scoped ALMAPONIA meeting artifacts | projects/almaponia with an explicit type category | category-4-almaponia | project_lead, chief_of_staff |
 
 The sanitized model was read in the signed-in browser at
 `salvaalba-dev/aquaponics-deploy`, commit
@@ -75,7 +101,8 @@ are outside this utility. Do not describe category-2 as "only meeting invitees".
 
 Sensitive almaponia-budget/contracts/partners/identifications retain their
 declared category-4-almaponia policy and are outside this ordinary-meeting
-utility. Do not select them in a category-2 recovery catalog. Also note that
+utility. The scoped meeting opt-in does not ingest those separate document
+types. Do not select them in a category-2 recovery catalog. Also note that
 the supplied model has no explicit category parents: current PhantomDocs can
 inherit category-4-almaponia from category-4 using its legacy prefix hierarchy.
 Consequently it does **not** enforce the stated separate explicit-project-grant

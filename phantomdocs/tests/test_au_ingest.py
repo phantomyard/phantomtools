@@ -289,6 +289,137 @@ def test_classification_and_department_custody(org):
     assert au.source_folder(org, "secretariat") == "inbox-pepa"
 
 
+def scoped_project_policy(org):
+    org["documents"]["naming"]["domains"][3]["types"][0]["category"] = (
+        "category-4-almaponia"
+    )
+    org["policies"]["security_categories"]["category-4-almaponia"] = {
+        "scope": "project",
+        "owner": "project_lead",
+    }
+    org["actors"][0]["actor_exceptions"] = ["category-4-almaponia"]
+
+
+def test_explicit_project_policy_preserves_owners_and_general_route(org):
+    scoped_project_policy(org)
+    assert au.policy(org, "almaponia", True, "pepa") == (
+        "category-4-almaponia",
+        ["chief_of_staff", "project_lead"],
+    )
+    assert au.policy(org, "secretariat", False, "pepa") == (
+        "category-2",
+        ["chief_of_staff"],
+    )
+    actions = au.plan(org, files(), {}, "pepa")
+    assert len(actions) == 3
+    assert {a["category"] for a in actions} == {"category-4-almaponia"}
+
+
+@pytest.mark.parametrize(
+    "change", ["undeclared", "scope", "owner", "inherited", "custodian", "alma"]
+)
+def test_project_policy_requires_declaration_scope_and_access(org, change):
+    scoped_project_policy(org)
+    spec = org["policies"]["security_categories"]["category-4-almaponia"]
+    if change == "undeclared":
+        del org["policies"]["security_categories"]["category-4-almaponia"]
+    elif change == "scope":
+        spec["scope"] = "organization"
+    elif change == "owner":
+        spec["owner"] = "cfo"
+    elif change == "inherited":
+        domain = org["documents"]["naming"]["domains"][3]
+        domain["category"] = "category-4-almaponia"
+        del domain["types"][0]["category"]
+    elif change == "custodian":
+        org["actors"][0]["actor_exceptions"] = []
+    else:
+        org["actors"][1]["actor_exceptions"] = []
+    with pytest.raises(ValueError):
+        au.policy(org, "almaponia", True, "pepa")
+
+
+def test_project_reader_does_not_gain_organization_or_other_project_access(org):
+    scoped_project_policy(org)
+    org["policies"]["security_categories"]["category-4-other"] = {"scope": "project"}
+    org["actors"].append(
+        {
+            "id": "project_reader",
+            "role": "unknown",
+            "actor_exceptions": ["category-4-almaponia"],
+        }
+    )
+    assert au.can_read(org, "project_reader", "category-4-almaponia")
+    assert not au.can_read(org, "project_reader", "category-2")
+    assert not au.can_read(org, "project_reader", "category-4-other")
+    assert not au.can_write(
+        org,
+        "project_reader",
+        "category-4-almaponia",
+        ["chief_of_staff", "project_lead"],
+    )
+
+
+def test_general_meeting_cannot_use_project_category(org):
+    scoped_project_policy(org)
+    org["documents"]["naming"]["domains"][1]["types"][0]["category"] = (
+        "category-4-almaponia"
+    )
+    with pytest.raises(ValueError, match="unsupported meeting classification"):
+        au.policy(org, "secretariat", False, "pepa")
+
+
+def test_scoped_project_registration_search_and_retry(org, sandbox, monkeypatch):
+    scoped_project_policy(org)
+    org["actors"].append(
+        {
+            "id": "project_reader",
+            "role": "unknown",
+            "actor_exceptions": ["category-4-almaponia"],
+        }
+    )
+    sandbox.model.write_text(yaml.safe_dump(org), encoding="utf-8")
+    actions = au.plan(org, files(), {}, "pepa")
+    assert au.execute(actions=actions, **sandbox.options) == 0
+    manifest_before = (sandbox.root / "manifest.yaml").read_bytes()
+    refs = au.references(load_manifest(str(sandbox.root / "manifest.yaml")))
+    assert set(refs) == {f["id"] for f in files()}
+    assert all(
+        n["category"] == "category-4-almaponia"
+        for nodes in refs.values()
+        for n in nodes
+    )
+    assert au.execute(actions=actions, **sandbox.options) == 0
+    assert len(sandbox.reads) == 3
+    assert (sandbox.root / "manifest.yaml").read_bytes() == manifest_before
+    monkeypatch.setattr("phantomdocs.cli._os_actor", lambda: "project_reader")
+    result = sandbox.runner.invoke(
+        pd,
+        ["search", "x", "--org-yaml", str(sandbox.model), "--root", str(sandbox.root)],
+    )
+    assert result.exit_code == 0 and result.output.count("doc ") == 3
+    monkeypatch.setattr("phantomdocs.cli._os_actor", lambda: "outsider")
+    denied = sandbox.runner.invoke(
+        pd,
+        ["search", "x", "--org-yaml", str(sandbox.model), "--root", str(sandbox.root)],
+    )
+    assert denied.exit_code == 0 and "no matches" in denied.output
+
+
+def test_scoped_policy_never_reclassifies_existing_references(org, sandbox):
+    actions = au.plan(org, files(), {}, "pepa")
+    assert au.execute(actions=actions, **sandbox.options) == 0
+    before = (sandbox.root / "manifest.yaml").read_bytes()
+    read_count = len(sandbox.reads)
+    scoped_project_policy(org)
+    sandbox.model.write_text(yaml.safe_dump(org), encoding="utf-8")
+    actions = au.plan(org, files(), {}, "pepa")
+    with pytest.raises(ValueError, match="different classification/owners"):
+        au.execute(actions=actions, **sandbox.options)
+    assert (sandbox.root / "manifest.yaml").read_bytes() == before
+    assert len(sandbox.reads) == read_count
+
+
 @pytest.mark.parametrize("change", ["category", "owner", "alma", "custodian"])
 def test_policy_changes_fail_closed(org, change):
     if change == "category":

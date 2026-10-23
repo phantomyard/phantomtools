@@ -1,7 +1,12 @@
 name: AU ingest regression
 on:
   push:
-    branches: [fix/au-bandeja-ingest, codex/au-intake-pending-groups]
+    branches: [fix/au-bandeja-ingest, codex/au-intake-pending-groups, fix/almaponia-scoped-meeting-access]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'phantomdocs/**'
+      - '.github/workflows/au-ingest.yml'
   workflow_dispatch:
 permissions:
   contents: read
