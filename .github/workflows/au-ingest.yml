@@ -1,7 +1,7 @@
 name: AU ingest regression
 on:
   push:
-    branches: [fix/au-bandeja-ingest]
+    branches: [fix/au-bandeja-ingest, codex/au-intake-pending-groups]
   workflow_dispatch:
 permissions:
   contents: read

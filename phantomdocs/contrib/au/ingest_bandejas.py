@@ -206,8 +206,23 @@ def read_store(root, org):
     return manifest
 
 
-def plan(org, inventory, catalog, actor):
+def plan(org, inventory, catalog, actor, *, pending=None):
     groups = defaultdict(list)
+    blocked = set()
+
+    def hold(entry, reason, meeting=None):
+        notice = {
+            "state": "pending-review",
+            "source": entry["source"],
+            "file_id": entry["id"],
+            "reason": reason,
+        }
+        if meeting is not None:
+            notice["meeting"] = meeting
+        print("HOLD " + json.dumps(notice, ensure_ascii=True), file=sys.stderr)
+        if pending is not None:
+            pending.append(notice)
+
     observed, used = {}, set()
     for entry in inventory:
         source = entry["source"]
@@ -236,14 +251,17 @@ def plan(org, inventory, catalog, actor):
         else:
             parsed = artifact(name)
             if parsed is None:
-                print(f"HOLD unclassified artifact: {source}/{name}", file=sys.stderr)
+                hold(entry, "unclassified-artifact")
                 continue
             key, kind = parsed
             project = source == "almaponia"
             if not project and re.search(r"(?i)\balmaponia\b", key.replace("_", " ")):
-                raise ValueError(
-                    "ALMAPONIA artifact outside canonical archive needs explicit catalog"
-                )
+                # A title is a reason to stop, never authority to grant project
+                # access. Quarantine the whole source/meeting, including any
+                # catalogued siblings, while independent groups may continue.
+                blocked.add((source, key))
+                hold(entry, "project-context-required", key)
+                continue
         if source == "almaponia" and not project:
             raise ValueError(
                 "canonical GO archive cannot classify a meeting as general AU"
@@ -255,8 +273,13 @@ def plan(org, inventory, catalog, actor):
         )
     actions = []
     for (source, key, project), items in sorted(groups.items()):
+        if (source, key) in blocked:
+            for entry, _ in items:
+                hold(entry, "meeting-has-unresolved-project-context", key)
+            continue
         if not {"transcription", "summary"} <= {kind for _, kind in items}:
-            print(f"HOLD incomplete meeting: {source}/{key}", file=sys.stderr)
+            for entry, _ in items:
+                hold(entry, "incomplete-meeting", key)
             continue
         category, owners = policy(org, source, project, actor)
         for entry, _ in items:
@@ -479,7 +502,8 @@ def main(argv=None):
         # list the source freshly and check every pinned name before any add.
         if args.catalog:
             inventory = [f for f in inventory if f["id"] in catalog]
-        actions = plan(org, inventory, catalog, args.actor)
+        pending = []
+        actions = plan(org, inventory, catalog, args.actor, pending=pending)
         kwargs = {
             "org": org,
             "actions": actions,
@@ -492,9 +516,13 @@ def main(argv=None):
             "dry_run": args.dry_run,
         }
         if args.dry_run:
-            return execute(**kwargs)
-        with ingest_lock(args.state):
-            return execute(**kwargs)
+            result = execute(**kwargs)
+        else:
+            with ingest_lock(args.state):
+                result = execute(**kwargs)
+        # Indexing independent approved groups does not resolve held artifacts.
+        # A timer/operator must never mistake this partial pass for completion.
+        return result or (2 if pending else 0)
     except (KeyError, TypeError, ValueError, OSError, EOFError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

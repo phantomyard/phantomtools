@@ -288,3 +288,33 @@ Future opaque branded bundles need reviewed catalogs too; the timer holds them
 until classified. A producer-supplied meeting/class manifest would allow further
 automation, but no such convention has been invented here. Non-meeting documents
 are held; department routing needs a separate operator decision.
+
+## Pending groups and partial passes
+
+The timer distinguishes ordinary pending work from global integrity or policy
+errors. A recognized project artifact outside its canonical project archive
+remains unindexed until an explicit reviewed catalog establishes its context.
+Its filename is a hold signal, never authority to assign project access.
+All siblings with the same source and parsed meeting key remain held, including
+partially catalogued siblings. Independent complete, authorized groups can still
+be indexed. Unknown artifacts and incomplete groups also remain pending.
+
+Each HOLD is structured JSON on stderr with source, exact file ID, reason and,
+when available, meeting key. It contains no document body or credentials.
+Exit 0 means no pending artifacts and no indexing errors; exit 2 means a partial
+pass with pending review; exit 1 means an integrity, policy or execution failure.
+A dry run uses the same pending exit status without writing state or reading
+bytes. Journald retains the evidence through the existing timer; no extra
+service or parallel document registry is created. A repeated partial pass skips
+previously indexed references without downloading or versioning them again.
+
+Source collisions, changed catalog names, unknown catalog IDs, changed policy,
+existing ownership conflicts and orphan markers remain fatal. Do not broaden
+classification, remove seen markers or move documents merely to silence a HOLD.
+
+The legacy deployment pipeline README attributes final archival to ingestion,
+but this utility does not implement that operation. Delivery and final archival
+must be connected explicitly by the deployment-owned archiver. The newer
+`feat/document-workflows` handover is a separate opt-in integration, not an
+automatically active replacement for this timer. In particular, its shared raw
+recording intake is distinct from processed-material project delivery.

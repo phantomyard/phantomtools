@@ -168,6 +168,111 @@ def test_complete_and_incomplete_groups(org):
     assert au.plan(org, [recording], {}, "pepa") == []
 
 
+def test_project_context_hold_does_not_block_independent_meeting(org, capsys):
+    misplaced = files(source="secretariat", key="sample_almaponia_sync")
+    ordinary = [
+        {**item, "id": "ordinary-" + item["id"]}
+        for item in files(source="secretariat", key="ordinary-sync")
+    ]
+    pending = []
+    actions = au.plan(org, misplaced + ordinary, {}, "pepa", pending=pending)
+    assert {item["id"] for item in actions} == {item["id"] for item in ordinary}
+    assert len(pending) == 3
+    assert all(item["reason"] == "project-context-required" for item in pending)
+    assert all(item["source"] == "secretariat" for item in pending)
+    assert all(item["file_id"] for item in pending)
+    assert "project-context-required" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_unresolved_project_context_holds_catalogued_siblings(org, reverse):
+    items = files(source="secretariat", key="sample_almaponia_sync")
+    catalog = {
+        item["id"]: {
+            "name": item["name"],
+            "source": item["source"],
+            "meeting": "sample_almaponia_sync",
+            "class": kind,
+            "project": True,
+        }
+        for item, kind in zip(items[:2], ["transcription", "summary"])
+    }
+    pending = []
+    assert (
+        au.plan(
+            org,
+            list(reversed(items)) if reverse else items,
+            catalog,
+            "pepa",
+            pending=pending,
+        )
+        == []
+    )
+    assert len(pending) == 3
+    catalog[items[2]["id"]] = {
+        "name": items[2]["name"],
+        "source": "secretariat",
+        "meeting": "sample_almaponia_sync",
+        "class": "minutes",
+        "project": True,
+    }
+    assert len(au.plan(org, items, catalog, "pepa")) == 3
+
+
+def test_pending_cli_pass_indexes_independent_refs_and_retries_once(
+    org, sandbox, monkeypatch, capsys
+):
+    ordinary = files(source="secretariat", key="ordinary-sync")
+    misplaced = [
+        {**item, "id": "held-" + item["id"]}
+        for item in files(source="secretariat", key="sample_almaponia_sync")
+    ]
+    monkeypatch.setattr(
+        au,
+        "Drive",
+        lambda *args: SimpleNamespace(
+            list_files=lambda folder: [
+                {k: v for k, v in item.items() if k != "source"}
+                for item in ordinary + misplaced
+            ]
+        ),
+    )
+    monkeypatch.setattr(au, "ingest_lock", lambda state: nullcontext())
+    execute = au.execute
+    monkeypatch.setattr(
+        au, "execute", lambda **kwargs: execute(**kwargs, run=sandbox.options["run"])
+    )
+    args = [
+        "--org-yaml",
+        str(sandbox.model),
+        "--root",
+        str(sandbox.root),
+        "--docs",
+        "documents.sh",
+        "--service-account",
+        "unused",
+        "--subject",
+        "unused",
+        "--source",
+        "secretariat",
+        "--state",
+        str(sandbox.state),
+    ]
+    before = (sandbox.root / "manifest.yaml").read_bytes()
+    assert au.main(args + ["--dry-run"]) == 2
+    assert not sandbox.reads and not list(sandbox.state.iterdir())
+    assert (sandbox.root / "manifest.yaml").read_bytes() == before
+    assert au.main(args) == 2
+    assert len(sandbox.reads) == len(sandbox.adds) == 3
+    after = (sandbox.root / "manifest.yaml").read_bytes()
+    assert au.main(args) == 2
+    assert len(sandbox.reads) == len(sandbox.adds) == 3
+    assert (sandbox.root / "manifest.yaml").read_bytes() == after
+    refs = au.references(load_manifest(str(sandbox.root / "manifest.yaml")))
+    assert set(refs) == {item["id"] for item in ordinary}
+    assert "project-context-required" in capsys.readouterr().err
+
+
 def test_classification_and_department_custody(org):
     assert au.policy(org, "almaponia", True, "pepa") == (
         "category-2",
