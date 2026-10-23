@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 from click.testing import CliRunner
+
 from phantomdocs.cli import main as pd
 from phantomdocs.content import FileContent
 from phantomdocs.manifest import load as load_manifest
