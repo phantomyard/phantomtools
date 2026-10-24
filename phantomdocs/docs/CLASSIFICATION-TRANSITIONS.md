@@ -1,12 +1,16 @@
 # Classification transition preparation
 
-## Current capability: read-only planning
+## Related read-only planning
 
-`pd classification-plan` reports a proposed whole-document category change.
-It does not reclassify documents, modify permissions, register references,
-read original content, sign a transition or create a migration credential.
-Successful exit means a report was produced, not that a transition is approved
-or that content, signatures, audit records or trust anchors were verified.
+The separately proposed `pd classification-plan` command reports a proposed
+whole-document category change. It does not reclassify documents, modify
+permissions, register references, read original content, sign a transition or
+create a migration credential. Successful exit means a report was produced, not
+that a transition is approved or that content, signatures, audit records or
+trust anchors were verified.
+
+This change adds only the signed event contract below; it does not add that
+command, persist events or enable any write capability.
 
 ```bash
 pd classification-plan urn:sample-org:doc:record.txt \

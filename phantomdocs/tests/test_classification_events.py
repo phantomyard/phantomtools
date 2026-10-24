@@ -5,7 +5,6 @@ import hashlib
 
 import coincurve
 import pytest
-
 from phantomdocs.classification_events import (
     classification_event_envelope,
     classification_event_id,
