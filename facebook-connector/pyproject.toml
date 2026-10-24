@@ -1,0 +1,10 @@
+[project]
+name = "phantom-facebook"
+version = "0.1.0"
+description = "Focused Facebook Page MCP connector for PhantomTools"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = []
+
+[project.scripts]
+phantom-facebook = "facebook_connector.cli:main"
