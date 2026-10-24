@@ -209,7 +209,8 @@ PhantomDocs consumes the PhantomOrg `org.yaml` schema (org/version 1:
 resolution time.
 
 **Schema version contract:** PhantomDocs requires `version: 1` (top-level
-integer) in the `org.yaml`, matching PhantomOrg's `Organization.version`
+integer, never a boolean, float or string) in the `org.yaml`, matching
+PhantomOrg's `Organization.version`
 model. The version is enforced fail-closed on every `org.yaml` load (all
 ACL-gated commands and `derive-manifest`): a missing or unknown `version` is
 refused rather than assumed compatible. A future PhantomOrg schema bump must

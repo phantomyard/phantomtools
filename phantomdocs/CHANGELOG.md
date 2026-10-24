@@ -9,6 +9,10 @@ All notable changes to PhantomDocs are documented in this file.
   entry now denies stale direct grants. Completes test catalogs and adds access
   and document-read regressions; no document classification or history changes.
 
+- **Strict schema version type:** reject YAML booleans and floats that compare
+  equal to `1`; only the integer `version: 1` is supported. Adds direct validation
+  and file-loading regressions without changing document categories or history.
+
 - **Workflow review fixes**: CI now covers main pushes and pull requests;
   reference deduplication accepts logical folder slugs as well as paths; runtime
   inventory excludes prefixed credential/service-account/token filenames; generated

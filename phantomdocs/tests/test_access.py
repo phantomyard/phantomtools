@@ -1,6 +1,7 @@
 import textwrap
 
 import pytest
+import yaml
 
 from phantomdocs.access import (
     can_administer_namespace,
@@ -9,6 +10,7 @@ from phantomdocs.access import (
     load_org,
     resolved_categories,
     root_role_ids,
+    validate_org_schema,
 )
 
 ORG_YAML = textwrap.dedent("""\
@@ -92,6 +94,24 @@ def test_empty_catalog_denies_direct_grants(tmp_path, catalog):
     org["policies"]["security_categories"] = catalog
     assert can_read(org, "roberto", 1) is False
     assert can_write(org, "roberto", 1, ["cfo"]) is False
+
+
+@pytest.mark.parametrize("version", [True, False, 1.0, 0, 2, "1", None, [], {}])
+def test_schema_version_requires_exact_supported_integer(tmp_path, version):
+    org = {"version": version}
+    with pytest.raises(ValueError, match="schema version must be 1"):
+        validate_org_schema(org)
+    path = tmp_path / "org.yaml"
+    path.write_text(yaml.safe_dump(org), encoding="utf-8")
+    with pytest.raises(ValueError, match="schema version must be 1"):
+        load_org(str(path))
+
+
+def test_schema_version_accepts_integer_one(tmp_path):
+    validate_org_schema({"version": 1})
+    org = _org(tmp_path)
+    assert type(org["version"]) is int
+    assert org["version"] == 1
 
 
 def test_resolved_categories(tmp_path):

@@ -50,7 +50,7 @@ def validate_org_schema(org: dict[str, Any]) -> None:
     instead of silently mis-resolving access.
     """
     version = org.get("version")
-    if version != REQUIRED_ORG_SCHEMA_VERSION:
+    if type(version) is not int or version != REQUIRED_ORG_SCHEMA_VERSION:
         raise ValueError(
             f"org.yaml schema version must be {REQUIRED_ORG_SCHEMA_VERSION} "
             f"(got {version!r}); PhantomDocs resolves access from PhantomOrg's "
