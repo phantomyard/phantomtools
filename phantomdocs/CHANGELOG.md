@@ -4,6 +4,11 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+- **Classification planner validation:** validate the manifest schema and graph
+  before dereferencing nodes, including direct library calls. Missing categories
+  now produce a domain validation error instead of an incidental `KeyError`.
+  Tests pin clean CLI errors and conservative whole-manifest snapshot guards.
+
 - **Read-only classification planning:** report whole-document history and
   proposed reader gains/losses from the existing PhantomOrg ACL. Require both
   source and target write authority, unchanged owners and explicit current-state

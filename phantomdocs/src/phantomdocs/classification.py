@@ -7,7 +7,13 @@ import json
 from typing import Any
 
 from .access import can_read, can_write, normalize_category, policy_hash
-from .manifest import node_by_urn, resolve_node, structural_issues, versions_of
+from .manifest import (
+    node_by_urn,
+    resolve_node,
+    structural_issues,
+    validate,
+    versions_of,
+)
 from .storage import location_uri
 
 
@@ -29,6 +35,8 @@ def classification_plan(
     """
     if not isinstance(reason, str) or not reason.strip() or len(reason) > 1024:
         raise ValueError("a non-empty reason of at most 1024 characters is required")
+    if not isinstance(data, dict) or validate(data) or structural_issues(data):
+        raise ValueError("manifest structure must pass verification before planning")
     selected = resolve_node(data, ref)
     if selected is None or selected.get("kind") != "doc":
         raise ValueError("classification planning requires an existing document")
@@ -46,8 +54,6 @@ def classification_plan(
         raise ValueError(
             "denied: write access to both categories and owners is required"
         )
-    if structural_issues(data):
-        raise ValueError("manifest structure must pass verification before planning")
     history = versions_of(data, current["urn"])
     if any(
         normalize_category(node["category"]) != old

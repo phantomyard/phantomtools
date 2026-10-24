@@ -160,6 +160,67 @@ def test_broken_history_is_refused(model):
         classification_plan(data, org, "custodian", **args)
 
 
+@pytest.mark.parametrize("index", [0, -1])
+def test_missing_historical_or_current_category_is_a_validation_error(model, index):
+    data, org, args = model
+    del data["nodes"][index]["category"]
+    before = copy.deepcopy(data)
+    with pytest.raises(ValueError, match="manifest structure"):
+        classification_plan(data, org, "custodian", **args)
+    assert data == before
+
+
+def test_nonmapping_node_is_a_validation_error(model):
+    data, org, args = model
+    data["nodes"][-1] = None
+    with pytest.raises(ValueError, match="manifest structure"):
+        classification_plan(data, org, "custodian", **args)
+
+
+def test_unrelated_reference_change_invalidates_conservative_snapshot(model):
+    data, org, args = model
+    first = classification_plan(data, org, "custodian", **args)
+    data["refs"]["unrelated-review-tag"] = data["nodes"][0]["mac"]
+    second = classification_plan(data, org, "custodian", **args)
+    assert second["expected_manifest_digest"] != first["expected_manifest_digest"]
+    assert second["expected_current_mac"] == first["expected_current_mac"]
+    assert second["expected_policy_hash"] == first["expected_policy_hash"]
+
+
+@pytest.mark.parametrize("index", [0, -1])
+def test_cli_missing_category_returns_a_clean_error(model, tmp_path, index):
+    data, org, args = model
+    del data["nodes"][index]["category"]
+    (tmp_path / "manifest.yaml").write_text(yaml.safe_dump(data), encoding="utf-8")
+    policy = tmp_path / "org.yaml"
+    policy.write_text(yaml.safe_dump(org), encoding="utf-8")
+    result = CliRunner().invoke(
+        main,
+        [
+            "classification-plan",
+            args["ref"],
+            "--expected-mac",
+            args["expected_mac"],
+            "--expected-category",
+            "category-2",
+            "--category",
+            "category-4-sample",
+            "--reason",
+            args["reason"],
+            "--root",
+            str(tmp_path),
+            "--org-yaml",
+            str(policy),
+            "--actor",
+            "custodian",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "missing required field 'category'" in result.output
+    assert "Traceback" not in result.output
+    assert isinstance(result.exception, SystemExit)
+
+
 def test_snapshot_guards_change_with_policy_or_manifest(model):
     data, org, args = model
     first = classification_plan(data, org, "custodian", **args)
