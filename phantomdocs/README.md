@@ -192,6 +192,17 @@ to their exact URI and are not redirected by `--backend`. Get and rollback
 try the next replica when a location is malformed; verify reports each failed
 location and continues checking the others.
 
+## Read-only classification planning
+
+`pd classification-plan <document-ref> --expected-mac <current-mac>
+--expected-category <source-category> --category <target-category> --reason <text>
+--org-yaml <trusted-org.yaml> --root <store>` reports the proposed reader impact
+for a complete document history. It never changes permissions or documents and
+does not verify signatures, content or audit records. Reports remain private
+review artifacts; successful planning is not approval to migrate. See
+[Classification transition preparation](docs/CLASSIFICATION-TRANSITIONS.md)
+for the checks, historical semantics and blockers before write support.
+
 ## Dependency
 
 **Category catalog contract:** every readable or writable category must be
