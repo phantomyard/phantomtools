@@ -138,7 +138,7 @@ def classification_event_envelope(payload: dict[str, Any]) -> bytes:
             "classification event issued_at must be a UTC second timestamp"
         )
     try:
-        datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")
+        datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%S%z")
     except ValueError as exc:
         raise ValueError("invalid classification event timestamp") from exc
     return _canonical(payload)
