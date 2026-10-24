@@ -1,67 +1,118 @@
-# Verification record
+# Verification: link-only dashboard
 
-Verified locally on Windows with Python 3.14, using the supported Python 3.11+
-standard-library APIs. CI is configured to run the same tests on Ubuntu; it has
-not run on GitHub because this branch has not been pushed.
+This record covers the current authentication change, using disposable workspaces
+and newly generated synthetic keys only. No live site, persona store, relay,
+provider account or external publication was used. No instance identities or
+hosts are included in these instructions.
 
-## Automated checks
+## Repeat the checks
+
+From `phantomblog/`, with Python 3.11+:
 
 ```sh
-python -m unittest discover -s tests -v
-python -m compileall -q phantomblog
+python -m pip install ".[dev]"
+python -m ruff check phantomblog tests
+python -m ruff format --check phantomblog tests
+python -m bandit -r phantomblog -q
+python -m pytest tests -v
 node --check phantomblog/resources/dashboard.js
-bash -n install.sh
 ```
 
-The suite contains 53 tests covering catalogue/date/slug/category validation,
-language completeness, raster assets and uploads, escaped metadata, authored body
-HTML, scoped CSS, shared template validation, output ownership, invalid-input
-preservation, deterministic builds and read-only commands. It also checks legacy
-byte preservation, archive boundaries 0/1/12/13/25, chronological/slug ordering,
-featured styling without duplication, pruning only numbered archives, source CAS,
-reviewed agent proposals, MCP initialization/tools, auth/Origin/cookie behaviour,
-exact live verification, deployment-before-sharing, response contracts, uncertain
-results, duplicate protection, reconciliation and explicit persona targeting.
+Use a fresh owned `--basetemp <disposable-directory>` if the OS restricts pytest's
+shared temporary directory. `PHANTOMBLOG_TEST_NODE` may select a Node executable.
+Tests generate keys inside temporary fixtures and operate only on fixture servers
+bound to ephemeral loopback ports. Persona stores are read-only during requests.
+The public-origin regression uses an in-test generated `.invalid` hostname;
+requests still go to the fixture's loopback listener, with synthetic Host/Origin
+headers. It never resolves or contacts that hostname.
 
-One symlink fixture test is skipped on this Windows account because it cannot
-create symlinks. It runs on hosts with symlink permissions, including the configured
-Linux CI runner. The path containment implementation is still exercised by traversal
-and unsafe manifest tests locally. Installer shell syntax was checked with Git Bash;
-no global installation or persona changes were performed.
+Coverage includes five-minute expiry, real Schnorr verification, wrong identities,
+invalid signatures, URL/method/payload binding, stale and replayed events, invalid
+and consumed codes, concurrent redemption, session-creation failure, missing
+allowlist and dependency, fragment-only delivery, query/log exclusion, foreign
+Host/Origin rejection, and Secure cookie authentication/logout. Persona CLI tests
+exercise fresh runtime hex/nsec keys, checksum rejection, arbitrary persona ids,
+missing stores, private errors, repeated issuance and unchanged identity files.
+Static-token routes/options and Bearer authorization cannot authenticate.
 
-## Browser checks
+The full suite also covers catalogue validation, bilingual output, ownership,
+legacy preservation, deterministic builds, pagination, read-only commands,
+reviewed proposals and synthetic connector publication/reconciliation workflows.
+A source audit refuses embedded full nsec/npub values or literal 64-hex identities.
+It does not claim to prove absence of every possible secret encoding.
 
-Disposable fixture workspace only, containing 13 clearly identified synthetic
-articles and a generated raster image. Nothing was added to a live publication.
+Node executes the actual dashboard bootstrap against a minimal browser surface,
+checking that history cleanup precedes fetch, the code goes only into the
+redemption POST body, and success opens the app. This is a script regression,
+not a live browser or deployed proxy acceptance test. A real HTTPS proxy, cookie
+behaviour in the selected browser and remote delivery still require operator
+acceptance. The preview helper creates disposable content and an ephemeral
+signing identity, prints a five-minute link, and sends no external messages:
 
-- Desktop: 1440 × 900. Mobile: 390 × 844 and 320 × 760.
-- Login, content editing/save, English/Spanish selection and saved preview.
-- Article layout selection and cover/body/lead section ordering.
-- Category creation and English/Spanish label editing.
-- Shared template load, validation and save.
-- Working local build/freshness controls and configuration forms.
-- Cover image loads at its authored 1200-pixel width; scoped preview styles load.
-- Reciprocal article language links and English → numbered archive → corresponding
-  Spanish archive navigation retain page 2.
-- At mobile widths the document has no horizontal overflow. The fixture table
-  scrolls inside its own width instead of widening the document.
-- Sharing destinations contain the configured public URL and correct language URL;
-  no share link was submitted and no real post was sent.
+```sh
+python tests/preview.py --port 8790
+```
 
-An initial preview sandbox blocked styles/images. It was corrected to retain the
-same origin while disabling scripts; the authenticated asset routes then loaded
-successfully. The private preview also applies a restrictive CSP and never runs
-the website dictionary translator.
+## Maintenance verification (2026-10-15)
 
-## External limits
+The access-link changes were verified against the current `main`. The PhantomBlog
+workflow selects Python 3.11, installs the development extra before running the
+full pytest suite, and enforces the local Ruff and formatting checks. This fixes
+the observed missing-pytest/coincurve discovery failures without skipping access
+tests.
 
-MCP adapter calls, receipts, failures and memory capture were tested with synthetic
-providers, and HTTP verification with a local fixture server. Phantombot and real
-platform accounts are not configured on this machine, so no production OAuth,
-PhantomChat delivery, deployment or social post is claimed as verified. That is a
-separate setup/acceptance step on the target installation. The source includes
-configuration instructions and exposes unavailable connections accurately.
+Commands run from `phantomblog/` in an isolated development environment:
 
-The existing Aquaponics repository was checked separately: it remains at commit
-`5555ac7`, with only its previously unrelated authoring prompt untracked. No new
-Aquaponics content, server sync or cron change was made for PhantomBlog.
+```sh
+python3 -m pytest tests -q -rs
+ruff check .
+ruff format --check phantomblog tests
+python3 -m compileall -q phantomblog
+```
+
+Results on Windows with Python 3.12, pytest 9.1.1, coincurve 21.0.0 and Ruff
+0.17.0: **97 passed, 1 skipped, 31 subtests passed**. The skip is the existing
+symlink fixture because this host cannot create symlinks. Ruff check passes;
+all 17 Python files pass format checking; compileall exits successfully.
+The PowerShell session aliases `python3` and `ruff` to the isolated environment's
+Python and Ruff executables; no system Python installation is changed.
+
+New coverage verifies that missing coincurve rejects dashboard startup before
+binding a listener, with and without an allowlist, and that the CLI returns exit
+code 2 with the installation command. An installed verifier with an empty
+allowlist remains locked, and the CLI explicitly explains how to configure
+`--allow-identity`. A structural comparison against approved `afc5c59` confirms
+that seven access functions (including canonical digest, signing, issuance and
+redemption), both timing constants and the server apart from its pre-bind guard
+are AST-identical. No security protocol redesign was made.
+
+The local Ruff ruleset targets Python 3.11 and selects import, correctness,
+bugbear, broad-exception, simplification, performance, refurbishment, mutable
+class-attribute and subprocess-check rules. No selected rule is ignored.
+`E501` is not selected because embedded HTML and templates have long literals;
+unrelated docstring/style families are not part of this focused ruleset.
+Full-component formatting also passes. Python 3.11 itself was not available on
+this host; `target-version = "py311"` is not a claim of executing that interpreter.
+
+## Historical pre-maintenance results
+
+Checked on Windows with Python 3.12.14, pytest 9.1.1, coincurve 21.0.0,
+Ruff 0.16.10 and Bandit 1.9.4. Tests used a fresh owned temporary workspace;
+Node ran the real dashboard bootstrap regression.
+
+- Full pytest: **94 passed, 1 skipped, 31 subtests passed in 28.97 seconds**.
+  The skip is the existing Windows symlink-permission fixture.
+- Changed Python files: Ruff check and Ruff format check pass.
+- Changed production Python files: Bandit passes with no findings.
+- Full-component Ruff check: **31 existing findings in untouched files**.
+- Full-component Ruff format check: **9 untouched files require formatting**.
+- Full-component Bandit: **3 existing low-severity B404/B603 findings**, all in
+  the untouched executable-only subprocess connector. No medium/high findings.
+- Dashboard JavaScript syntax and `git diff --check` pass.
+
+Full-component lint/format/security checks were run and their complete failures
+are retained in the delivered check output; they are not claimed clean. No
+baseline suppression or exclusion was added. Python 3.11 compatibility follows
+the supported APIs but was not separately executed in this Windows session.
+No browser/proxy deployment, provider call, real identity read, live site edit,
+external message or Git push was performed.

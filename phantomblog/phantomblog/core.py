@@ -1,17 +1,18 @@
 """Dependency-free, deterministic static publishing. No external side effects."""
+
 from __future__ import annotations
 
-from contextlib import contextmanager
-from datetime import date
 import hashlib
 import html
-from html.parser import HTMLParser
 import json
 import os
-from pathlib import Path
 import re
-from string import Template
 import tempfile
+from contextlib import contextmanager
+from datetime import date
+from html.parser import HTMLParser
+from pathlib import Path
+from string import Template
 from urllib.parse import quote, unquote, urlencode, urlsplit
 
 RESOURCES = Path(__file__).resolve().parent / "resources"
@@ -21,8 +22,26 @@ MANIFEST = "phantomblog-manifest.json"
 ARCHIVE = re.compile(r"blog(?:-es)?-page-([2-9]|[1-9][0-9]+)\.html\Z")
 LANGUAGES = ("en", "es")
 LABELS = {
-    "en": {"archive": "Articles", "read": "Read article", "previous": "Previous", "next": "Next", "share": "Share", "empty": "No articles published yet", "date": "Published", "featured": "Featured"},
-    "es": {"archive": "Artículos", "read": "Leer artículo", "previous": "Anterior", "next": "Siguiente", "share": "Compartir", "empty": "Todavía no hay artículos publicados", "date": "Publicado", "featured": "Destacado"},
+    "en": {
+        "archive": "Articles",
+        "read": "Read article",
+        "previous": "Previous",
+        "next": "Next",
+        "share": "Share",
+        "empty": "No articles published yet",
+        "date": "Published",
+        "featured": "Featured",
+    },
+    "es": {
+        "archive": "Artículos",
+        "read": "Leer artículo",
+        "previous": "Anterior",
+        "next": "Siguiente",
+        "share": "Compartir",
+        "empty": "Todavía no hay artículos publicados",
+        "date": "Publicado",
+        "featured": "Destacado",
+    },
 }
 
 
@@ -39,7 +58,10 @@ def digest(data):
 
 
 def encoded(value):
-    return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n").encode("utf-8")
+    return (
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
+        + "\n"
+    ).encode("utf-8")
 
 
 def decode(data):
@@ -50,25 +72,43 @@ def decode(data):
                 raise Invalid(f"Duplicate JSON key: {key}")
             result[key] = value
         return result
+
     try:
         if isinstance(data, bytes):
             data = data.decode("utf-8")
-        return json.loads(data, object_pairs_hook=unique, parse_constant=lambda v: (_ for _ in ()).throw(Invalid(f"Invalid JSON constant: {v}")))
+        return json.loads(
+            data,
+            object_pairs_hook=unique,
+            parse_constant=lambda v: (_ for _ in ()).throw(
+                Invalid(f"Invalid JSON constant: {v}")
+            ),
+        )
     except (ValueError, UnicodeError) as exc:
         raise Invalid("Invalid UTF-8 JSON") from exc
 
 
 def contained(root, name, exists=False):
-    if not isinstance(name, str) or not name or "\\" in name or any(ord(c) < 32 for c in name):
+    if (
+        not isinstance(name, str)
+        or not name
+        or "\\" in name
+        or any(ord(c) < 32 for c in name)
+    ):
         raise Invalid("Expected a relative POSIX path")
-    if any(p in ("", ".", "..") for p in name.split("/")) or any(c in name for c in ":%?#"):
+    if any(p in ("", ".", "..") for p in name.split("/")) or any(
+        c in name for c in ":%?#"
+    ):
         raise Invalid(f"Unsafe path: {name}")
     root = root.resolve()
     result = root / name
     if not result.resolve().is_relative_to(root):
         raise Invalid(f"Path escapes project: {name}")
     # Refuse symlink components even if they point inside: ownership is lexical.
-    if any(p.is_symlink() for p in [result, *result.parents] if p != root and p.is_relative_to(root)):
+    if any(
+        p.is_symlink()
+        for p in [result, *result.parents]
+        if p != root and p.is_relative_to(root)
+    ):
         raise Invalid(f"Symlinks are not owned: {name}")
     if exists and not result.is_file():
         raise Invalid(f"Missing file: {name}")
@@ -76,7 +116,12 @@ def contained(root, name, exists=False):
 
 
 def plain(value, label):
-    if not isinstance(value, str) or not value.strip() or len(value) > 5000 or any(ord(c) < 32 for c in value):
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > 5000
+        or any(ord(c) < 32 for c in value)
+    ):
         raise Invalid(f"{label}: expected nonempty plain text")
     return value
 
@@ -100,27 +145,121 @@ def http_url(value, local=False):
     if not isinstance(value, str) or any(ord(c) <= 32 for c in value) or "\\" in value:
         raise Invalid("Invalid URL")
     parts = urlsplit(value)
-    if parts.scheme not in (("http", "https") if local else ("https",)) or not parts.hostname or parts.username or parts.password:
+    if (
+        parts.scheme not in (("http", "https") if local else ("https",))
+        or not parts.hostname
+        or parts.username
+        or parts.password
+    ):
         raise Invalid("Expected an HTTPS URL without credentials")
     return parts
 
 
 def local_url(value, root, planned):
-    if not isinstance(value, str) or not value or "\\" in value or any(ord(c) <= 32 for c in value):
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\\" in value
+        or any(ord(c) <= 32 for c in value)
+    ):
         raise Invalid("Invalid body URL")
     parts = urlsplit(value)
     if parts.scheme or parts.netloc:
         http_url(value)
     elif parts.path:
         name = unquote(parts.path).removeprefix("/")
-        if name not in planned and not contained(root / "assets", name, exists=True).is_file():
+        if (
+            name not in planned
+            and not contained(root / "assets", name, exists=True).is_file()
+        ):
             raise Invalid("Missing body asset")
 
 
 class Fragment(HTMLParser):
-    TAGS = set("p h2 h3 h4 h5 h6 ul ol li dl dt dd table caption colgroup col thead tbody tfoot tr th td figure figcaption img a em strong b i u s small sup sub br hr div span section aside blockquote pre code abbr time details summary".split())
-    VOID = {"img", "br", "hr", "col"}
-    ATTRS = set("id class title lang dir role href src cite alt width height loading decoding target rel scope headers colspan rowspan span datetime start reversed value open abbr".split())
+    TAGS = frozenset(
+        [
+            "p",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "ul",
+            "ol",
+            "li",
+            "dl",
+            "dt",
+            "dd",
+            "table",
+            "caption",
+            "colgroup",
+            "col",
+            "thead",
+            "tbody",
+            "tfoot",
+            "tr",
+            "th",
+            "td",
+            "figure",
+            "figcaption",
+            "img",
+            "a",
+            "em",
+            "strong",
+            "b",
+            "i",
+            "u",
+            "s",
+            "small",
+            "sup",
+            "sub",
+            "br",
+            "hr",
+            "div",
+            "span",
+            "section",
+            "aside",
+            "blockquote",
+            "pre",
+            "code",
+            "abbr",
+            "time",
+            "details",
+            "summary",
+        ]
+    )
+    VOID = frozenset({"img", "br", "hr", "col"})
+    ATTRS = frozenset(
+        [
+            "id",
+            "class",
+            "title",
+            "lang",
+            "dir",
+            "role",
+            "href",
+            "src",
+            "cite",
+            "alt",
+            "width",
+            "height",
+            "loading",
+            "decoding",
+            "target",
+            "rel",
+            "scope",
+            "headers",
+            "colspan",
+            "rowspan",
+            "span",
+            "datetime",
+            "start",
+            "reversed",
+            "value",
+            "open",
+            "abbr",
+        ]
+    )
 
     def __init__(self, root, planned):
         super().__init__(convert_charrefs=True)
@@ -151,7 +290,12 @@ class Fragment(HTMLParser):
                 parts = urlsplit(value)
                 if key == "src" and not parts.path:
                     raise Invalid("Body image src needs a file or HTTPS image path")
-                if parts.path and not parts.scheme and not parts.netloc and unquote(parts.path).removeprefix("/") not in self.planned:
+                if (
+                    parts.path
+                    and not parts.scheme
+                    and not parts.netloc
+                    and unquote(parts.path).removeprefix("/") not in self.planned
+                ):
                     self.assets.add(unquote(parts.path).removeprefix("/"))
                 if value.startswith("#"):
                     self.anchors.append(unquote(value[1:]))
@@ -176,7 +320,11 @@ class Fragment(HTMLParser):
             raise Invalid(f"Unbalanced closing body tag: {tag}")
 
     def validate(self, body):
-        if not isinstance(body, str) or len(body.encode("utf-8")) > 1_000_000 or "\x00" in body:
+        if (
+            not isinstance(body, str)
+            or len(body.encode("utf-8")) > 1_000_000
+            or "\x00" in body
+        ):
             raise Invalid("Body must be HTML text under 1 MB")
         self.feed(body)
         self.close()
@@ -188,18 +336,22 @@ def scoped_css(css, scope):
     """A deliberately small CSS subset: flat selector/declaration rules only."""
     if not isinstance(css, str) or len(css) > 100_000:
         raise Invalid("CSS must be text under 100 KB")
-    clean = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
-    if re.search(r"@|url\s*\(|expression\s*\(|[<>\\]", clean, re.I):
-        raise Invalid("Custom CSS cannot import resources, use at-rules, escapes or markup")
+    clean = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    if re.search(r"@|url\s*\(|expression\s*\(|[<>\\]", clean, re.IGNORECASE):
+        raise Invalid(
+            "Custom CSS cannot import resources, use at-rules, escapes or markup"
+        )
     rules, pos = [], 0
     for match in re.finditer(r"([^{}]+)\{([^{}]*)\}", clean):
-        if clean[pos:match.start()].strip():
+        if clean[pos : match.start()].strip():
             raise Invalid("Malformed CSS")
         selectors, declarations = match.groups()
         selected = []
         for selector in selectors.split(","):
             selector = selector.strip()
-            if not selector or re.search(r":(?:root|has|host)|\b(?:html|body)\b", selector, re.I):
+            if not selector or re.search(
+                r":(?:root|has|host)|\b(?:html|body)\b", selector, re.IGNORECASE
+            ):
                 raise Invalid("Selectors must address article content")
             selected.append(f"{scope} {selector}")
         rules.append(", ".join(selected) + " {" + declarations + "}")
@@ -210,18 +362,33 @@ def scoped_css(css, scope):
 
 
 def validate_design(design, root=None):
-    if not isinstance(design, dict) or set(design) - {"layout", "accent", "css", "sections", "templateFile"}:
+    if not isinstance(design, dict) or set(design) - {
+        "layout",
+        "accent",
+        "css",
+        "sections",
+        "templateFile",
+    }:
         raise Invalid("Unknown design option")
     if design.get("layout", "classic") not in ("classic", "editorial", "compact"):
         raise Invalid("Unknown article layout")
-    if not isinstance(design.get("accent", "#7253cc"), str) or not re.fullmatch(r"#[a-fA-F0-9]{6}", design.get("accent", "#7253cc")):
+    if not isinstance(design.get("accent", "#7253cc"), str) or not re.fullmatch(
+        r"#[a-fA-F0-9]{6}", design.get("accent", "#7253cc")
+    ):
         raise Invalid("Accent must be a six digit hex colour")
     sections = design.get("sections", ["cover", "lead", "body"])
-    if not isinstance(sections, list) or len(sections) != 3 or any(not isinstance(s, str) for s in sections) or sorted(sections) != ["body", "cover", "lead"]:
+    if (
+        not isinstance(sections, list)
+        or len(sections) != 3
+        or any(not isinstance(s, str) for s in sections)
+        or sorted(sections) != ["body", "cover", "lead"]
+    ):
         raise Invalid("Sections must contain cover, lead and body exactly once")
     scoped_css(design.get("css", ""), ".pb-article")
     if root is not None and "templateFile" in design:
-        template = contained(root / "templates", design["templateFile"], True).read_text(encoding="utf-8")
+        template = contained(
+            root / "templates", design["templateFile"], True
+        ).read_text(encoding="utf-8")
         validate_template(template)
 
 
@@ -232,27 +399,42 @@ def article_url(article, lang):
 
 
 def archive_url(lang, page=1):
-    return "blog" + ("-es" if lang == "es" else "") + (f"-page-{page}" if page > 1 else "") + ".html"
+    return (
+        "blog"
+        + ("-es" if lang == "es" else "")
+        + (f"-page-{page}" if page > 1 else "")
+        + ".html"
+    )
 
 
 def source_body(root, translation):
     if "bodyFile" in translation and "body" in translation:
         raise Invalid("Use body or bodyFile, not both")
     if "bodyFile" in translation:
-        return contained(root / "bodies", translation["bodyFile"], exists=True).read_text(encoding="utf-8")
+        return contained(
+            root / "bodies", translation["bodyFile"], exists=True
+        ).read_text(encoding="utf-8")
     return translation.get("body", "")
 
 
 def validate(root, model, include_drafts=False):
     for directory in ("assets", "bodies", "templates", "public"):
         contained(root, directory)
-    if not isinstance(model, dict) or set(model) != {"schemaVersion", "site", "theme", "categories", "articles", "connections"} or type(model["schemaVersion"]) is not int or model["schemaVersion"] != 1:
+    if (
+        not isinstance(model, dict)
+        or set(model)
+        != {"schemaVersion", "site", "theme", "categories", "articles", "connections"}
+        or type(model["schemaVersion"]) is not int
+        or model["schemaVersion"] != 1
+    ):
         raise Invalid("Expected PhantomBlog schemaVersion 1")
     site = model["site"]
     if not isinstance(site, dict) or set(site) != {"name", "url", "description"}:
         raise Invalid("Site needs name, url and bilingual description")
     plain(site["name"], "Site name")
-    if not isinstance(site["description"], dict) or set(site["description"]) != set(LANGUAGES):
+    if not isinstance(site["description"], dict) or set(site["description"]) != set(
+        LANGUAGES
+    ):
         raise Invalid("Site description needs en and es")
     parts = http_url(site["url"])
     if parts.query or parts.fragment or not site["url"].endswith("/"):
@@ -262,11 +444,17 @@ def validate(root, model, include_drafts=False):
     validate_design(model["theme"], root)
     if "templateFile" in model["theme"]:
         contained(root / "templates", model["theme"]["templateFile"], exists=True)
-    if not isinstance(model["categories"], list) or not isinstance(model["articles"], list):
+    if not isinstance(model["categories"], list) or not isinstance(
+        model["articles"], list
+    ):
         raise Invalid("Categories and articles must be arrays")
     categories = set()
     for category in model["categories"]:
-        if not isinstance(category, dict) or set(category) - {"slug", "en", "es", "design"} or not {"slug", "en", "es"}.issubset(category):
+        if (
+            not isinstance(category, dict)
+            or set(category) - {"slug", "en", "es", "design"}
+            or not {"slug", "en", "es"}.issubset(category)
+        ):
             raise Invalid("Invalid category record")
         key = slug(category["slug"])
         if key in categories:
@@ -277,13 +465,33 @@ def validate(root, model, include_drafts=False):
         validate_design(category.get("design", {}), root)
     planned, keys = set(), set()
     for a in model["articles"]:
-        if not isinstance(a, dict) or set(a) - {"slug", "category", "status", "mode", "publishedAt", "updatedAt", "featured", "image", "socialImage", "en", "es", "design"} or not {"slug", "category", "status", "publishedAt", "en", "es"}.issubset(a):
+        if (
+            not isinstance(a, dict)
+            or set(a)
+            - {
+                "slug",
+                "category",
+                "status",
+                "mode",
+                "publishedAt",
+                "updatedAt",
+                "featured",
+                "image",
+                "socialImage",
+                "en",
+                "es",
+                "design",
+            }
+            or not {"slug", "category", "status", "publishedAt", "en", "es"}.issubset(a)
+        ):
             raise Invalid("Unknown article field")
         key = slug(a["slug"])
         if key in keys:
             raise Invalid("Duplicate article slug")
         keys.add(key)
-        if a.get("mode", "generated") not in ("generated", "legacy") or a.get("status") not in ("draft", "published"):
+        if a.get("mode", "generated") not in ("generated", "legacy") or a.get(
+            "status"
+        ) not in ("draft", "published"):
             raise Invalid("Article mode/status invalid")
         if a.get("category") not in categories:
             raise Invalid("Article category does not exist")
@@ -298,8 +506,17 @@ def validate(root, model, include_drafts=False):
     generated_planned = set(planned)
     public_count = sum(a["status"] == "published" for a in model["articles"])
     public_pages = max(1, (public_count + 11) // 12)
-    public_planned = {urlsplit(article_url(a, l)).path for a in model["articles"] if a["status"] == "published" for l in LANGUAGES}
-    public_planned.update(archive_url(l, p) for l in LANGUAGES for p in range(1, public_pages + 1))
+    public_planned = {
+        urlsplit(article_url(a, language)).path
+        for a in model["articles"]
+        if a["status"] == "published"
+        for language in LANGUAGES
+    }
+    public_planned.update(
+        archive_url(language, p)
+        for language in LANGUAGES
+        for p in range(1, public_pages + 1)
+    )
     planned.update(public_planned)
     assets = {}
     for a in model["articles"]:
@@ -309,15 +526,45 @@ def validate(root, model, include_drafts=False):
                 continue
             path = contained(root / "assets", name, exists=True)
             data = path.read_bytes()
-            if field == "socialImage" and not ((path.suffix.lower() == ".png" and data.startswith(b"\x89PNG\r\n\x1a\n")) or (path.suffix.lower() in (".jpg", ".jpeg") and data.startswith(b"\xff\xd8\xff")) or (path.suffix.lower() == ".webp" and data[:4] == b"RIFF" and data[8:12] == b"WEBP")):
+            if field == "socialImage" and not (
+                (
+                    path.suffix.lower() == ".png"
+                    and data.startswith(b"\x89PNG\r\n\x1a\n")
+                )
+                or (
+                    path.suffix.lower() in (".jpg", ".jpeg")
+                    and data.startswith(b"\xff\xd8\xff")
+                )
+                or (
+                    path.suffix.lower() == ".webp"
+                    and data[:4] == b"RIFF"
+                    and data[8:12] == b"WEBP"
+                )
+            ):
                 raise Invalid("Social images must be PNG, JPEG or WebP rasters")
-            if path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"):
+            if path.suffix.lower() not in (
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".webp",
+                ".gif",
+                ".svg",
+            ):
                 raise Invalid("Unsupported image type")
             if include_drafts or a["status"] == "published":
                 assets[name] = data
         for lang in LANGUAGES:
             t = a.get(lang)
-            if not isinstance(t, dict) or set(t) - {"title", "summary", "description", "imageAlt", "lead", "body", "bodyFile", "url"}:
+            if not isinstance(t, dict) or set(t) - {
+                "title",
+                "summary",
+                "description",
+                "imageAlt",
+                "lead",
+                "body",
+                "bodyFile",
+                "url",
+            }:
                 raise Invalid(f"Missing/invalid {lang} translation")
             for field in ("title", "summary", "description", "imageAlt"):
                 if a["status"] == "published" or t.get(field):
@@ -331,25 +578,47 @@ def validate(root, model, include_drafts=False):
                     raise Invalid("Legacy/generated URL collision")
             else:
                 body = source_body(root, t)
-                fragment = Fragment(root, planned if include_drafts or a["status"] == "draft" else public_planned)
+                fragment = Fragment(
+                    root,
+                    planned
+                    if include_drafts or a["status"] == "draft"
+                    else public_planned,
+                )
                 fragment.validate(body)
                 for name in fragment.assets:
-                    if name in {MANIFEST, "phantomblog.css"} or name.startswith("blog") and name.endswith(".html"):
+                    if (
+                        name in {MANIFEST, "phantomblog.css"}
+                        or name.startswith("blog")
+                        and name.endswith(".html")
+                    ):
                         raise Invalid("Body asset collides with generator output")
                     path = contained(root / "assets", name, True)
-                    if path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".pdf"):
+                    if path.suffix.lower() not in (
+                        ".png",
+                        ".jpg",
+                        ".jpeg",
+                        ".webp",
+                        ".gif",
+                        ".svg",
+                        ".pdf",
+                    ):
                         raise Invalid("Unsupported body asset")
                     if include_drafts or a["status"] == "published":
                         assets[name] = path.read_bytes()
                 if a["status"] == "published" and not body.strip():
-                    raise Invalid("Published articles need authored bodies in both languages")
+                    raise Invalid(
+                        "Published articles need authored bodies in both languages"
+                    )
     from .connectors import validate_connections
+
     validate_connections(model["connections"])
     return assets
 
 
 class Document(HTMLParser):
-    VOID = {"area", "br", "col", "hr", "img", "input", "link", "meta", "source", "wbr"}
+    VOID = frozenset(
+        {"area", "br", "col", "hr", "img", "input", "link", "meta", "source", "wbr"}
+    )
 
     def __init__(self):
         super().__init__()
@@ -357,8 +626,12 @@ class Document(HTMLParser):
         self.ids, self.lang = set(), None
 
     def handle_starttag(self, tag, attrs):
-        if tag in ("script", "iframe", "object", "embed", "base", "form") or any(k.startswith("on") for k, _ in attrs):
-            raise Invalid("Templates cannot contain active content; use HTML and scoped CSS")
+        if tag in ("script", "iframe", "object", "embed", "base", "form") or any(
+            k.startswith("on") for k, _ in attrs
+        ):
+            raise Invalid(
+                "Templates cannot contain active content; use HTML and scoped CSS"
+            )
         a = dict(attrs)
         if len(a) != len(attrs):
             raise Invalid("Duplicate template attribute")
@@ -370,10 +643,19 @@ class Document(HTMLParser):
             raise Invalid("Templates cannot redirect the reader")
         for key, value in attrs:
             if key in ("href", "src", "cite", "action", "formaction", "poster"):
-                if not isinstance(value, str) or any(ord(c) <= 32 for c in value) or "\\" in value:
+                if (
+                    not isinstance(value, str)
+                    or any(ord(c) <= 32 for c in value)
+                    or "\\" in value
+                ):
                     raise Invalid("Unsafe template URL")
                 parts = urlsplit(value)
-                if parts.scheme and parts.scheme not in ("https", "mailto") or parts.netloc and not parts.scheme:
+                if (
+                    parts.scheme
+                    and parts.scheme not in ("https", "mailto")
+                    or parts.netloc
+                    and not parts.scheme
+                ):
                     raise Invalid("Unsafe template URL scheme")
         if "id" in a:
             if not a["id"] or a["id"] in self.ids:
@@ -396,7 +678,10 @@ class Document(HTMLParser):
         self.lang = lang
         self.feed(page)
         self.close()
-        if self.stack or any(self.counts.get(k) != 1 for k in ("html", "head", "body", "title", "header", "main", "footer", "h1")):
+        if self.stack or any(
+            self.counts.get(k) != 1
+            for k in ("html", "head", "body", "title", "header", "main", "footer", "h1")
+        ):
             raise Invalid("Template must produce one complete semantic HTML document")
 
 
@@ -406,13 +691,19 @@ def esc(value):
 
 def share_links(url, title):
     links = {
-        "Facebook": "https://www.facebook.com/sharer/sharer.php?" + urlencode({"u": url}),
-        "LinkedIn": "https://www.linkedin.com/sharing/share-offsite/?" + urlencode({"url": url}),
-        "X": "https://twitter.com/intent/tweet?" + urlencode({"url": url, "text": title}),
+        "Facebook": "https://www.facebook.com/sharer/sharer.php?"
+        + urlencode({"u": url}),
+        "LinkedIn": "https://www.linkedin.com/sharing/share-offsite/?"
+        + urlencode({"url": url}),
+        "X": "https://twitter.com/intent/tweet?"
+        + urlencode({"url": url, "text": title}),
         "WhatsApp": "https://wa.me/?" + urlencode({"text": title + " " + url}),
         "Email": "mailto:?" + urlencode({"subject": title, "body": url}),
     }
-    return " ".join(f'<a href="{esc(link)}" target="_blank" rel="noopener noreferrer">{name}</a>' for name, link in links.items())
+    return " ".join(
+        f'<a href="{esc(link)}" target="_blank" rel="noopener noreferrer">{name}</a>'
+        for name, link in links.items()
+    )
 
 
 def design_for(model, a):
@@ -422,16 +713,43 @@ def design_for(model, a):
 
 def render(root, model, include_drafts=False):
     assets = validate(root, model, include_drafts)
-    template = (contained(root / "templates", model["theme"]["templateFile"], True).read_text(encoding="utf-8") if "templateFile" in model["theme"] else (RESOURCES / "page.html").read_text(encoding="utf-8"))
+    template = (
+        contained(root / "templates", model["theme"]["templateFile"], True).read_text(
+            encoding="utf-8"
+        )
+        if "templateFile" in model["theme"]
+        else (RESOURCES / "page.html").read_text(encoding="utf-8")
+    )
     parsed = Template(template)
-    if not parsed.is_valid() or set(parsed.get_identifiers()) != {"lang", "head", "header", "content", "footer"}:
-        raise Invalid("Page template requires exactly $lang, $head, $header, $content and $footer")
+    if not parsed.is_valid() or set(parsed.get_identifiers()) != {
+        "lang",
+        "head",
+        "header",
+        "content",
+        "footer",
+    }:
+        raise Invalid(
+            "Page template requires exactly $lang, $head, $header, $content and $footer"
+        )
     outputs = {"phantomblog.css": (RESOURCES / "site.css").read_bytes()}
     outputs.update((name, data) for name, data in assets.items())
-    articles = sorted((a for a in model["articles"] if include_drafts or a["status"] == "published"), key=lambda a: (-valid_date(a["publishedAt"]).toordinal(), a["slug"]))
+    articles = sorted(
+        (a for a in model["articles"] if include_drafts or a["status"] == "published"),
+        key=lambda a: (-valid_date(a["publishedAt"]).toordinal(), a["slug"]),
+    )
     total = max(1, (len(articles) + 11) // 12)
 
-    def page(lang, name, alternate, title, description, content, image=None, is_article=False, template_name=None):
+    def page(
+        lang,
+        name,
+        alternate,
+        title,
+        description,
+        content,
+        image=None,
+        is_article=False,
+        template_name=None,
+    ):
         canonical = model["site"]["url"] + quote(name, safe="/?=&")
         others = {lang: name, "es" if lang == "en" else "en": alternate}
         head = f'<title>{esc(title)} · {esc(model["site"]["name"])}</title>\n<meta name="description" content="{esc(description)}">\n<link rel="canonical" href="{esc(canonical)}">\n<link rel="stylesheet" href="phantomblog.css">\n'
@@ -442,9 +760,24 @@ def render(root, model, include_drafts=False):
         if image:
             head += f'<meta property="og:image" content="{esc(model["site"]["url"] + image)}"><meta name="twitter:image" content="{esc(model["site"]["url"] + image)}">'
         header = f'<header><a class="brand" href="{archive_url(lang)}">{esc(model["site"]["name"])}</a><nav id="site-nav" aria-label="{"Navigation" if lang == "en" else "Navegación"}"><a href="{archive_url(lang)}">{LABELS[lang]["archive"]}</a><a href="{esc(alternate)}" hreflang="{"es" if lang == "en" else "en"}" lang="{"es" if lang == "en" else "en"}">{"Español" if lang == "en" else "English"}</a></nav></header>'
-        footer = f'<footer>{esc(model["site"]["name"])}</footer>'
-        selected = Template(contained(root / "templates", template_name, True).read_text(encoding="utf-8")) if template_name else parsed
-        document = '<!doctype html>\n' + MARKER.decode() + '\n' + selected.substitute(lang=lang, head=head, header=header, content=content, footer=footer)
+        footer = f"<footer>{esc(model['site']['name'])}</footer>"
+        selected = (
+            Template(
+                contained(root / "templates", template_name, True).read_text(
+                    encoding="utf-8"
+                )
+            )
+            if template_name
+            else parsed
+        )
+        document = (
+            "<!doctype html>\n"
+            + MARKER.decode()
+            + "\n"
+            + selected.substitute(
+                lang=lang, head=head, header=header, content=content, footer=footer
+            )
+        )
         Document().validate(document, lang)
         return document.encode("utf-8")
 
@@ -452,33 +785,69 @@ def render(root, model, include_drafts=False):
         other = "es" if lang == "en" else "en"
         for number in range(1, total + 1):
             cards = []
-            for a in articles[(number - 1) * 12:number * 12]:
+            for a in articles[(number - 1) * 12 : number * 12]:
                 t = a[lang]
-                category = next(c for c in model["categories"] if c["slug"] == a["category"])
-                image = f'<img src="{esc(a["image"])}" alt="{esc(t.get("imageAlt", ""))}" loading="lazy">' if a.get("image") else ""
-                cards.append(f'<article class="blog-card{" featured" if a.get("featured") else ""}">{image}<p class="eyebrow">{esc(category[lang])} · <time datetime="{a["publishedAt"]}">{a["publishedAt"]}</time>{" · " + LABELS[lang]["featured"] if a.get("featured") else ""}</p><h2><a href="{esc(article_url(a, lang))}">{esc(t.get("title") or a["slug"])}</a></h2><p>{esc(t.get("summary", ""))}</p><a href="{esc(article_url(a, lang))}">{LABELS[lang]["read"]} →</a></article>')
+                category = next(
+                    c for c in model["categories"] if c["slug"] == a["category"]
+                )
+                image = (
+                    f'<img src="{esc(a["image"])}" alt="{esc(t.get("imageAlt", ""))}" loading="lazy">'
+                    if a.get("image")
+                    else ""
+                )
+                cards.append(
+                    f'<article class="blog-card{" featured" if a.get("featured") else ""}">{image}<p class="eyebrow">{esc(category[lang])} · <time datetime="{a["publishedAt"]}">{a["publishedAt"]}</time>{" · " + LABELS[lang]["featured"] if a.get("featured") else ""}</p><h2><a href="{esc(article_url(a, lang))}">{esc(t.get("title") or a["slug"])}</a></h2><p>{esc(t.get("summary", ""))}</p><a href="{esc(article_url(a, lang))}">{LABELS[lang]["read"]} →</a></article>'
+                )
             pagination = ""
             if number > 1:
                 pagination += f'<a rel="prev" href="{archive_url(lang, number - 1)}">{LABELS[lang]["previous"]}</a>'
-            pagination += f'<span>{number} / {total}</span>'
+            pagination += f"<span>{number} / {total}</span>"
             if number < total:
                 pagination += f'<a rel="next" href="{archive_url(lang, number + 1)}">{LABELS[lang]["next"]}</a>'
             content = f'<main id="content"><h1>{LABELS[lang]["archive"]}</h1><p>{esc(model["site"]["description"][lang])}</p><div class="blog-grid">{"".join(cards) or "<p>" + LABELS[lang]["empty"] + "</p>"}</div><nav class="pagination" aria-label="Pagination">{pagination}</nav></main>'
             name = archive_url(lang, number)
-            outputs[name] = page(lang, name, archive_url(other, number), LABELS[lang]["archive"], model["site"]["description"][lang], content, articles[0].get("socialImage") if articles else None)
+            outputs[name] = page(
+                lang,
+                name,
+                archive_url(other, number),
+                LABELS[lang]["archive"],
+                model["site"]["description"][lang],
+                content,
+                articles[0].get("socialImage") if articles else None,
+            )
         for a in articles:
             if a.get("mode", "generated") == "legacy":
                 continue
             t, design = a[lang], design_for(model, a)
-            pieces = {"cover": f'<figure><img src="{esc(a["image"])}" alt="{esc(t.get("imageAlt", ""))}"></figure>' if a.get("image") else "", "lead": f'<p class="lead">{esc(t.get("lead", t.get("summary", "")))}</p>', "body": f'<div class="article-body">{source_body(root, t)}</div>'}
+            pieces = {
+                "cover": f'<figure><img src="{esc(a["image"])}" alt="{esc(t.get("imageAlt", ""))}"></figure>'
+                if a.get("image")
+                else "",
+                "lead": f'<p class="lead">{esc(t.get("lead", t.get("summary", "")))}</p>',
+                "body": f'<div class="article-body">{source_body(root, t)}</div>',
+            }
             css = scoped_css(model["theme"].get("css", ""), ".pb-article")
-            category = next(c for c in model["categories"] if c["slug"] == a["category"])
-            css += "\n" + scoped_css(category.get("design", {}).get("css", ""), ".pb-article")
+            category = next(
+                c for c in model["categories"] if c["slug"] == a["category"]
+            )
+            css += "\n" + scoped_css(
+                category.get("design", {}).get("css", ""), ".pb-article"
+            )
             css += "\n" + scoped_css(a.get("design", {}).get("css", ""), ".pb-article")
-            css += f'\n.pb-article {{ --article-accent: {design.get("accent", "#7253cc")}; }}'
+            css += f"\n.pb-article {{ --article-accent: {design.get('accent', '#7253cc')}; }}"
             name = article_url(a, lang)
             content = f'<main id="content"><article class="pb-article {design.get("layout", "classic")}"><p class="eyebrow">{esc(category[lang])} · <time datetime="{a["publishedAt"]}">{a["publishedAt"]}</time></p><h1>{esc(t.get("title") or a["slug"])}</h1>{"".join(pieces[p] for p in design.get("sections", ["cover", "lead", "body"]))}<aside class="share"><h2>{LABELS[lang]["share"]}</h2>{share_links(model["site"]["url"] + name, t.get("title", a["slug"]))}</aside></article><style>{css}</style></main>'
-            outputs[name] = page(lang, name, article_url(a, other), t.get("title") or a["slug"], t.get("description", ""), content, a.get("socialImage"), True, design.get("templateFile"))
+            outputs[name] = page(
+                lang,
+                name,
+                article_url(a, other),
+                t.get("title") or a["slug"],
+                t.get("description", ""),
+                content,
+                a.get("socialImage"),
+                True,
+                design.get("templateFile"),
+            )
     if len(outputs) != len(set(outputs)):
         raise Invalid("Output collision")
     return outputs
@@ -486,9 +855,23 @@ def render(root, model, include_drafts=False):
 
 def validate_template(template):
     parsed = Template(template)
-    if not parsed.is_valid() or set(parsed.get_identifiers()) != {"lang", "head", "header", "content", "footer"}:
+    if not parsed.is_valid() or set(parsed.get_identifiers()) != {
+        "lang",
+        "head",
+        "header",
+        "content",
+        "footer",
+    }:
         raise Invalid("Template requires $lang, $head, $header, $content and $footer")
-    Document().validate(parsed.substitute(lang="en", head="<title>Validation</title>", header="<header></header>", content="<main><h1>Validation</h1></main>", footer="<footer></footer>"))
+    Document().validate(
+        parsed.substitute(
+            lang="en",
+            head="<title>Validation</title>",
+            header="<header></header>",
+            content="<main><h1>Validation</h1></main>",
+            footer="<footer></footer>",
+        )
+    )
 
 
 def atomic(path, data):
@@ -516,7 +899,7 @@ def lock(root):
         os.close(fd)
         yield
     finally:
-        path.unlink()
+        path.unlink(missing_ok=True)
 
 
 def load(root):
@@ -534,10 +917,15 @@ def save(root, model, revision):
         after = {a["slug"]: a for a in model.get("articles", [])}
         for a in old["articles"]:
             if a["status"] == "published" and a["slug"] not in after:
-                raise Invalid("Published articles cannot be removed; change status to draft")
+                raise Invalid(
+                    "Published articles cannot be removed; change status to draft"
+                )
             if a.get("mode") == "legacy" and a["slug"] in after:
                 b = after[a["slug"]]
-                if b.get("mode") != "legacy" or any(b.get(l, {}).get("url") != a[l]["url"] for l in LANGUAGES):
+                if b.get("mode") != "legacy" or any(
+                    b.get(language, {}).get("url") != a[language]["url"]
+                    for language in LANGUAGES
+                ):
                     raise Invalid("Legacy article URLs are immutable")
         render(root, model, include_drafts=True)
         data = encoded(model)
@@ -555,24 +943,50 @@ def build(root, mode="build", recover=False):
     old = {}
     if manifest_path.exists():
         previous = decode(manifest_path.read_bytes())
-        if not isinstance(previous, dict) or set(previous) != {"generator", "version", "files"} or previous["generator"] != "phantomblog" or previous["version"] != 1 or not isinstance(previous["files"], dict):
+        if (
+            not isinstance(previous, dict)
+            or set(previous) != {"generator", "version", "files"}
+            or previous["generator"] != "phantomblog"
+            or previous["version"] != 1
+            or not isinstance(previous["files"], dict)
+        ):
             raise Invalid("Invalid output ownership manifest")
         old = previous["files"]
     for name, checksum in old.items():
         path = contained(public, name)
         if not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum):
             raise Invalid("Invalid manifest hash")
-        if path.exists() and digest(path.read_bytes()) != checksum and not (recover and name in outputs and path.read_bytes() == outputs[name]):
+        if (
+            path.exists()
+            and digest(path.read_bytes()) != checksum
+            and not (recover and name in outputs and path.read_bytes() == outputs[name])
+        ):
             raise Invalid(f"Generated file edited outside the generator: {name}")
         if name.endswith(".html"):
-            if not re.fullmatch(r"blog(?:-[a-z0-9]+)*\.html", name) or path.exists() and MARKER not in path.read_bytes()[:150]:
-                raise Invalid(f"Manifest cannot claim a legacy or unrelated HTML page: {name}")
+            if (
+                not re.fullmatch(r"blog(?:-[a-z0-9]+)*\.html", name)
+                or path.exists()
+                and MARKER not in path.read_bytes()[:150]
+            ):
+                raise Invalid(
+                    f"Manifest cannot claim a legacy or unrelated HTML page: {name}"
+                )
         elif name == "phantomblog.css":
-            if path.exists() and not path.read_bytes().startswith(b"/* Generated by PhantomBlog v1 */"):
+            if path.exists() and not path.read_bytes().startswith(
+                b"/* Generated by PhantomBlog v1 */"
+            ):
                 raise Invalid("Stylesheet ownership marker missing")
-        elif path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".pdf"):
+        elif path.suffix.lower() not in (
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".webp",
+            ".gif",
+            ".svg",
+            ".pdf",
+        ):
             raise Invalid("Manifest contains an unsupported output")
-    for name, data in outputs.items():
+    for name in outputs:
         path = contained(public, name)
         if name in {MANIFEST, "blog.json"} or (path.exists() and name not in old):
             raise Invalid(f"Refusing to overwrite unowned file: {name}")
@@ -590,23 +1004,55 @@ def build(root, mode="build", recover=False):
             if path.exists():
                 outputs[name] = path.read_bytes()
     hashes = {name: digest(data) for name, data in sorted(outputs.items())}
-    outputs[MANIFEST] = encoded({"generator": "phantomblog", "version": 1, "files": hashes})
-    changed = sorted(name for name, data in outputs.items() if not contained(public, name).exists() or contained(public, name).read_bytes() != data)
-    result = {"mode": mode, "changed": changed, "deleted": sorted(deleted), "urls": [model["site"]["url"] + name for name in sorted(outputs) if name.endswith(".html")], "liveVerified": False, "revision": revision}
+    outputs[MANIFEST] = encoded(
+        {"generator": "phantomblog", "version": 1, "files": hashes}
+    )
+    changed = sorted(
+        name
+        for name, data in outputs.items()
+        if not contained(public, name).exists()
+        or contained(public, name).read_bytes() != data
+    )
+    result = {
+        "mode": mode,
+        "changed": changed,
+        "deleted": sorted(deleted),
+        "urls": [
+            model["site"]["url"] + name
+            for name in sorted(outputs)
+            if name.endswith(".html")
+        ],
+        "liveVerified": False,
+        "revision": revision,
+    }
     if mode == "build":
         with lock(root):
             if load(root)[1] != revision:
                 raise Conflict("Source changed while rendering; retry")
             refreshed = render(root, load(root)[0])
             if any(outputs.get(name) != data for name, data in refreshed.items()):
-                raise Conflict("Templates, assets or body sources changed while rendering")
+                raise Conflict(
+                    "Templates, assets or body sources changed while rendering"
+                )
             # Re-check ownership under the same lock used by source writers.
             for name in old:
                 path = contained(public, name)
-                if path.exists() and digest(path.read_bytes()) != old[name] and not (recover and name in outputs and path.read_bytes() == outputs[name]):
+                if (
+                    path.exists()
+                    and digest(path.read_bytes()) != old[name]
+                    and not (
+                        recover
+                        and name in outputs
+                        and path.read_bytes() == outputs[name]
+                    )
+                ):
                     raise Conflict("Output changed while rendering")
             for name in changed:
-                if name != MANIFEST and name not in old and contained(public, name).exists():
+                if (
+                    name != MANIFEST
+                    and name not in old
+                    and contained(public, name).exists()
+                ):
                     raise Conflict("An unowned output appeared while rendering")
             for name in changed:
                 if name != MANIFEST:
@@ -619,11 +1065,36 @@ def build(root, mode="build", recover=False):
 
 
 def initial_model():
-    return {"schemaVersion": 1, "site": {"name": "My publication", "url": "https://example.invalid/", "description": {"en": "Articles from our team.", "es": "Artículos de nuestro equipo."}}, "theme": {"layout": "classic", "accent": "#7253cc", "css": "", "sections": ["cover", "lead", "body"], "templateFile": "page.html"}, "categories": [{"slug": "guides", "en": "Guides", "es": "Guías", "design": {}}], "articles": [], "connections": {}}
+    return {
+        "schemaVersion": 1,
+        "site": {
+            "name": "My publication",
+            "url": "https://example.invalid/",
+            "description": {
+                "en": "Articles from our team.",
+                "es": "Artículos de nuestro equipo.",
+            },
+        },
+        "theme": {
+            "layout": "classic",
+            "accent": "#7253cc",
+            "css": "",
+            "sections": ["cover", "lead", "body"],
+            "templateFile": "page.html",
+        },
+        "categories": [{"slug": "guides", "en": "Guides", "es": "Guías", "design": {}}],
+        "articles": [],
+        "connections": {},
+    }
 
 
 def initialize(root):
-    files = {"blog.json": encoded(initial_model()), "templates/page.html": (RESOURCES / "page.html").read_bytes(), "bodies/README.md": b"Optional authored HTML fragments: en/<slug>.html and es/<slug>.html. Reference with bodyFile.\n", "assets/README.md": b"Place authored card images and raster social previews here; reference their relative names.\n"}
+    files = {
+        "blog.json": encoded(initial_model()),
+        "templates/page.html": (RESOURCES / "page.html").read_bytes(),
+        "bodies/README.md": b"Optional authored HTML fragments: en/<slug>.html and es/<slug>.html. Reference with bodyFile.\n",
+        "assets/README.md": b"Place authored card images and raster social previews here; reference their relative names.\n",
+    }
     for name in files:
         if contained(root, name).exists():
             raise Invalid(f"Initialization would overwrite: {name}")

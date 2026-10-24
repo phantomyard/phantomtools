@@ -47,8 +47,12 @@ files, before committing. A clean `check` confirms freshness locally only.
 
 An agent connected over MCP should read `phantomblog_snapshot`, preserve its
 revision and submit `phantomblog_propose` with the complete model. The dashboard's
-**Check agent proposal** shows the exact proposed source. A human applies it;
-stale proposals require rebasing. No incoming chat text auto-applies a proposal.
+**Check agent proposal** lists every changed field with before/after values, grouped by article,
+category or connection, including additions, removals and source ordering. The
+complete proposed source remains available under the advanced disclosure. Unsaved
+local edits, empty proposals and stale revisions disable application.
+A human reviews and applies the proposal; stale proposals require rebasing.
+No incoming chat text auto-applies a proposal.
 
 For an authorized publication, prepare a plan (PowerShell 7 and normal UTF-8 shell
 redirection are supported):

@@ -67,17 +67,37 @@ If the process dies while holding `.phantomblog-lock`, verify that no CLI/dashbo
 operation is running before removing **that single stale lock file**. Do not
 delete directories, sources, persona files or the publishing ledger to recover.
 
-The existing Aquaponics server sync can leave obsolete archive files online if it
+An existing server sync can leave obsolete archive files online if it
 only copies files that exist locally. PhantomBlog's local prune does not remove
 remote copies. Server/cron changes require a separately reviewed operator action;
 this implementation does not modify either.
 
 ## Trust boundary
 
-Dashboard login requires an operator-injected or vault-resolved token. Localhost
-alone grants no access. API requests enforce Host/Origin, authenticated sessions
-are HttpOnly and SameSite Strict, and responses are uncached. Previews are sandboxed
-with scripts disabled. Secrets are never stored in the catalogue or browser storage.
+Dashboard sessions can only be created by redeeming five-minute, single-use
+access codes. `access.py` verifies NIP-98 kind 27235 signatures with optional
+coincurve, binds them to the exact origin/method/payload, and prevents event-id
+replay. Only runtime `--allow-identity` flags authorize public keys; empty means
+fail closed. There is no static admin token, web login or Bearer authentication.
+Codes are generated randomly, stored as hashes, and consumed under a lock only
+after successful session creation. Restart invalidates grants and sessions.
+
+The persona CLI reads `<persona-store>/<explicit-id>/identity.json` at runtime,
+decodes its nsec, signs locally and prints only the returned fragment link. It
+never creates a persona, modifies the store, writes a key or uses a default
+persona. The store comes from `--persona-dir` or `PHANTOMBLOG_PERSONA_DIR`.
+The optional access extra is required for signing or configured verification;
+ordinary builds and disabled issuance require only the standard library.
+
+The dashboard binds exclusively to loopback. Optional `--public-origin` changes
+link delivery and adds exactly that Host/Origin pair for a trusted HTTPS proxy;
+it does not expose a public listener. Forwarded headers grant no authority.
+Localhost alone grants no access. API requests enforce Host/Origin and fetch
+metadata; authenticated sessions are HttpOnly, SameSite=Strict and Secure.
+Responses are uncached. Fragment codes are removed before API requests and are
+not logged. Browser history/clipboard exposure before script execution cannot be
+prevented. Previews are sandboxed with scripts disabled. Secrets are never stored
+in the catalogue or browser storage.
 
 MCP runs under its configured OS account and root; registration must follow that
 account's publication access. It can prepare external work but cannot execute it.

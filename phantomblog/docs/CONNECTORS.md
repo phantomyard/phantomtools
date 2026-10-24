@@ -27,6 +27,13 @@ and authorize the actual MCP server; do not invent a tool name from a platform n
 6. Test the mapping with a provider sandbox/test account and a separately approved
    operation before relying on production publication.
 
+Native Windows Phantombot v1.1.422 returns a human-readable list from `mcp describe`.
+PhantomBlog accepts its checked server/count/tool-name format for discovery only;
+JSON discovery responses remain supported. This listing does not provide argument
+schemas or prove account authorization. Obtain the actual argument schema from
+the registered MCP server; do not infer it from a description. Tool calls still
+require JSON responses, and unfamiliar discovery formats fail closed.
+
 The selection list includes Facebook, Instagram, LinkedIn, X, Mastodon, Bluesky,
 YouTube, Pinterest, TikTok, PhantomChat, deployment and custom. These are adapter
 labels; compatible tools and media requirements must be checked on the target
@@ -35,6 +42,15 @@ New platforms can use `custom` and later add a named profile without changing th
 build engine.
 
 ## Adapter contract
+
+The dashboard guides setup through three steps: choose the registered connection,
+map its tool, and check/save. **Check mapping** validates locally without saving or
+contacting a provider. Invalid mappings never replace draft settings. After adding
+the mapping, use **Save changes**, then **Discover saved tools**. Status shows
+"Tool found · account unverified", "Configured tool not found", or "Server
+unavailable"; it never promotes discovery into account or publishing verification.
+Results are session-local and expire when the source revision changes. Only a
+separately authorized provider acceptance test can confirm account access.
 
 This is a **synthetic mapping example**, not a claim that this MCP tool exists:
 
@@ -94,11 +110,26 @@ snapshot, validation, local build, proposal and publication preparation; it does
 not expose external execution. Register it only for personas allowed to read that
 publication's unpublished material.
 
+Test access from a real chat turn as well as from your terminal. On Windows the
+live harness may be unable to read a temporary directory created by a separate
+restricted process, even when a standalone MCP acceptance test succeeds. Use a
+private workspace inside the intended repository, such as the ignored `workspace/`
+directory, and verify `phantomblog_snapshot` through the live persona. Do not fix
+this by widening identity/vault permissions or publishing draft sources.
+
 External adapter calls require an executable Phantombot runtime. Windows `.cmd`
 and `.bat` wrappers are refused for those calls to avoid passing article text
 through a batch interpreter. The Python dashboard and generator work on Windows;
-configure external integrations on a supported executable runtime, such as the
-target Linux deployment host.
+use the installed native `phantombot.exe` for external integrations. If it is not
+on PATH, select its absolute path for the current PowerShell session:
+
+```powershell
+$env:PHANTOMBLOG_PHANTOMBOT_EXECUTABLE = 'C:\Users\YOUR_USER\AppData\Local\Programs\phantombot\phantombot.exe'
+```
+
+This selection is used for connector calls and vault token resolution. It does
+not change the system PATH or active persona. An invalid explicit path fails
+instead of silently selecting another runtime. Linux/macOS executables also work.
 
 ## PhantomChat
 
@@ -168,3 +199,13 @@ memory drawer or allowlist is rewritten by this tool.
 - [Phantombot PhantomChat sender boundary](https://github.com/phantomyard/phantombot/blob/main/src/channels/phantomchat/server.ts)
 - [PhantomTools contribution rules](https://github.com/phantomyard/phantomtools/blob/main/CONTRIBUTING.md)
 - [MCP stdio transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports)
+
+## Facebook Page connector
+
+PhantomBlog supports any MCP connector that implements the documented mapping.
+An optional local Facebook Page connector can be registered separately; this tool
+does not bundle provider credentials or create account access. Use the connector's
+documented `facebook_publish_article` mapping with `${content_hash}` (the approved
+article HTML SHA-256), `${idempotency_key}`, `${url}` and `${title}`. The connector
+returns boolean `ok` and a public `postId`. Its presence is not Facebook account
+access. PhantomBridge is not required.

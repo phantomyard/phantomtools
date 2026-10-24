@@ -1,12 +1,9 @@
 # PhantomBlog
 
 Static bilingual publishing with a private editorial dashboard and agent proposal
-workflow. Python 3.11+, standard library only at runtime. Public websites receive
+workflow. Python 3.11+, standard library for builds; the private dashboard requires
+the signed-access extra for Schnorr verification. Public websites receive
 HTML, CSS and image files; they need no Python service or new build step.
-
-Development home: `salvaalba-dev/phantomyard-tools/phantomblog`. A future upstream
-submission to `phantomyard/phantomtools` is a separate human decision. No runtime
-behaviour, installer or generated URL depends on the GitHub owner name.
 
 ## What works in v0.1
 
@@ -49,21 +46,9 @@ are resolved from the caller. Every content/asset/output path is resolved from
 that workspace. On Windows use `python bin\phantomblog` or `bin\phantomblog.cmd`.
 No package installation is required. `pip install .` is optional.
 
-Set an administrator token through your process manager or Phantombot vault.
-For a standalone development session, inject a random token into
-`PHANTOMBLOG_ADMIN_TOKEN` without saving it in the repo. Then:
-
-```sh
-python bin/phantomblog --root /absolute/path/to/my-blog dashboard
-# Or resolve it through the existing persona vault:
-python bin/phantomblog --root /absolute/path/to/my-blog dashboard \
-  --token-ref vault:PHANTOMBLOG_ADMIN_TOKEN --persona editorial
-```
-
-Open `http://127.0.0.1:8787/` and sign in with that token. The service binds only
-to loopback and checks authentication, Host and Origin. For remote access use an
-authenticated tunnel retaining that URL; exposing this HTTP listener is not a
-supported production setup. Tokens never go in URLs or browser storage.
+Dashboard entry uses only signed, short-lived links; see the access section below.
+There is no static administrator credential, token reference, web login form or
+Bearer authentication. The service binds only to loopback.
 
 ## Authoring and integration
 
@@ -87,14 +72,142 @@ Linux/macOS: `./install.sh` symlinks the reviewed checkout's wrapper into
 copies. Windows: add this tool's `bin` folder to PATH through system settings.
 
 ```sh
-python -m unittest discover -s tests -v
+python -m pip install ".[dev]"
+python -m pytest tests -v
 node --check phantomblog/resources/dashboard.js
 python tests/preview.py --port 8790
 ```
 
 The preview creates a disposable test workspace with clearly labelled synthetic
-articles, images and a synthetic login token declared in `tests/preview.py`.
+articles, images and an ephemeral signing identity. Its printed link lasts five minutes.
 It performs no deployments or messages. Stop it with Ctrl+C. Fixtures are never
 installed into a real publication.
 
 MIT. See [LICENSE](LICENSE).
+
+## Signed dashboard access
+
+Install `python -m pip install ".[access]"` for coincurve BIP-340 signing and
+verification. Builds remain standard-library only. Configure authorized public
+keys exclusively at runtime with repeatable `--allow-identity <64-hex-pubkey>`.
+No identities are bundled. The dashboard is fail-closed until at least one
+`--allow-identity` is configured: an empty allowlist cannot issue links or create
+sessions. The dashboard checks for the cryptographic extra before binding its
+listener, including with an empty allowlist. A missing extra stops startup with
+an actionable installation error.
+
+### Breaking migration from dashboard tokens
+
+The static dashboard administrator token flow has been removed. Remove
+`PHANTOMBLOG_ADMIN_TOKEN`, dashboard `--token-ref` and dashboard `--persona` from
+service definitions, launch scripts and client integrations. `/api/login` and
+Bearer-token dashboard authentication are no longer supported. `--persona`
+remains available only on the **access-link client**, to select the signing
+identity; it is not a dashboard login option.
+
+Install the optional package extra, which is now required to run the dashboard
+and issue/verify signed links:
+
+```sh
+python3 -m pip install 'phantomblog[access]'
+# From this checkout's phantomblog/ directory instead:
+python3 -m pip install '.[access]'
+```
+
+The extra installs `coincurve`. A client submitting an already-signed event does
+not need a local signer; the dashboard still requires the extra to verify it.
+Static builds do not require the extra. Use these command forms (parentheses,
+brackets and the vertical bar below denote alternatives/optional arguments):
+
+```text
+phantomblog dashboard --allow-identity <64-hex-pubkey> [--public-origin <https-origin>] [--port N]
+phantomblog access-link (--persona <id> --persona-dir <store> | --signed-event <file>) --port N [--public-origin <origin>]
+```
+
+Use the lowercase 64-hex public key, not an `npub` string or private key; repeat
+`--allow-identity` for each authorized identity. Configure the same port and
+public delivery origin on server and client. Request a new link through the
+authorized persona or signed-event client and open the returned URL. Existing
+token-based clients must migrate; there is no compatibility login fallback.
+Links expire after five minutes and can be redeemed once by a single browser
+session. Credentials are delivered only in the `#c=...` fragment, never a query
+parameter. Restarting the dashboard invalidates its in-memory grants/sessions.
+
+```sh
+python bin/phantomblog --root <publication-workspace> dashboard \
+  --allow-identity <authorized-public-key-hex>
+python bin/phantomblog access-link --persona <persona-id> \
+  --persona-dir <private-persona-store>
+```
+
+The store contains `<persona-id>/identity.json` with the runtime-owned `nsec`
+field (NIP-19 nsec or 32-byte hex). `--persona-dir` names the **parent store**,
+not an individual persona directory. Alternatively set `PHANTOMBLOG_PERSONA_DIR`
+to that store. There is no guessed/default persona or store. The tool reads only
+the selected identity, never creates or rewrites persona state, and never logs or
+prints the key. Any persona id using letters, digits, underscores or hyphens is
+supported; its derived public key must be explicitly authorized on the server.
+Keep the store outside the public repository and restrict its filesystem access.
+Python cannot guarantee immediate erasure of secret bytes from process memory.
+
+The command signs a fresh NIP-98 kind 27235 event at runtime, sends it to the
+loopback issuer, and prints one link. `--port` must match the dashboard port.
+A random nonce allows independent requests within the same second. Alternatively,
+`access-link --signed-event <private-event-file>` submits an already signed event;
+`--signed-event` and `--persona` are mutually exclusive. No secret goes in argv.
+The command does not send a message or broadcast anything on a relay.
+
+NIP-98 requires empty content, integer `created_at` within 60 seconds, a canonical
+NIP-01 event id, and a real BIP-340 signature. Required tags are `u` (exact issuance
+origin plus `/api/access-link`), `method` (`POST`), and `payload` (SHA-256 of the
+exact body bytes `{}`). Send `Authorization: Nostr <base64-signed-event>` and
+`Content-Type: application/json`. Event-id replay is refused. Display names,
+chat text and relay identities cannot authorize access. The persona CLI signs
+the local issuance URL; remote signed requests must bind the configured public URL.
+
+### Public delivery origin
+
+By default the link is `http://127.0.0.1:<port>/#c=<code>`. To deliver an HTTPS URL,
+configure the same `--public-origin <https-origin>` on **both** dashboard and
+access-link commands. This is an origin only: no path, userinfo, query or fragment.
+HTTP delivery is restricted to loopback. No instance host is bundled.
+
+The server still binds to `127.0.0.1`; this flag does not install TLS, a proxy or
+DNS. Supply a trusted HTTPS reverse proxy/tunnel that forwards the configured
+Host unchanged, retains the browser Origin, and reaches the loopback listener.
+The server accepts only its loopback origin and the explicitly configured public
+origin, with matching Host and same-origin fetch metadata. Foreign Origins remain
+403; forwarded-origin headers are never trusted. Configure the proxy to avoid
+logging authorization headers, redemption bodies and issued link responses.
+No external deployment is performed by these commands.
+
+### Browser entry and leaked links
+
+Links last **five minutes** and work once. The only way to create a session is
+`/#c=<43-character-code>` followed by the browser's JSON POST to `/api/redeem`.
+Issuance stores only in-memory hashes and redemption is atomic, consuming the
+code only after session creation succeeds. There is no `/api/login` route or
+Bearer fallback. Sessions use HttpOnly, SameSite=Strict, Secure cookies; existing
+sessions remain usable until logout or server restart. Secure loopback cookie
+support depends on the browser; do not drop Secure to work around it.
+
+The code is delivered only in the URL fragment, never the path or query. The
+browser clears it with `history.replaceState` before any API request and keeps no
+browser-storage copy. Fragments are excluded from HTTP page requests and Referer,
+but pasted URLs may be captured by browser history sync, extensions or clipboard
+managers before JavaScript runs. Do not promise zero history exposure.
+
+Anyone holding an unused link can redeem it. If it leaks, restart the dashboard
+to invalidate all outstanding links and sessions, then request a fresh link.
+Remove a compromised identity from runtime flags before restarting. Never commit
+keys, signed events or access links. Only explicitly allowlisted identities may
+request links; human review still controls publication and sharing.
+
+Development checks (install `.[dev]` first):
+
+```sh
+python -m ruff check phantomblog tests
+python -m ruff format --check phantomblog tests
+python -m bandit -r phantomblog -q
+python -m pytest tests -v
+```
