@@ -194,6 +194,14 @@ location and continues checking the others.
 
 ## Dependency
 
+**Category catalog contract:** every readable or writable category must be
+declared in `policies.security_categories`, including categories granted directly
+by an access level or a role/actor exception. Removing a catalog entry denies
+access even when a stale grant remains. `resolved_categories` reports configured
+grants; it does not bypass this authorization check. Before upgrading, declare any
+legitimate categories missing from an existing catalog; do not add new grants as
+a workaround. This does not reclassify documents or change their history.
+
 PhantomDocs consumes the PhantomOrg `org.yaml` schema (org/version 1:
 `policies.access_levels`, `policies.security_categories`, `roles`, `actors`,
 `organization.id`). It requires a PhantomOrg org model with that shape;

@@ -1,5 +1,7 @@
 import textwrap
 
+import pytest
+
 from phantomdocs.access import (
     can_administer_namespace,
     can_read,
@@ -55,6 +57,41 @@ def _org(tmp_path):
     p = tmp_path / "org.yaml"
     p.write_text(ORG_YAML, encoding="utf-8")
     return load_org(str(p))
+
+
+@pytest.mark.parametrize("grant", ["level", "role", "actor"])
+def test_undeclared_category_denied_despite_direct_grant(tmp_path, grant):
+    org = _org(tmp_path)
+    category = "category-77"
+    if grant == "level":
+        org["policies"]["access_levels"]["level-2"]["categories"].append(77)
+    elif grant == "role":
+        org["roles"][0]["security_exceptions"].append(category)
+    else:
+        org["actors"][0]["actor_exceptions"].append(category)
+    assert category in resolved_categories(org, "roberto")
+    assert can_read(org, "roberto", category) is False
+    assert can_write(org, "roberto", category, ["cfo"]) is False
+    org["policies"]["security_categories"][category] = {"label": "Test category"}
+    assert can_read(org, "roberto", category) is True
+    assert can_write(org, "roberto", category, ["cfo"]) is True
+
+
+def test_removing_catalog_entry_denies_stale_grant(tmp_path):
+    org = _org(tmp_path)
+    assert can_read(org, "roberto", 2) is True
+    del org["policies"]["security_categories"]["category-2"]
+    assert "category-2" in resolved_categories(org, "roberto")
+    assert can_read(org, "roberto", 2) is False
+    assert can_write(org, "roberto", 2, ["roberto"]) is False
+
+
+@pytest.mark.parametrize("catalog", [None, {}])
+def test_empty_catalog_denies_direct_grants(tmp_path, catalog):
+    org = _org(tmp_path)
+    org["policies"]["security_categories"] = catalog
+    assert can_read(org, "roberto", 1) is False
+    assert can_write(org, "roberto", 1, ["cfo"]) is False
 
 
 def test_resolved_categories(tmp_path):

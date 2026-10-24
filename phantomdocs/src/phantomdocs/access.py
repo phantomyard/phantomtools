@@ -306,6 +306,8 @@ def can_read(org: dict[str, Any], actor_id: str, category: int | str) -> bool:
     undeclared category is denied (fail-closed).
     """
     cat = normalize_category(category)
+    if cat not in _security_categories(org):
+        return False
     resolved = set(resolved_categories(org, actor_id))
     if cat in resolved:
         return True

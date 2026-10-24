@@ -14,6 +14,8 @@ policies:
     level-3: { label: Executive, categories: [1, 2, 3] }
   security_categories:
     category-1: { label: Public }
+    category-2: { label: Confidential }
+    category-3: { label: Sensitive }
 roles:
   - id: ceo
     access_level: level-3

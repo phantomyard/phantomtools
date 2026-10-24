@@ -4,6 +4,11 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+- **Category catalog enforcement:** direct access-level and role/actor grants
+  cannot authorize reads or writes to undeclared categories. Removing a catalog
+  entry now denies stale direct grants. Completes test catalogs and adds access
+  and document-read regressions; no document classification or history changes.
+
 - **Workflow review fixes**: CI now covers main pushes and pull requests;
   reference deduplication accepts logical folder slugs as well as paths; runtime
   inventory excludes prefixed credential/service-account/token filenames; generated

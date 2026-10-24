@@ -25,6 +25,7 @@ policies:
     level-2: { label: Operative, categories: [1, 2] }
   security_categories:
     category-1: { label: Public }
+    category-2: { label: Confidential }
 roles:
   - id: cfo
     access_level: level-2
