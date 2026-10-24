@@ -2,7 +2,7 @@ name: PhantomOrg service policy
 
 on:
   push:
-    branches: [main, feat/service-isolation-policy]
+    branches: [main]
     paths: [phantomorg/**, .github/workflows/phantomorg-service-policy.yml]
   pull_request:
     paths: [phantomorg/**, .github/workflows/phantomorg-service-policy.yml]

@@ -1,7 +1,7 @@
 name: Persona service control
 on:
   push:
-    branches: [main, feat/service-isolation-policy]
+    branches: [main]
     paths: [persona-service-control/**, .github/workflows/persona-service-control.yml]
   pull_request:
     paths: [persona-service-control/**, .github/workflows/persona-service-control.yml]
