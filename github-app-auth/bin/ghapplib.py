@@ -9,6 +9,7 @@ import shutil
 import difflib
 import urllib.request
 import urllib.error
+import time
 from datetime import datetime, timezone
 
 def get_real_git(script_path=None):
@@ -196,6 +197,49 @@ def parse_owner_repo(repo_url):
     if not m:
         return None
     return m.group(1), m.group(2)
+
+class RemoteTipUnverifiable(Exception):
+    """The concurrency guard could not establish the remote branch tip."""
+
+
+def read_remote_tip(client, branch, attempts=3, backoff=0.5, sleep=time.sleep):
+    """Read a branch tip for the pre-PATCH concurrency guard.
+
+    Returns "" when the branch no longer exists (404): there is nothing to
+    clobber. A 5xx is retried with exponential backoff; after the final attempt,
+    or on any 403/other status, raise RemoteTipUnverifiable. The caller must
+    never PATCH a ref whose previous tip could not be verified.
+    """
+    if attempts < 1:
+        raise ValueError("attempts must be at least 1")
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            current = client.api_request(
+                "GET",
+                f"git/refs/heads/{branch}",
+                quiet_codes=(404, 500, 502, 503, 504),
+            )
+            return current.get("object", {}).get("sha", "")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return ""
+            last_error = e
+            if e.code in (500, 502, 503, 504) and attempt + 1 < attempts:
+                sleep(backoff * (2 ** attempt))
+                continue
+            raise RemoteTipUnverifiable(
+                f"could not verify the tip of {branch}: HTTP {e.code}"
+            ) from e
+        except Exception as e:
+            raise RemoteTipUnverifiable(
+                f"could not verify the tip of {branch}: {e}"
+            ) from e
+    raise RemoteTipUnverifiable(
+        f"could not verify the tip of {branch}: "
+        f"HTTP {getattr(last_error, 'code', '?')}"
+    ) from last_error
+
 
 class GitHubAppClient:
     def __init__(self, owner, repo, token, git_bin):
