@@ -27,3 +27,6 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 phantomdocs = ["workflow_assets/*.json", "workflow_assets/*.md"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["phantomdocs"]
