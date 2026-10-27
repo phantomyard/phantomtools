@@ -4,12 +4,31 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+- **Classification planner validation:** validate the manifest schema and graph
+  before dereferencing nodes, including direct library calls. Missing categories
+  now produce a domain validation error instead of an incidental `KeyError`.
+  Tests pin clean CLI errors and conservative whole-manifest snapshot guards.
+
+- **Read-only classification planning:** report whole-document history and
+  proposed reader gains/losses from the existing PhantomOrg ACL. Require both
+  source and target write authority, unchanged owners and explicit current-state
+  guards. Refuse historical policy conflicts and duplicate source identities;
+  make missing native migration support explicit. No permission or store changes.
+
+- **Category catalog enforcement:** direct access-level and role/actor grants
+  cannot authorize reads or writes to undeclared categories. Removing a catalog
+  entry now denies stale direct grants. Completes test catalogs and adds access
+  and document-read regressions; no document classification or history changes.
+
+- **Strict schema version type:** reject YAML booleans and floats that compare
+  equal to `1`; only the integer `version: 1` is supported. Adds direct validation
+  and file-loading regressions without changing document categories or history.
+
 - **Classification event signature contract:** add a closed canonical envelope,
   domain-separated Schnorr signature primitives, and signed-record/history
   digests using existing keys and dependencies. Tests bind every field, reject
   malformed payloads and prevent cross-protocol signature reuse. This does not
   authorize or persist transitions, change the store protocol, or alter access.
-
 - **Workflow review fixes**: CI now covers main pushes and pull requests;
   reference deduplication accepts logical folder slugs as well as paths; runtime
   inventory excludes prefixed credential/service-account/token filenames; generated

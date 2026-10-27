@@ -26,6 +26,7 @@ policies:
     level-2: { label: Operative, categories: [1, 2] }
   security_categories:
     category-1: { label: Public }
+    category-2: { label: Confidential }
 roles:
   - id: cfo
     access_level: level-2
@@ -249,6 +250,7 @@ def test_concurrent_adds_keep_audit_chain_intact(tmp_path):
         "    level-2: { label: Operative, categories: [1, 2] }\n"
         "  security_categories:\n"
         "    category-1: { label: Public }\n"
+        "    category-2: { label: Confidential }\n"
         "roles:\n"
         "  - id: cfo\n"
         "    access_level: level-2\n"
