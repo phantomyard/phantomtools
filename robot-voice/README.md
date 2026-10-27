@@ -58,10 +58,18 @@ clients. Phantombot remains responsible for channel-specific voice-note conversi
 
 Requests are limited to 25 MiB, two concurrent processing operations, 30-second
 socket/process timeouts and a 45-second upstream timeout. Busy requests get 503.
+The same 25 MiB cap applies to the upstream **response**: a larger transcription
+reply is refused with 502 rather than buffered and relayed.
 Upstream redirects are refused to prevent credential forwarding. Errors contain
 no provider bodies or secrets. No request-content logging. Loopback plus bearer
 auth protects the API; use a reverse proxy with appropriate limits if changing
 this design to support remote clients. Only Linux is verified here.
+
+A rejected voice is reported the way the OpenAI speech endpoint reports it, so
+an OpenAI-compatible client can discover the supported names from one invalid
+probe: `{"error":{"message":"invalid voice. Supported values are: 'female', 'male'"}}`.
+phantombot's voice picker reads that list, so `female`/`male` appear in the
+dropdown instead of the unusable OpenAI defaults.
 
 ## Tests
 

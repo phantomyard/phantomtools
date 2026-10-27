@@ -22,6 +22,15 @@ FORMATS = {"mp3": ("mp3", "audio/mpeg"), "opus": ("ogg", "audio/ogg"),
            "wav": ("wav", "audio/wav")}
 
 
+class InvalidRequest(ValueError):
+    """A validation failure whose message is safe to return to the caller.
+
+    The message is authored here (never derived from request content), so it can
+    be surfaced verbatim: this is how an OpenAI-compatible client discovers the
+    supported voice names from a deliberately invalid probe.
+    """
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None  # Never forward the upstream credential to another URL.
@@ -41,19 +50,21 @@ def language(text):
 def synthesize(data):
     text = data.get("input")
     if not isinstance(text, str) or not text.strip() or len(text) > 10000:
-        raise ValueError("input must contain 1–10000 characters")
+        raise InvalidRequest("input must contain 1–10000 characters")
     voice = data.get("voice", "female")
     if voice not in ("female", "male"):
-        raise ValueError("voice must be female or male")
+        # Clients read the supported list out of this rejection, so it must be
+        # worded exactly like the OpenAI validation error it replaces.
+        raise InvalidRequest("invalid voice. Supported values are: 'female', 'male'")
     fmt = data.get("response_format", "mp3")
     if fmt not in FORMATS:
-        raise ValueError("response_format must be mp3, opus or wav")
+        raise InvalidRequest("invalid response_format. Supported values are: 'mp3', 'opus', 'wav'")
     speed = data.get("speed", 1)
     if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not math.isfinite(speed) or not 0.25 <= speed <= 4:
-        raise ValueError("speed must be between 0.25 and 4")
+        raise InvalidRequest("speed must be between 0.25 and 4")
     lang = data.get("language") or language(text)
     if not isinstance(lang, str) or not re.fullmatch(r"[a-z]{2,3}(?:-[a-z]{2,8})?", lang):
-        raise ValueError("invalid language")
+        raise InvalidRequest("invalid language")
     variant, rate, pitch = ("f3", 145, 55) if voice == "female" else ("m3", 130, 30)
     def speak(selected_language):
         # Keep the executable and option positions literal; text travels on stdin.
@@ -100,6 +111,7 @@ class Server(ThreadingHTTPServer):
 class Handler(BaseHTTPRequestHandler):
     def setup(self):
         super().setup()
+        self.response_started = False
         self.connection.settimeout(30)
 
     def log_message(self, *_args):
@@ -113,6 +125,12 @@ class Handler(BaseHTTPRequestHandler):
     def reply(self, status, body, mime="application/json"):
         # Processing is finished before the response becomes visible to a caller.
         self.release_slot()
+        if self.response_started:
+            # A write already began (e.g. the client disconnected mid-body): a
+            # second status line would corrupt the response, so just hang up.
+            self.close_connection = True
+            return
+        self.response_started = True
         self.send_response(status)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(body)))
@@ -126,7 +144,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         expected = "Bearer " + self.server.token
-        if not hmac.compare_digest(self.headers.get("Authorization", "").encode(), expected.encode()):
+        provided = self.headers.get_all("Authorization", [])
+        if len(provided) != 1 or not hmac.compare_digest(provided[0].encode(), expected.encode()):
             return self.error(401, "invalid bearer token")
         if self.path not in ("/v1/audio/speech", "/v1/audio/transcriptions"):
             return self.error(404, "unknown endpoint")
@@ -150,7 +169,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.error(415, "application/json required")
                 data = json.loads(body)
                 if not isinstance(data, dict):
-                    raise ValueError("JSON object required")
+                    raise InvalidRequest("JSON object required")
                 audio, mime = synthesize(data)
                 self.reply(200, audio, mime)
             else:
@@ -172,6 +191,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.error(502, "transcription upstream rejected request")
                 except (URLError, TimeoutError):
                     self.error(502, "transcription upstream unavailable")
+        except InvalidRequest as exc:
+            self.error(400, str(exc))
         except (ValueError, TypeError):
             self.error(400, "invalid speech request")
         except (subprocess.SubprocessError, OSError, RuntimeError):

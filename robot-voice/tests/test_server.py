@@ -1,6 +1,8 @@
 import http.client
+import io
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -17,6 +19,7 @@ class Upstream(BaseHTTPRequestHandler):
     received = None
     status = 200
     paths = []
+    oversized = False
 
     def log_message(self, *_):
         pass
@@ -33,7 +36,10 @@ class Upstream(BaseHTTPRequestHandler):
         if type(self).status == 302:
             self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}/leak")
         self.end_headers()
-        self.wfile.write(b'{"text":"transcribed"}')
+        if type(self).oversized:
+            self.wfile.write(b"x" * (server.MAX_BODY + 2))
+        else:
+            self.wfile.write(b'{"text":"transcribed"}')
 
 
 class ApiTests(unittest.TestCase):
@@ -41,6 +47,7 @@ class ApiTests(unittest.TestCase):
         Upstream.status = 200
         Upstream.received = None
         Upstream.paths = []
+        Upstream.oversized = False
         self.upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
         self.gateway = server.Server(("127.0.0.1", 0), "local-token",
                                      f"http://127.0.0.1:{self.upstream.server_port}/v1", "upstream-token")
@@ -95,6 +102,39 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.request(content_type="text/plain")[0], 415)
         self.assertEqual(self.request("transcriptions")[0], 415)
 
+    def test_voice_rejection_enumerates_supported_voices(self):
+        # phantombot's fetchOpenAIVoiceOptions() probes with an invalid voice and
+        # parses `Supported values are: 'a', 'b'` out of the 400 body, so the
+        # enumeration is the contract that makes the voice picker work.
+        for voice in ("__phantombot_probe__", "nova"):
+            with self.subTest(voice=voice):
+                code, _, body = self.request(body=json.dumps({"input": ".", "voice": voice}).encode())
+                self.assertEqual(code, 400)
+                message = json.loads(body)["error"]["message"]
+                self.assertRegex(message, r"Supported values are: 'female', 'male'$")
+
+    def test_duplicate_authorization_header_rejected(self):
+        # Two Authorization headers must not authenticate: reading only the
+        # first (or joining them) would let a proxy smuggle a second value.
+        with socket.create_connection(("127.0.0.1", self.gateway.server_port), timeout=5) as sock:
+            sock.sendall(
+                b"POST /v1/audio/speech HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                b"Content-Type: application/json\r\nContent-Length: 2\r\n"
+                b"Authorization: Bearer local-token\r\n"
+                b"Authorization: Bearer local-token\r\n\r\n{}"
+            )
+            status_line = sock.recv(4096)
+        self.assertIn(b" 401 ", status_line)
+        self.assertIsNone(Upstream.received)
+
+    def test_oversized_upstream_response_is_rejected(self):
+        Upstream.oversized = True
+        with patch("server.MAX_BODY", 4096):
+            code, _, body = self.request("transcriptions", b"--xyz--", content_type="multipart/form-data; boundary=xyz")
+        self.assertEqual(code, 502)
+        self.assertIn(b"upstream response too large", body)
+        self.assertNotIn(b"xxxx", body)
+
     def test_busy(self):
         self.gateway.slots.acquire()
         self.gateway.slots.acquire()
@@ -134,6 +174,25 @@ class ApiTests(unittest.TestCase):
                         self.assertTrue(audio.startswith(magic))
                         probe = subprocess.run(["ffmpeg", "-v", "error", "-i", "pipe:0", "-f", "null", "-"], input=audio, capture_output=True)
                         self.assertEqual(probe.returncode, 0, probe.stderr)
+
+
+class ReplyGuardTests(unittest.TestCase):
+    def test_second_response_write_is_ignored(self):
+        # A write that fails mid-body (client hung up) must not emit a second
+        # status line into an already-open response.
+        handler = server.Handler.__new__(server.Handler)
+        handler.response_started = False
+        handler._headers_buffer = []
+        handler.send_response = lambda status: handler._headers_buffer.append(status)
+        handler.send_header = lambda *_args: None
+        handler.end_headers = lambda: None
+        handler.wfile = io.BytesIO()
+        handler.close_connection = False
+        handler.reply(200, b"first")
+        handler.reply(502, b"second")
+        self.assertEqual(handler._headers_buffer, [200])
+        self.assertEqual(handler.wfile.getvalue(), b"first")
+        self.assertTrue(handler.close_connection)
 
 
 class SynthesisTests(unittest.TestCase):
