@@ -234,6 +234,7 @@ _ROOT_KEYS = {
     "escalation_matrix",
     "communication",
     "documents",
+    "service_policy",
 }
 _ORG_KEYS = {"id", "name", "sector", "languages", "default_language"}
 _DEPARTMENT_KEYS = {"id", "name", "access_policy", "parent"}
@@ -319,6 +320,14 @@ def validate_shape(raw: dict) -> None:
     # that call .get() on it. Absent is fine (the block is optional).
     if "documents" in raw:
         _require_mapping(raw["documents"], "documents")
+
+    if "service_policy" in raw:
+        from .service_policy import ServicePolicy, ServicePolicyError
+
+        try:
+            ServicePolicy.from_dict(raw["service_policy"])
+        except ServicePolicyError as exc:
+            raise ShapeError(str(exc)) from exc
 
     org = _require_mapping(raw["organization"], "organization")
     _reject_unknown_keys(org, _ORG_KEYS, "organization")

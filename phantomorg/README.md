@@ -1,5 +1,9 @@
 # PhantomOrg
 
+Optional [portable service policy](docs/service-policy.md) declares private
+services, shared consumers and approval requirements. `po service-policy`
+exports validated intent; it does not enforce network isolation or grant approvals.
+
 A compiler that models **any organization** — departments, roles, actors,
 access policies, escalation matrix — and compiles it into the persona
 files **Phantombot** loads: `IDENTITY.md`, `SOUL.md`, `tools.md`,

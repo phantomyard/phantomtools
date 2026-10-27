@@ -434,15 +434,20 @@ class TestCompilerWriteCrash(unittest.TestCase):
     the previous complete content, never a truncated file."""
 
     def test_atomic_write_crash_keeps_previous_content(self):
+        import importlib
+
         from phantomorg.compiler.build import _atomic_write
+
+        build_module = importlib.import_module("phantomorg.compiler.build")
 
         with tempfile.TemporaryDirectory() as t:
             p = Path(t) / "out" / "SOUL.md"
             p.parent.mkdir()
             p.write_text("PREVIOUS COMPLETE CONTENT", encoding="utf-8")
             with (
-                unittest.mock.patch(
-                    "phantomorg.compiler.build.os.replace",
+                unittest.mock.patch.object(
+                    build_module.os,
+                    "replace",
                     side_effect=OSError("crash"),
                 ),
                 self.assertRaises(OSError),

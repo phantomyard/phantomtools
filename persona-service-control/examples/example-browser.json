@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "id": "example-browser",
+  "account": "pb-example",
+  "uid": 12345,
+  "unit": "chrome-example.service"
+}

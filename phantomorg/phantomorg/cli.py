@@ -8,6 +8,7 @@ are omitted, falls back to the interactive wizard (click.prompt).
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,10 @@ except ImportError:  # Python < 3.11
 
 from .compiler import CompileError
 from .compiler import build as compiler_build
+from .compiler.build import write_plain_if_changed
 from .compiler.phantomchat import verify_phantomchat
+from .compiler.service_plan import ServicePlanError, compile_service_plan
+from .compiler.service_policy import compile_service_policy
 from .compiler.telegram import TelegramError, verify_telegram
 from .deploy.norms import (
     NORMS_STATE_FILENAME,
@@ -51,6 +55,7 @@ from .deploy.target import (
 from .deploy.target import deploy as deploy_target
 from .importer import audit_persona_dir, render_org_yaml_fragment, resolve_against_org
 from .spec.loader import OrgSpecError
+from .spec.service_policy import ServicePolicyError
 from .updater import run_update as run_updater
 from .validator import validate_compiled_output, validate_org
 from .wizard.mutations import DuplicateIdError, RemovalBlockedError
@@ -605,6 +610,104 @@ def build_cmd(org_path, out_dir, only_actor, scope_rule):
     budget_result = validate_compiled_output(spec, Path(out_dir))
     for w in budget_result.warnings:
         click.secho(f"⚠ {w}", fg="yellow")
+
+
+@main.command("service-policy")
+@click.option(
+    "--org",
+    "org_path",
+    required=True,
+    type=_ExpandUserPath(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--out",
+    "out_path",
+    required=True,
+    type=_ExpandUserPath(dir_okay=False, path_type=Path),
+)
+def service_policy_cmd(org_path, out_path):
+    """Export validated service intent; does not deploy or grant runtime access."""
+    try:
+        spec, result = validate_org(org_path)
+        if not result.ok:
+            raise ServicePolicyError("; ".join(result.errors))
+        if org_path.resolve() == out_path.resolve():
+            raise ServicePolicyError("output must not replace the organization model")
+        content = compile_service_policy(spec)
+        write_plain_if_changed(out_path, content)
+    except (OrgSpecError, ServicePolicyError, CompileError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Service policy exported to {out_path}; enforcement is not applied.")
+
+
+def _read_plan_json(path: Path):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ServicePlanError(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique)
+
+
+@main.command("service-plan")
+@click.option(
+    "--org",
+    "org_path",
+    required=True,
+    type=_ExpandUserPath(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--bindings",
+    "bindings_path",
+    required=True,
+    type=_ExpandUserPath(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--inventory",
+    "inventory_path",
+    required=True,
+    type=_ExpandUserPath(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--out",
+    "out_path",
+    required=True,
+    type=_ExpandUserPath(dir_okay=False, path_type=Path),
+)
+def service_plan_cmd(org_path, bindings_path, inventory_path, out_path):
+    """Review installation bindings offline. Never applies host changes."""
+    try:
+        if out_path.resolve() in {
+            p.resolve() for p in (org_path, bindings_path, inventory_path)
+        }:
+            raise ServicePlanError("output must not replace an input")
+        spec, result = validate_org(org_path)
+        if not result.ok:
+            raise ServicePlanError("; ".join(result.errors))
+        plan = compile_service_plan(
+            spec, _read_plan_json(bindings_path), _read_plan_json(inventory_path)
+        )
+        write_plain_if_changed(
+            out_path, json.dumps(plan, indent=2, sort_keys=True) + "\n"
+        )
+    except (
+        OrgSpecError,
+        ServicePolicyError,
+        ServicePlanError,
+        CompileError,
+        OSError,
+        ValueError,
+        RecursionError,
+    ) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(
+        f"Service plan: {plan['status']}; deployment is not authorized or implemented."
+    )
+    if plan["status"] == "blocked":
+        raise SystemExit(2)
 
 
 @main.command("telegram-check")
