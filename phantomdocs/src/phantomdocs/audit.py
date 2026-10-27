@@ -270,9 +270,22 @@ def reconcile(root: str, expected_count: int, expected_head: str | None) -> int:
     head) is evidence of tampering or manual edits, not a crash; it raises
     ``ValueError`` and the log is left untouched (fail-closed).
 
+    The checkpoint itself is validated before the log is read or truncated.
+
     Returns the number of orphaned entries discarded (0 when already
     consistent).
     """
+    if type(expected_count) is not int or expected_count < 0:
+        raise ValueError("audit checkpoint count must be a non-negative integer")
+    if expected_count == 0:
+        if expected_head is not None:
+            raise ValueError("an empty audit checkpoint must have a null head")
+    elif (
+        not isinstance(expected_head, str)
+        or len(expected_head) != 64
+        or any(char not in "0123456789abcdef" for char in expected_head)
+    ):
+        raise ValueError("a non-empty audit checkpoint requires a valid head hash")
     problems = verify_chain(root)
     if problems:
         raise ValueError(
