@@ -633,6 +633,36 @@ def test_dry_run_and_failed_add_leave_no_markers(org, sandbox):
     assert not list(sandbox.state.iterdir())
 
 
+def test_success_without_indexed_ref_fails_closed(org, sandbox, capsys):
+    actions = au.plan(org, files(), {}, "pepa")
+
+    def no_index(*args, **kwargs):
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(ValueError, match="without the expected indexed"):
+        au.execute(actions=actions, **{**sandbox.options, "run": no_index})
+    assert not list(sandbox.state.iterdir())
+    assert "OK indexed ref:" not in capsys.readouterr().out
+
+
+def test_success_with_wrong_classification_fails_closed(org, sandbox, capsys):
+    actions = au.plan(org, files(), {}, "pepa")
+    assert actions[0]["category"] == "category-2"
+
+    def wrong_category(command, **kwargs):
+        command = list(command)
+        command[command.index("--category") + 1] = "1"
+        result = sandbox.runner.invoke(pd, command[1:])
+        return SimpleNamespace(
+            returncode=result.exit_code, stdout=result.output, stderr=""
+        )
+
+    with pytest.raises(ValueError, match="without the expected indexed"):
+        au.execute(actions=actions, **{**sandbox.options, "run": wrong_category})
+    assert not list(sandbox.state.iterdir())
+    assert "OK indexed ref:" not in capsys.readouterr().out
+
+
 def test_orphan_marker_and_existing_wrong_category_fail_closed(org, sandbox):
     actions = au.plan(org, files(), {}, "pepa")
     (sandbox.state / actions[-1]["id"]).touch()
