@@ -36,6 +36,15 @@ jobs:
       - name: Syntax check
         run: node --check server.js
 
+      - name: Robot voice dependencies and audio API tests
+        working-directory: robot-voice
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y espeak-ng ffmpeg
+          python3 -m venv .venv
+          .venv/bin/pip install -r requirements.txt
+          ROBOT_AUDIO_SMOKE=1 .venv/bin/python -m unittest discover -s tests -v
+
       - name: Syntax check (email-triage Python)
         working-directory: email-triage
         run: python3 -m py_compile inbox-poll.py inbox-mail.py
