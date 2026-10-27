@@ -191,6 +191,15 @@ If the guard cannot reach the API to find out what the default branch *is*,
 it refuses rather than guesses — an unverifiable force push fails closed. The
 override above is the way through.
 
+### Concurrent pushes
+
+Before moving an existing branch, `git-push-as-app` re-reads its tip. A branch
+that disappeared (404) is treated as nothing to clobber; 5xx responses are
+retried twice with backoff and then the push aborts; 403 and any other status
+abort immediately. A force push still bypasses this guard by design. The
+trade-off is deliberate: a flaky API can refuse a push temporarily, but it can
+never silently overwrite a concurrent commit.
+
 ### Cloning a repo
 
 `install.sh` registers `git-credential-github-app` as the github.com credential

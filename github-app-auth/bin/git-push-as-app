@@ -26,7 +26,8 @@ import urllib.error
 from ghapplib import (get_real_git, run_git, ensure_token, GitHubAppClient,
                       parse_owner_repo, select_unmerged_commits,
                       commit_message, is_force_arg, push_refspec_dst,
-                      push_targets_every_branch, force_push_to_default_blocked)
+                      push_targets_every_branch, force_push_to_default_blocked,
+                      RemoteTipUnverifiable, read_remote_tip)
 
 GIT = get_real_git(__file__)
 if not GIT:
@@ -429,15 +430,12 @@ def main():
         # rather than clobber their work. A real force push (-f) skips this.
         if not (force or needs_force):
             try:
-                # 404 = the branch was deleted under us; nothing to clobber, so
-                # treat it as "unchanged" quietly. Any other status is NOT
-                # expected: it still prints, even though we degrade to the
-                # pre-upload SHA rather than abort the push.
-                current = client.api_request("GET", f"git/refs/heads/{branch}",
-                                             quiet_codes=(404,))
-                latest_remote_sha = current.get("object", {}).get("sha", "")
-            except urllib.error.HTTPError:
-                latest_remote_sha = remote_sha
+                latest_remote_sha = read_remote_tip(client, branch)
+            except RemoteTipUnverifiable as e:
+                print(f"Error: refusing to update {branch} on {remote}: {e}. "
+                      f"The remote tip could not be verified; fetch and retry, "
+                      f"or push with --force to override.", file=sys.stderr)
+                sys.exit(1)
             if latest_remote_sha and latest_remote_sha != remote_sha:
                 print(f"Error: {branch} on {remote} moved from {remote_sha[:7]} to "
                       f"{latest_remote_sha[:7]} while pushing. Fetch and retry, or "

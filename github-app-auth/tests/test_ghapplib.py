@@ -832,12 +832,12 @@ class TestQuietProbeCodes(unittest.TestCase):
         self.assertEqual(kwargs.get("quiet_codes"), (404, 422))
 
     def test_push_wrapper_ref_probes_are_quiet(self):
-        """Both `git/refs/heads/{branch}` probes in git-push-as-app pass 404.
+        """The remaining direct ref probe in git-push-as-app passes 404.
 
-        Source-level assertion, not behavioural: those two calls live inside
-        main() behind argv parsing and a live token, so a unit test cannot
-        reach them. Crude, but it fails loudly if someone drops the kwarg and
-        brings back `API error: 404` on every push to a new branch.
+        The pre-PATCH concurrency probe moved into read_remote_tip(), which
+        has its own dedicated tests. This source-level assertion keeps the
+        initial new-branch probe quiet, so a healthy push does not print an
+        `API error: 404` that trains the reader to ignore real failures.
         """
         path = os.path.join(os.path.dirname(__file__), '..', 'bin',
                             'git-push-as-app')
@@ -845,12 +845,94 @@ class TestQuietProbeCodes(unittest.TestCase):
             src = fh.read()
         probes = [ln for ln in src.splitlines()
                   if 'api_request("GET", f"git/refs/heads/' in ln]
-        self.assertEqual(len(probes), 2, f"probe count changed: {probes}")
+        self.assertEqual(len(probes), 1, f"direct probe count changed: {probes}")
         for ln in probes:
             idx = src.index(ln)
             # quiet_codes may sit on the following continuation line.
             window = src[idx:idx + len(ln) + 120]
             self.assertIn("quiet_codes=(404,)", window)
+
+
+class TestRemoteTipGuard(unittest.TestCase):
+    """The pre-PATCH concurrency guard must fail closed, not open."""
+
+    def _client(self):
+        return ghapplib.GitHubAppClient("o", "r", "ghs_x", "/usr/bin/git")
+
+    def test_success_returns_tip_and_uses_quiet_5xx(self):
+        client = self._client()
+        with mock.patch.object(
+            client, 'api_request',
+            return_value={"object": {"sha": "abc123"}},
+        ) as api:
+            self.assertEqual(ghapplib.read_remote_tip(client, "main"), "abc123")
+        api.assert_called_once()
+        self.assertEqual(
+            api.call_args.kwargs["quiet_codes"], (404, 500, 502, 503, 504)
+        )
+
+    def test_404_means_nothing_to_clobber(self):
+        client = self._client()
+        with mock.patch.object(
+            client, 'api_request', side_effect=_http_error(404)
+        ) as api:
+            self.assertEqual(ghapplib.read_remote_tip(client, "gone"), "")
+        self.assertEqual(api.call_count, 1)
+
+    def test_500_retries_then_succeeds(self):
+        client = self._client()
+        sleeps = []
+        with mock.patch.object(
+            client, 'api_request',
+            side_effect=[_http_error(500), {"object": {"sha": "abc123"}}],
+        ) as api:
+            self.assertEqual(
+                ghapplib.read_remote_tip(client, "main", sleep=sleeps.append),
+                "abc123",
+            )
+        self.assertEqual(api.call_count, 2)
+        self.assertEqual(sleeps, [0.5])
+
+    def test_500_exhausts_and_fails_closed(self):
+        client = self._client()
+        sleeps = []
+        with mock.patch.object(
+            client, 'api_request',
+            side_effect=[_http_error(500), _http_error(502), _http_error(503)],
+        ) as api:
+            with self.assertRaises(ghapplib.RemoteTipUnverifiable):
+                ghapplib.read_remote_tip(client, "main", sleep=sleeps.append)
+        self.assertEqual(api.call_count, 3)
+        self.assertEqual(sleeps, [0.5, 1.0])
+
+    def test_403_fails_immediately(self):
+        client = self._client()
+        sleeps = []
+        with mock.patch.object(
+            client, 'api_request', side_effect=_http_error(403)
+        ) as api:
+            with self.assertRaises(ghapplib.RemoteTipUnverifiable):
+                ghapplib.read_remote_tip(client, "main", sleep=sleeps.append)
+        self.assertEqual(api.call_count, 1)
+        self.assertEqual(sleeps, [])
+
+    def test_network_error_fails_closed(self):
+        client = self._client()
+        with mock.patch.object(
+            client, 'api_request',
+            side_effect=urllib.error.URLError("network down"),
+        ):
+            with self.assertRaises(ghapplib.RemoteTipUnverifiable):
+                ghapplib.read_remote_tip(client, "main", sleep=lambda _s: None)
+
+    def test_push_wrapper_uses_fail_closed_reader(self):
+        path = os.path.join(os.path.dirname(__file__), '..', 'bin',
+                            'git-push-as-app')
+        with open(path) as fh:
+            src = fh.read()
+        self.assertIn("read_remote_tip(client, branch)", src)
+        self.assertIn("RemoteTipUnverifiable", src)
+        self.assertNotIn("latest_remote_sha = remote_sha", src)
 
 
 if __name__ == '__main__':
