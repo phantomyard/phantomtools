@@ -16,15 +16,22 @@ import server
 class Upstream(BaseHTTPRequestHandler):
     received = None
     status = 200
+    paths = []
 
     def log_message(self, *_):
         pass
 
+    def do_GET(self):
+        type(self).paths.append(self.path)
+        self.send_response(200)
+        self.end_headers()
+
     def do_POST(self):
+        type(self).paths.append(self.path)
         type(self).received = (self.path, dict(self.headers), self.rfile.read(int(self.headers["Content-Length"])))
         self.send_response(type(self).status)
         if type(self).status == 302:
-            self.send_header("Location", "http://127.0.0.1:1/leak")
+            self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}/leak")
         self.end_headers()
         self.wfile.write(b'{"text":"transcribed"}')
 
@@ -33,6 +40,7 @@ class ApiTests(unittest.TestCase):
     def setUp(self):
         Upstream.status = 200
         Upstream.received = None
+        Upstream.paths = []
         self.upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
         self.gateway = server.Server(("127.0.0.1", 0), "local-token",
                                      f"http://127.0.0.1:{self.upstream.server_port}/v1", "upstream-token")
@@ -75,6 +83,7 @@ class ApiTests(unittest.TestCase):
             code, _, body = self.request("transcriptions", b"--xyz--", content_type="multipart/form-data; boundary=xyz")
             self.assertEqual(code, 502)
             self.assertNotIn(b"transcribed", body)
+        self.assertEqual(Upstream.paths, ["/v1/audio/transcriptions"] * 3)
 
     def test_validation(self):
         for data in ([], {"input": ""}, {"input": "hi", "voice": "../evil"},
