@@ -55,15 +55,20 @@ def synthesize(data):
     if not isinstance(lang, str) or not re.fullmatch(r"[a-z]{2,3}(?:-[a-z]{2,8})?", lang):
         raise ValueError("invalid language")
     variant, rate, pitch = ("f3", 145, 55) if voice == "female" else ("m3", 130, 30)
-    args = ["espeak-ng", "--stdout", "-v", f"{lang}+{variant}",
-            "-s", str(round(rate * speed)), "-p", str(pitch), "--stdin"]
+    def speak(selected_language):
+        # Keep the executable and option positions literal; text travels on stdin.
+        return subprocess.run(
+            ["espeak-ng", "--stdout", "-v", f"{selected_language}+{variant}",
+             "-s", str(round(rate * speed)), "-p", str(pitch), "--stdin"],
+            input=text.encode(), capture_output=True, timeout=30, check=True,
+        ).stdout
+
     try:
-        wav = subprocess.run(args, input=text.encode(), capture_output=True, timeout=30, check=True).stdout
+        wav = speak(lang)
     except subprocess.CalledProcessError:
         if lang == "en":
             raise
-        args[3] = f"en+{variant}"
-        wav = subprocess.run(args, input=text.encode(), capture_output=True, timeout=30, check=True).stdout
+        wav = speak("en")
     container, mime = FORMATS[fmt]
     args = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-i", "pipe:0"]
     if fmt == "opus":
