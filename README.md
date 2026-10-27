@@ -16,6 +16,7 @@ deps, and license.
 | [`phantommeet/`](./phantommeet) | Meeting layer for PhantomForge deployments — text participation via bridge, recordings, transcription, calendar logistics, per-scope recording custody. `pm` CLI (validate / derive-manifest / apply / check-infra). |
 | [`phantomorg/`](./phantomorg) | Spec-driven organization compiler for phantombot personas — departments, roles, actors, access policies, escalation matrix, communication rules → compiled persona files (SOUL/IDENTITY/tools/memory/kb). `po` CLI (validate / build / deploy / rollback / update). |
 | [`persona-service-control/`](./persona-service-control) | Standalone Linux/systemd controller for one fixed service-start operation per contained identity binding — strict root-owned metadata, read-only validation/render, explicit operator installation. |
+| [`phantomblog/`](./phantomblog) | Static bilingual publishing with an authenticated editorial dashboard, scoped article design, reviewed agent proposals and configurable MCP deployment/social/messaging adapters. Python standard library; public sites need no build runtime. |
 
 ## Tool dependency chain
 

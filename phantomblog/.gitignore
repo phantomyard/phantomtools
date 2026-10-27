@@ -1,0 +1,7 @@
+workspace/
+.phantomblog-*.json
+.phantomblog-lock
+.venv/
+*.egg-info/
+build/
+dist/
