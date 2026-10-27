@@ -4,6 +4,12 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+- **Classification event signature contract:** add a closed canonical envelope,
+  domain-separated Schnorr signature primitives, and signed-record/history
+  digests using existing keys and dependencies. Tests bind every field, reject
+  malformed payloads and prevent cross-protocol signature reuse. This does not
+  authorize or persist transitions, change the store protocol, or alter access.
+
 - **Workflow review fixes**: CI now covers main pushes and pull requests;
   reference deduplication accepts logical folder slugs as well as paths; runtime
   inventory excludes prefixed credential/service-account/token filenames; generated
