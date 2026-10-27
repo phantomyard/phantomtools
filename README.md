@@ -18,6 +18,7 @@ deps, and license.
 | [`persona-service-control/`](./persona-service-control) | Standalone Linux/systemd controller for one fixed service-start operation per contained identity binding — strict root-owned metadata, read-only validation/render, explicit operator installation. |
 | [`facebook-connector/`](./facebook-connector) | Local Facebook Page MCP connector: Page verification, approved live article posting and durable receipts. Python standard library; credentials injected from Phantombot vault. |
 | [`phantomblog/`](./phantomblog) | Static bilingual publishing with an authenticated editorial dashboard, scoped article design, reviewed agent proposals and configurable MCP deployment/social/messaging adapters. Python standard library; public sites need no build runtime. |
+| [`robot-voice/`](./robot-voice) | Authenticated local espeak-ng speech service with OpenAI-compatible audio endpoints and upstream transcription forwarding. |
 
 ## Tool dependency chain
 
