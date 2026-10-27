@@ -151,6 +151,9 @@ policies:
       categories: [1]
     level-2:
       categories: [1, 2]
+  security_categories:
+    category-1: { label: Public }
+    category-2: { label: Confidential }
 roles:
   - id: ceo
     access_level: level-2
@@ -306,6 +309,9 @@ policies:
       categories: [1]
     level-2:
       categories: [1, 2]
+  security_categories:
+    category-1: { label: Public }
+    category-2: { label: Confidential }
 roles:
   - id: ceo
     access_level: level-2
@@ -907,6 +913,9 @@ policies:
   access_levels:
     level-2:
       categories: [1, 2]
+  security_categories:
+    category-1: {{ label: Public }}
+    category-2: {{ label: Confidential }}
 roles:
   - id: ceo
     access_level: level-2

@@ -549,6 +549,39 @@ def versions(ref, org_yaml, actor, root):
         click.echo(f"v{index}  {display_id(version['mac'])}{marker}  {size} bytes")
 
 
+@main.command("classification-plan")
+@click.argument("ref")
+@click.option("--expected-mac", required=True, help="Expected current version MAC.")
+@click.option("--expected-category", required=True, help="Expected current category.")
+@click.option("--category", required=True, help="Proposed target category.")
+@click.option("--reason", required=True, help="Reason for the proposed transition.")
+@click.option("--org-yaml", required=True, help="Authoritative PhantomOrg org.yaml.")
+@click.option("--actor", default=None, help=_ACTOR_HELP)
+@click.option("--root", default=".", show_default=True, help="Local backend root.")
+def classification_plan_command(
+    ref, expected_mac, expected_category, category, reason, org_yaml, actor, root
+):
+    """Report a proposed category change. Never change documents or access."""
+    from .classification import classification_plan
+
+    data = _load_or_die(root)
+    actor_id, org = _require_acl(org_yaml, actor)
+    try:
+        plan = classification_plan(
+            data,
+            org,
+            actor_id,
+            ref=ref,
+            expected_mac=expected_mac,
+            expected_category=expected_category,
+            target_category=category,
+            reason=reason,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(json.dumps(plan, indent=2, ensure_ascii=True))
+
+
 @main.command()
 @click.argument("query")
 @click.option(

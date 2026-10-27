@@ -192,7 +192,26 @@ to their exact URI and are not redirected by `--backend`. Get and rollback
 try the next replica when a location is malformed; verify reports each failed
 location and continues checking the others.
 
+## Read-only classification planning
+
+`pd classification-plan <document-ref> --expected-mac <current-mac>
+--expected-category <source-category> --category <target-category> --reason <text>
+--org-yaml <trusted-org.yaml> --root <store>` reports the proposed reader impact
+for a complete document history. It never changes permissions or documents and
+does not verify signatures, content or audit records. Reports remain private
+review artifacts; successful planning is not approval to migrate. See
+[Classification transition preparation](docs/CLASSIFICATION-TRANSITIONS.md)
+for the checks, historical semantics and blockers before write support.
+
 ## Dependency
+
+**Category catalog contract:** every readable or writable category must be
+declared in `policies.security_categories`, including categories granted directly
+by an access level or a role/actor exception. Removing a catalog entry denies
+access even when a stale grant remains. `resolved_categories` reports configured
+grants; it does not bypass this authorization check. Before upgrading, declare any
+legitimate categories missing from an existing catalog; do not add new grants as
+a workaround. This does not reclassify documents or change their history.
 
 PhantomDocs consumes the PhantomOrg `org.yaml` schema (org/version 1:
 `policies.access_levels`, `policies.security_categories`, `roles`, `actors`,
@@ -201,7 +220,8 @@ PhantomDocs consumes the PhantomOrg `org.yaml` schema (org/version 1:
 resolution time.
 
 **Schema version contract:** PhantomDocs requires `version: 1` (top-level
-integer) in the `org.yaml`, matching PhantomOrg's `Organization.version`
+integer, never a boolean, float or string) in the `org.yaml`, matching
+PhantomOrg's `Organization.version`
 model. The version is enforced fail-closed on every `org.yaml` load (all
 ACL-gated commands and `derive-manifest`): a missing or unknown `version` is
 refused rather than assumed compatible. A future PhantomOrg schema bump must

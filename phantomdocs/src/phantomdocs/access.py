@@ -50,7 +50,7 @@ def validate_org_schema(org: dict[str, Any]) -> None:
     instead of silently mis-resolving access.
     """
     version = org.get("version")
-    if version != REQUIRED_ORG_SCHEMA_VERSION:
+    if type(version) is not int or version != REQUIRED_ORG_SCHEMA_VERSION:
         raise ValueError(
             f"org.yaml schema version must be {REQUIRED_ORG_SCHEMA_VERSION} "
             f"(got {version!r}); PhantomDocs resolves access from PhantomOrg's "
@@ -306,6 +306,8 @@ def can_read(org: dict[str, Any], actor_id: str, category: int | str) -> bool:
     undeclared category is denied (fail-closed).
     """
     cat = normalize_category(category)
+    if cat not in _security_categories(org):
+        return False
     resolved = set(resolved_categories(org, actor_id))
     if cat in resolved:
         return True
