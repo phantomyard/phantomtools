@@ -90,3 +90,65 @@ Only after those changes and an explicit operational review should any live
 category or project document-type policy change. Normal ingestion must keep
 rejecting classification conflicts in the meantime. Pending workflow markers
 must not be deleted to force duplicate registration.
+must not be deleted to force duplicate registration.
+
+## Candidate signed event contract
+
+`classification_events.py` provides a closed, versioned envelope, Schnorr
+signature primitives and record/history digests. It does not provide a command
+to apply events, persist them, authorize a signer or change a reader's category.
+The current store format and all existing read/write paths remain unchanged.
+
+The envelope is UTF-8 JSON with sorted object keys, compact separators,
+ASCII-escaped strings and no non-finite numbers. All fields below are required;
+unknown fields are rejected. Category IDs and hash strings are already canonical,
+not normalized after signing. Owners must be sorted, unique, non-empty strings.
+
+| Fields | Binding |
+| --- | --- |
+| `version`, `kind`, `history_scope` | Exact integer `1`, `reclassify`, `all-versions` |
+| `org`, `namespace`, `root_mac` | Organization and exact store identity |
+| `urn` | Non-empty document URN belonging to `org` |
+| `actor` | Claimed native actor; binding to the signing key is checked separately |
+| `from_category`, `target_category`, `owners` | Different categories and unchanged ownership |
+| `expected_manifest_digest`, `expected_current_mac` | Complete reviewed snapshot and current version |
+| `policy_hash`, `history_digest` | Authoritative organization policy and complete retained history |
+| `seq`, `audit_seq` | Exact positive integers, never booleans or floats |
+| `prev_audit_head`, `previous_event` | Audit and classification predecessors, nullable only when absent |
+| `reason`, `issued_at` | Bounded review reason and valid UTC timestamp at second precision |
+
+All hashes and predecessor IDs use lowercase 64-hex strings. `prev_audit_head`
+must be null exactly when `audit_seq` is 1. Other sequence/predecessor consistency
+must be established against the locked store by the future application service.
+The timestamp is part of permanent evidence, not a temporary-link expiry window.
+
+The signed message is SHA-256 of
+`b"phantomdocs-classification-event-v1\x00" + canonical_payload`.
+Signing uses the existing coincurve dependency and BIP-340 Schnorr/x-only keys;
+no new identity, credential store or cryptographic dependency is introduced.
+This domain differs from existing mutation signatures and access-link protocols.
+
+A signed record has exactly `payload`, `sigPubkey` and `sig`. Its predecessor ID
+is SHA-256 of `b"phantomdocs-classification-record-v1\x00" + canonical_record`,
+after validating signature integrity. The complete record, including its signer
+and signature, is bound. A history digest is SHA-256 of
+`b"phantomdocs-classification-history-v1\x00" + canonical_history`, where history
+is the non-empty list of complete retained nodes in verified oldest-to-newest
+chain order. Original nodes, including signatures and locations, are not rewritten.
+
+### Integrity is not permission
+
+`verify_classification_signature()` only establishes cryptographic integrity.
+A valid signature can still claim another actor, use an obsolete policy, refer
+to unrelated history or request an unauthorized change. The future native
+service must bind the key to the authenticated actor, apply the existing key
+lifecycle/trust-anchor rules and source/target ACL, and independently reconstruct
+all snapshot/history/audit guards under the store lock. It must not trust the
+event's claims, the planner's actor-impact list or an asserted approval flag.
+
+No caller may use these primitives to append records to the current manifest or
+to publish an effective category. Store-version gating, durable atomic commit,
+replay/retry handling, recovery, sealing and consistent reader/collector behavior
+remain prerequisites. Existing signed nodes and their categories continue to be
+interpreted exactly as before until that complete operation is implemented and
+reviewed. No live reclassification is enabled by this cryptographic contract.
