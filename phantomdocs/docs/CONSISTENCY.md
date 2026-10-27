@@ -67,8 +67,9 @@ Let `N` be the last successfully committed manifest state.
 ### W2 — crash during the audit append (short or torn final line)
 
 - **Left behind:** `audit.log` ends in an incomplete line. A short write or a
-  power loss mid-`write` can persist fewer bytes than the entry, and `append`
-  checks neither the returned byte count nor a commit marker. The line is
+  power loss mid-`write` can persist fewer bytes than the entry. `append` checks
+  the returned byte count and refuses a short write before manifest commit,
+  but has no per-line durable commit marker. The incomplete line is
   counted by `head()` (it is non-blank) but is not a valid entry.
 - **Guarantee:** the entry never became complete, so the mutation is **not**
   committed. A torn line can never be mistaken for committed evidence: the
