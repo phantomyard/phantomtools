@@ -4,6 +4,12 @@ All notable changes to PhantomDocs are documented in this file.
 
 ## Unreleased
 
+- **Strict seal and audit counters:** reject booleans, negative numbers, floats
+  and text in header and historical counters before sealing or verification.
+  Remove numeric coercion from seal-envelope callers while retaining explicit
+  legacy null defaults. The trusted-manifest boundary and legitimate
+  explicit-empty-checkpoint crash recovery remain unchanged.
+
 - **Classification planner validation:** validate the manifest schema and graph
   before dereferencing nodes, including direct library calls. Missing categories
   now produce a domain validation error instead of an incidental `KeyError`.

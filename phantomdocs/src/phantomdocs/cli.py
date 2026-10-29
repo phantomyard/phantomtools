@@ -124,6 +124,16 @@ def _manifest_path(root: str) -> str:
     return os.path.join(root, MANIFEST_FILENAME)
 
 
+def _seal_counter(record, field, *, required=False):
+    """Read an exact counter; retain only the explicit legacy null default."""
+    value = record.get(field)
+    if value is None and not required:
+        return 0
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{field} must be a non-negative integer")
+    return value
+
+
 def _load_or_die(root: str):
     path = _manifest_path(root)
     if not os.path.exists(path):
@@ -982,9 +992,9 @@ def verify(backend, org_yaml, org_pubkey, expected_head_seq, checkpoint, root):
         else:
             envelope = seal_envelope(
                 root_mac=m["rootMac"],
-                head_seq=int(m.get("headSeq") or 0),
+                head_seq=_seal_counter(m, "headSeq"),
                 head_mac=m.get("headMac") or m["rootMac"],
-                audit_seq=int(m.get("auditSeq") or 0),
+                audit_seq=_seal_counter(m, "auditSeq"),
                 audit_head=m.get("auditHead"),
                 require_signatures=m.get("requireSignatures"),
                 # ``None`` => legacy pre-crypto-agility seal envelope (no
@@ -1342,9 +1352,9 @@ def _seal_locked(nsec_file, org_nsec_file, valid_until, root):
                 delegation=delegation,
             )
             rotated = m.get("sealPubkey") not in (None, pubkey)
-    head_seq = int(m.get("headSeq") or 0)
+    head_seq = _seal_counter(m, "headSeq")
     head_mac = m.get("headMac") or m["rootMac"]
-    audit_seq = int(m.get("auditSeq") or 0)
+    audit_seq = _seal_counter(m, "auditSeq")
     audit_head = m.get("auditHead")
     envelope = seal_envelope(
         root_mac=m["rootMac"],
@@ -1818,7 +1828,12 @@ def _seal_history_problems(m: dict[str, object], identity_pubkey_hex: str) -> li
     """
     problems: list[str] = []
     for event in seal_events(m):
-        cs = event.get("cs")
+        try:
+            cs = _seal_counter(event, "cs", required=True)
+            audit_seq = _seal_counter(event, "auditSeq")
+        except ValueError as exc:
+            problems.append(f"invalid seal counters: {exc}")
+            continue
         problem = _seal_authorization_problem(m, event, identity_pubkey_hex)
         if problem is not None:
             problems.append(f"seal at cs {cs}: {problem}")
@@ -1829,9 +1844,9 @@ def _seal_history_problems(m: dict[str, object], identity_pubkey_hex: str) -> li
             continue
         envelope = seal_envelope(
             root_mac=str(m.get("rootMac") or ""),
-            head_seq=int(cs),
+            head_seq=cs,
             head_mac=str(event.get("headMac") or ""),
-            audit_seq=int(event.get("auditSeq") or 0),
+            audit_seq=audit_seq,
             audit_head=event.get("auditHead"),
             require_signatures=event.get("requireSignatures"),
             crypto_version=event.get("cryptoVersion"),

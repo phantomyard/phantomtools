@@ -467,15 +467,12 @@ def validate(data: dict[str, Any]) -> list[str]:
     ):
         errors.append("manifest.cryptoVersion must be an integer")
     # Head/anchor fields are optional (older manifests lack them) but, when
-    # present, must have the right shape so verify can trust them.
-    if m.get("headSeq") is not None and not isinstance(m.get("headSeq"), int):
-        errors.append("manifest.headSeq must be an integer")
-    if m.get("auditSeq") is not None and not isinstance(m.get("auditSeq"), int):
-        errors.append("manifest.auditSeq must be an integer")
-    if m.get("sealedHeadSeq") is not None and not isinstance(
-        m.get("sealedHeadSeq"), int
-    ):
-        errors.append("manifest.sealedHeadSeq must be an integer")
+    # present, must have the right shape so verify can trust them. ``bool`` is
+    # an ``int`` subclass, so require the exact type rather than coercion.
+    for field in ("headSeq", "auditSeq", "sealedHeadSeq"):
+        value = m.get(field)
+        if value is not None and (type(value) is not int or value < 0):
+            errors.append(f"manifest.{field} must be a non-negative integer")
     if m.get("requireSignatures") is not None and not isinstance(
         m.get("requireSignatures"), bool
     ):
@@ -485,10 +482,11 @@ def validate(data: dict[str, Any]) -> list[str]:
         if not isinstance(profile_transition, dict):
             errors.append("manifest.profileTransition must be a mapping")
         else:
-            if profile_transition.get("seq") is not None and not isinstance(
-                profile_transition.get("seq"), int
-            ):
-                errors.append("manifest.profileTransition.seq must be an integer")
+            seq = profile_transition.get("seq")
+            if seq is not None and (type(seq) is not int or seq < 0):
+                errors.append(
+                    "manifest.profileTransition.seq must be a non-negative integer"
+                )
             for field in ("actor", "ts", "policyHash"):
                 value = profile_transition.get(field)
                 if value is not None and not isinstance(value, str):
@@ -567,8 +565,8 @@ def validate(data: dict[str, Any]) -> list[str]:
                 if not isinstance(rec, dict):
                     errors.append(f"{prefix}: must be a mapping")
                     continue
-                if not isinstance(rec.get("n"), int):
-                    errors.append(f"{prefix}: n must be an integer")
+                if type(rec.get("n")) is not int or rec["n"] < 0:
+                    errors.append(f"{prefix}: n must be a non-negative integer")
                 npub = rec.get("npub")
                 if not isinstance(npub, str) or not npub.startswith("npub1"):
                     errors.append(f"{prefix}: npub is required")
@@ -600,8 +598,11 @@ def validate(data: dict[str, Any]) -> list[str]:
                     errors.append(f"{prefix}: npub is required")
                 if not isinstance(event.get("ts"), str) or not event.get("ts"):
                     errors.append(f"{prefix}: ts is required")
-                if not isinstance(event.get("cs"), int):
-                    errors.append(f"{prefix}: cs must be an integer")
+                if type(event.get("cs")) is not int or event["cs"] < 0:
+                    errors.append(f"{prefix}: cs must be a non-negative integer")
+                seq = event.get("auditSeq")
+                if seq is not None and (type(seq) is not int or seq < 0):
+                    errors.append(f"{prefix}: auditSeq must be a non-negative integer")
                 sig = event.get("sig")
                 if (
                     not isinstance(sig, str)
