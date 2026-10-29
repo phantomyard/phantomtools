@@ -72,7 +72,8 @@ def append(
     # head() and verify_chain() later read.
     line = (json.dumps(entry, sort_keys=True) + "\n").encode("utf-8")
     with open(path, "ab") as f:
-        f.write(line)
+        if f.write(line) != len(line):
+            raise OSError("incomplete audit append; preserve the log for review")
         f.flush()
         os.fsync(f.fileno())
     return _sha256(line)

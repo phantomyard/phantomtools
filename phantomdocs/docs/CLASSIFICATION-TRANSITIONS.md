@@ -90,7 +90,6 @@ Only after those changes and an explicit operational review should any live
 category or project document-type policy change. Normal ingestion must keep
 rejecting classification conflicts in the meantime. Pending workflow markers
 must not be deleted to force duplicate registration.
-must not be deleted to force duplicate registration.
 
 ## Candidate signed event contract
 
