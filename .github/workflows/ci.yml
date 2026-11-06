@@ -15,7 +15,7 @@ permissions:
 jobs:
   pipeline:
     name: pipeline
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # ubuntu-latest = Ubuntu 26 (python 3.14): coincurve has no wheel and its sdist build fails
     defaults:
       run:
         working-directory: twilio-voice-agent
